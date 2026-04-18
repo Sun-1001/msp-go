@@ -42,21 +42,27 @@ type Config struct {
 
 	UploadsDir string
 
-	PostgresHost     string
-	PostgresPort     int
-	PostgresUser     string
-	PostgresPassword string
-	PostgresDB       string
-	DBPoolSize       int
-	DBPoolRecycle    time.Duration
+	PostgresHost        string
+	PostgresPort        int
+	PostgresUser        string
+	PostgresPassword    string
+	PostgresDB          string
+	DBPoolSize          int
+	DBPoolMinConns      int
+	DBPoolRecycle       time.Duration
+	DBConnectTimeout    time.Duration
+	DBStatementTimeout  time.Duration
+	DBIdleTxTimeout     time.Duration
+	DBHealthCheckPeriod time.Duration
 
-	RedisHost           string
-	RedisPort           int
-	RedisPassword       string
-	RedisDB             int
-	RedisMaxConnections int
-	RedisSocketTimeout  time.Duration
-	RedisConnectTimeout time.Duration
+	RedisHost                 string
+	RedisPort                 int
+	RedisPassword             string
+	RedisDB                   int
+	RedisMaxConnections       int
+	RedisSocketTimeout        time.Duration
+	RedisConnectTimeout       time.Duration
+	RedisFallbackCacheMaxSize int
 }
 
 // Load reads the single repository .env file without overwriting process env.
@@ -67,38 +73,44 @@ func Load() (Config, error) {
 	})
 
 	cfg := Config{
-		AppName:             envString("APP_NAME", "高等数学智能学习平台"),
-		AppVersion:          envString("APP_VERSION", "0.1.0"),
-		Debug:               envBool("DEBUG", false),
-		Environment:         envString("ENVIRONMENT", "development"),
-		Host:                envString("GO_API_HOST", envString("HOST", "0.0.0.0")),
-		Port:                envInt("GO_API_PORT", envInt("PORT", 8000)),
-		APIV1Prefix:         cleanPrefix(envString("API_V1_PREFIX", defaultAPIPrefix)),
-		CORSOrigins:         envList("CORS_ORIGINS", []string{"http://localhost:3000", "http://localhost:5173"}),
-		CORSAllowMethods:    envList("CORS_ALLOW_METHODS", []string{"GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"}),
-		CORSAllowHeaders:    envList("CORS_ALLOW_HEADERS", []string{"Authorization", "Content-Type", "Accept", "Origin", "X-Requested-With", "X-CSRF-Token"}),
-		RequestTimeout:      envSeconds("REQUEST_TIMEOUT_DEFAULT", 30*time.Second),
-		ReadHeaderTimeout:   envSeconds("HTTP_READ_HEADER_TIMEOUT", 5*time.Second),
-		ReadTimeout:         envSeconds("HTTP_READ_TIMEOUT", 35*time.Second),
-		WriteTimeout:        envSeconds("HTTP_WRITE_TIMEOUT", 310*time.Second),
-		IdleTimeout:         envSeconds("HTTP_IDLE_TIMEOUT", 60*time.Second),
-		ShutdownTimeout:     envSeconds("HTTP_SHUTDOWN_TIMEOUT", 10*time.Second),
-		MetricsEnabled:      envBool("METRICS_ENABLED", true),
-		UploadsDir:          envString("UPLOADS_DIR", filepath.Join("..", "backend", "uploads")),
-		PostgresHost:        envString("POSTGRES_HOST", "localhost"),
-		PostgresPort:        envInt("POSTGRES_PORT", 5432),
-		PostgresUser:        envString("POSTGRES_USER", "postgres"),
-		PostgresPassword:    envString("POSTGRES_PASSWORD", "postgres"),
-		PostgresDB:          envString("POSTGRES_DB", "math_platform"),
-		DBPoolSize:          envInt("DB_POOL_SIZE", 12),
-		DBPoolRecycle:       envSeconds("DB_POOL_RECYCLE_SECONDS", 1800*time.Second),
-		RedisHost:           envString("REDIS_HOST", "localhost"),
-		RedisPort:           envInt("REDIS_PORT", 6379),
-		RedisPassword:       envString("REDIS_PASSWORD", ""),
-		RedisDB:             envInt("REDIS_DB", 0),
-		RedisMaxConnections: envInt("REDIS_MAX_CONNECTIONS", 20),
-		RedisSocketTimeout:  envSeconds("REDIS_SOCKET_TIMEOUT_SECONDS", 3*time.Second),
-		RedisConnectTimeout: envSeconds("REDIS_SOCKET_CONNECT_TIMEOUT_SECONDS", 3*time.Second),
+		AppName:                   envString("APP_NAME", "高等数学智能学习平台"),
+		AppVersion:                envString("APP_VERSION", "0.1.0"),
+		Debug:                     envBool("DEBUG", false),
+		Environment:               envString("ENVIRONMENT", "development"),
+		Host:                      envString("GO_API_HOST", envString("HOST", "0.0.0.0")),
+		Port:                      envInt("GO_API_PORT", envInt("PORT", 8000)),
+		APIV1Prefix:               cleanPrefix(envString("API_V1_PREFIX", defaultAPIPrefix)),
+		CORSOrigins:               envList("CORS_ORIGINS", []string{"http://localhost:3000", "http://localhost:5173"}),
+		CORSAllowMethods:          envList("CORS_ALLOW_METHODS", []string{"GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"}),
+		CORSAllowHeaders:          envList("CORS_ALLOW_HEADERS", []string{"Authorization", "Content-Type", "Accept", "Origin", "X-Requested-With", "X-CSRF-Token"}),
+		RequestTimeout:            envSeconds("REQUEST_TIMEOUT_DEFAULT", 30*time.Second),
+		ReadHeaderTimeout:         envSeconds("HTTP_READ_HEADER_TIMEOUT", 5*time.Second),
+		ReadTimeout:               envSeconds("HTTP_READ_TIMEOUT", 35*time.Second),
+		WriteTimeout:              envSeconds("HTTP_WRITE_TIMEOUT", 310*time.Second),
+		IdleTimeout:               envSeconds("HTTP_IDLE_TIMEOUT", 60*time.Second),
+		ShutdownTimeout:           envSeconds("HTTP_SHUTDOWN_TIMEOUT", 10*time.Second),
+		MetricsEnabled:            envBool("METRICS_ENABLED", true),
+		UploadsDir:                envString("UPLOADS_DIR", filepath.Join("..", "backend", "uploads")),
+		PostgresHost:              envString("POSTGRES_HOST", "localhost"),
+		PostgresPort:              envInt("POSTGRES_PORT", 5432),
+		PostgresUser:              envString("POSTGRES_USER", "postgres"),
+		PostgresPassword:          envString("POSTGRES_PASSWORD", "postgres"),
+		PostgresDB:                envString("POSTGRES_DB", "math_platform"),
+		DBPoolSize:                envInt("DB_POOL_SIZE", 12),
+		DBPoolMinConns:            envInt("DB_POOL_MIN_CONNS", 0),
+		DBPoolRecycle:             envSeconds("DB_POOL_RECYCLE_SECONDS", 1800*time.Second),
+		DBConnectTimeout:          envSeconds("DB_CONNECT_TIMEOUT_SECONDS", 5*time.Second),
+		DBStatementTimeout:        envMilliseconds("DB_STATEMENT_TIMEOUT_MS", 30*time.Second),
+		DBIdleTxTimeout:           envMilliseconds("DB_IDLE_TX_TIMEOUT_MS", 60*time.Second),
+		DBHealthCheckPeriod:       envSeconds("DB_HEALTH_CHECK_PERIOD_SECONDS", 30*time.Second),
+		RedisHost:                 envString("REDIS_HOST", "localhost"),
+		RedisPort:                 envInt("REDIS_PORT", 6379),
+		RedisPassword:             envString("REDIS_PASSWORD", ""),
+		RedisDB:                   envInt("REDIS_DB", 0),
+		RedisMaxConnections:       envInt("REDIS_MAX_CONNECTIONS", 20),
+		RedisSocketTimeout:        envSeconds("REDIS_SOCKET_TIMEOUT_SECONDS", 3*time.Second),
+		RedisConnectTimeout:       envSeconds("REDIS_SOCKET_CONNECT_TIMEOUT_SECONDS", 3*time.Second),
+		RedisFallbackCacheMaxSize: envInt("REDIS_FALLBACK_CACHE_MAX_SIZE", 500),
 	}
 
 	if cfg.Port <= 0 || cfg.Port > 65535 {
@@ -107,8 +119,17 @@ func Load() (Config, error) {
 	if cfg.DBPoolSize <= 0 {
 		return Config{}, errors.New("DB_POOL_SIZE must be greater than 0")
 	}
+	if cfg.DBPoolMinConns < 0 {
+		return Config{}, errors.New("DB_POOL_MIN_CONNS must be zero or greater")
+	}
+	if cfg.DBPoolMinConns > cfg.DBPoolSize {
+		return Config{}, errors.New("DB_POOL_MIN_CONNS must not exceed DB_POOL_SIZE")
+	}
 	if cfg.RedisMaxConnections <= 0 {
 		return Config{}, errors.New("REDIS_MAX_CONNECTIONS must be greater than 0")
+	}
+	if cfg.RedisFallbackCacheMaxSize <= 0 {
+		return Config{}, errors.New("REDIS_FALLBACK_CACHE_MAX_SIZE must be greater than 0")
 	}
 	return cfg, nil
 }
@@ -222,6 +243,24 @@ func envSeconds(key string, fallback time.Duration) time.Duration {
 		return fallback
 	}
 	return time.Duration(seconds * float64(time.Second))
+}
+
+func envMilliseconds(key string, fallback time.Duration) time.Duration {
+	value := strings.TrimSpace(os.Getenv(key))
+	if value == "" {
+		return fallback
+	}
+	if strings.ContainsAny(value, "hms") {
+		parsed, err := time.ParseDuration(value)
+		if err == nil {
+			return parsed
+		}
+	}
+	milliseconds, err := strconv.ParseFloat(value, 64)
+	if err != nil {
+		return fallback
+	}
+	return time.Duration(milliseconds * float64(time.Millisecond))
 }
 
 func envList(key string, fallback []string) []string {

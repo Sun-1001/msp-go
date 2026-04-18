@@ -8,15 +8,13 @@ import (
 	"os"
 	"os/signal"
 	"syscall"
-	"time"
-
-	"github.com/jackc/pgx/v5/pgxpool"
-	"github.com/redis/go-redis/v9"
 
 	"mathstudy/backend-go/internal/platform/config"
 	"mathstudy/backend-go/internal/platform/health"
 	"mathstudy/backend-go/internal/platform/httpserver"
 	"mathstudy/backend-go/internal/platform/metrics"
+	platformpostgres "mathstudy/backend-go/internal/platform/postgres"
+	platformredis "mathstudy/backend-go/internal/platform/redis"
 )
 
 func main() {
@@ -31,22 +29,14 @@ func main() {
 	logger := newLogger(cfg)
 	slog.SetDefault(logger)
 
-	dbPool, err := newPostgresPool(ctx, cfg)
+	dbPool, err := platformpostgres.NewPool(ctx, cfg)
 	if err != nil {
 		logger.Error("configure postgres pool", "error", err)
 		os.Exit(1)
 	}
 	defer dbPool.Close()
 
-	redisClient := redis.NewClient(&redis.Options{
-		Addr:         cfg.RedisAddr(),
-		Password:     cfg.RedisPassword,
-		DB:           cfg.RedisDB,
-		PoolSize:     cfg.RedisMaxConnections,
-		DialTimeout:  cfg.RedisConnectTimeout,
-		ReadTimeout:  cfg.RedisSocketTimeout,
-		WriteTimeout: cfg.RedisSocketTimeout,
-	})
+	redisClient := platformredis.NewClient(cfg)
 	defer func() {
 		if err := redisClient.Close(); err != nil {
 			logger.Warn("close redis client", "error", err)
@@ -107,16 +97,4 @@ func newLogger(cfg config.Config) *slog.Logger {
 		level = slog.LevelDebug
 	}
 	return slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: level}))
-}
-
-func newPostgresPool(ctx context.Context, cfg config.Config) (*pgxpool.Pool, error) {
-	poolCfg, err := pgxpool.ParseConfig(cfg.DatabaseURL())
-	if err != nil {
-		return nil, err
-	}
-	poolCfg.MaxConns = int32(cfg.DBPoolSize)
-	poolCfg.MinConns = 0
-	poolCfg.MaxConnLifetime = cfg.DBPoolRecycle
-	poolCfg.HealthCheckPeriod = 30 * time.Second
-	return pgxpool.NewWithConfig(ctx, poolCfg)
 }

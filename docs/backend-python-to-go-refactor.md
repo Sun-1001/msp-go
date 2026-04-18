@@ -1,6 +1,6 @@
 # 后端 Python 到 Go 重构迁移文档
 
-**文档状态**：P1 首轮 Go 骨架完成，业务接口迁移中
+**文档状态**：P2 数据访问与迁移体系完成，P3 待开始
 **最后更新**：2026-04-18
 **适用范围**：`backend/` Python FastAPI 后端整体迁移到 Go 后端
 **重构原则**：接口兼容、数据连续、分阶段验收、每阶段完成必须更新本文档
@@ -213,7 +213,7 @@ backend-go/
 |------|------|------|------------|--------------|
 | P0 基线冻结 | TODO | 盘点 Python 后端、冻结 API 和数据基线 | API 清单、数据模型清单、现有测试基线 | 12.1 |
 | P1 Go 技术选型与骨架 | DONE | 确认 Go 框架、ORM/SQL、配置、日志、测试栈 | `backend-go/` 骨架、ADR、健康检查 | 12.2 |
-| P2 数据访问与迁移体系 | TODO | 建立 PostgreSQL、Redis、迁移和事务模式 | Repository 基础、迁移策略、集成测试 | 12.3 |
+| P2 数据访问与迁移体系 | DONE | 建立 PostgreSQL、Redis、迁移和事务模式 | Repository 基础、迁移策略、集成测试 | 12.3 |
 | P3 鉴权与用户域 | TODO | 迁移认证、用户、密码、权限基础能力 | `/auth`、用户上下文、管理员初始化 | 12.4 |
 | P4 核心学习域 | TODO | 迁移会话、练习、错题、进度、画像 | `/session`、`/exercise`、`/mistakes`、`/progress`、`/portrait` | 12.5 |
 | P5 内容与教学管理域 | TODO | 迁移题库、资源、班级、教师统计、知识点 | `/questions`、`/resources`、`/classes`、`/teacher`、`/admin/knowledge` | 12.6 |
@@ -457,12 +457,22 @@ backend-go/
 
 具体命令在 P1 技术选型后补齐：
 
-```bash
+```powershell
 # Go 单元测试
 go test ./...
 
 # Go 格式化检查
 gofmt -w .
+
+# Go 静态检查
+go vet ./...
+
+# Go 数据迁移
+go run ./cmd/migrate
+
+# PostgreSQL Repository/迁移集成测试（需要测试库）
+$env:MSP_GO_TEST_DATABASE_URL="postgres://postgres:postgres@localhost:5432/math_platform_test"
+go test ./internal/platform/migration -run TestPostgresStoreIntegration
 
 # Python 基线测试
 pytest
@@ -481,10 +491,11 @@ pytest
 | R2 | SQLAlchemy 模型语义迁移到 Go 后丢失隐含默认值 | 数据不一致 | OPEN | Repository 测试覆盖默认值、枚举、级联行为 |
 | R3 | LangGraph/SymPy 能力在 Go 中无直接等价实现 | AI 功能延期 | OPEN | P6 单独 ADR，允许临时双跑但必须定义退出条件 |
 | R4 | JWT/Cookie 兼容不完整 | 用户登录失效 | OPEN | P3 先做兼容测试，再切换流量 |
-| R5 | Alembic 历史与 Go 迁移工具并存 | 迁移历史混乱 | OPEN | P2 冻结基线，只允许一个工具负责后续生产迁移 |
+| R5 | Alembic 历史与 Go 迁移工具并存 | 迁移历史混乱 | MITIGATED | P2 已生成 Go 单步初始 schema；后续生产迁移由 Go runner 负责，Alembic 保留为历史参考 |
 | R6 | 上传文件路径或对象存储 key 改变 | 历史资源不可访问 | OPEN | P7 做历史文件访问回归 |
 | R7 | 缺少 git 元数据时无法做变更边界检查 | 并行任务冲突风险增加 | OPEN | 修改前后记录文件清单，避免触碰无关文件 |
 | R8 | 默认入口已切到 Go，但业务 `/api/v1/*` 尚未迁移 | 前端业务调用会收到 501 占位响应 | OPEN | 按 P3-P7 逐模块迁移；未迁移接口禁止静默回落 Python |
+| R9 | 当前机器未配置可连接 PostgreSQL 测试库且 Docker CLI 不可用 | P2 数据库迁移/Repository 集成验收不能在本机闭环 | CLOSED | 已使用本地 PostgreSQL `math_platform` 执行清库、Go 迁移、重复迁移和迁移集成测试；Docker CLI 仍不可用但不阻塞 P2 |
 
 ---
 
@@ -494,7 +505,7 @@ pytest
 |-----|------|------|------|------|
 | ADR-001 | 2026-04-18 | Go HTTP router 选择 `net/http` `ServeMux` | DONE | P1 使用标准库，避免框架迁移期额外抽象 |
 | ADR-002 | 2026-04-18 | Go 数据访问方式选择 `pgx/v5` + `go-redis/v9` | DONE | P1 先建立连接和健康检查；Repository 在 P2 补齐 |
-| ADR-003 | TODO | Go 迁移工具与 Alembic 衔接 | TODO | P2 决策 |
+| ADR-003 | 2026-04-18 | 从 Python Alembic head 生成 Go 单步初始 schema，后续由 Go forward migration runner 承接 | DONE | `0001_initial_schema.up.sql` 由临时库执行 Alembic 至 `0019_performance_indexes_phase3` 后 `pg_dump` 生成；包含表、枚举、索引、外键和种子数据；`go_schema_migrations` 记录 Go 迁移状态 |
 | ADR-004 | TODO | AI/Agent 重写或桥接方案 | TODO | P6 决策 |
 | ADR-005 | 2026-04-18 | 默认启动和 Nginx 分流先切到 Go | DONE | Python 代码保留为迁移参考，不再由默认启动、compose、Nginx split routing 承流 |
 
@@ -526,14 +537,14 @@ pytest
 
 ### 12.3 P2 数据访问与迁移体系
 
-- 状态：TODO
-- 开始日期：TODO
-- 完成日期：TODO
-- 负责人：TODO
-- 验证命令：TODO
-- 验证结果：TODO
-- 交付物链接：TODO
-- 遗留风险：TODO
+- 状态：DONE
+- 开始日期：2026-04-18
+- 完成日期：2026-04-18
+- 负责人：Codex
+- 验证命令：`alembic upgrade head` 临时库、`pg_dump` 生成 Go 初始 schema、`DROP SCHEMA public CASCADE` 清空 `math_platform`、`go run ./cmd/migrate`、重复 `go run ./cmd/migrate`、`MSP_GO_TEST_DATABASE_URL=postgres://.../math_platform go test ./internal/platform/migration -run TestPostgresStoreIntegration -count=1 -v`、`go test ./...`、`go vet ./...`
+- 验证结果：本地 `math_platform` 已清空旧结构和数据并由 Go 单步迁移重建；首次迁移 applied_count=1；重复迁移 applied_count=0；迁移后 30 张 public 表，其中 `go_schema_migrations=1`、`alembic_version=0019_performance_indexes_phase3`、`knowledge_nodes=8`、`knowledge_relations=7`、`system_settings=2`；迁移集成测试通过；Go 单元测试和 vet 通过
+- 交付物链接：`backend-go/internal/platform/postgres/`、`backend-go/internal/platform/redis/`、`backend-go/internal/platform/migration/`、`backend-go/internal/adapter/postgres/`、`backend-go/cmd/migrate/`、`backend-go/migrations/`
+- 遗留风险：Docker CLI 仍不可用，Docker 镜像构建未本地验证；业务 API 仍未迁移，P3 需要基于新 Repository/事务模式迁移 `/auth` 和用户域
 
 ### 12.4 P3 鉴权与用户域
 
@@ -618,7 +629,7 @@ pytest
 
 - P0 后补充实际 OpenAPI 导出路径和契约测试入口。
 - P1 后补充 Go 技术栈版本和标准命令。
-- P2 后补充数据库迁移工具、目录和回滚命令。
+- P2 已补充数据库迁移工具、目录和回滚命令；后续变更按 Go forward migration 追加。
 - P6 后补充 AI/Agent 详细设计。
 - P8 后补充双跑报告模板。
 
@@ -632,3 +643,5 @@ pytest
 - 建立阶段总览、完成标记规则、风险清单和阶段完成记录模板。
 - 完成 P1 首轮 Go API 骨架，默认启动、Docker 后端服务和 Nginx split routing 切到 Go；Python 后端保留为迁移参考，不再默认承流。
 - 清理废弃配置入口：删除 legacy Python `backend/Dockerfile` 和旧 split routing 配置，统一为根目录 `.env`/`.env.example` 与 `docker-compose.yml`。
+- P2 数据访问与迁移体系开始：拆分 PostgreSQL/Redis 基础设施、事务模式、Repository 基础和 Go 迁移衔接策略。
+- P2 完成：新增 pgx 连接池配置、事务封装、Repository 查询基类、Redis cache/LRU 降级、Go forward migration runner 和 `cmd/migrate`；从 Python Alembic head 生成 `0001_initial_schema.up.sql`；本地 `math_platform` 已清库并由 Go 迁移重建，重复迁移和迁移集成测试通过。
