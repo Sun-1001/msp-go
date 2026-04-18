@@ -1,15 +1,15 @@
 services:
-  # PostgreSQL 数据库（带 pgvector 扩展）
+  # PostgreSQL database with pgvector.
   postgres:
     image: pgvector/pgvector:pg18-trixie
     container_name: msp_postgres
     restart: unless-stopped
     env_file:
-      - ./backend/.env
+      - ./.env
     ports:
       - "127.0.0.1:${POSTGRES_PORT:-5432}:5432"
     volumes:
-      - postgres_data:/var/lib/postgresql  # PostgreSQL 18+ 新格式
+      - postgres_data:/var/lib/postgresql
       - ./backend/scripts/init-db.sh:/docker-entrypoint-initdb.d/init-db.sh
     command:
       - "postgres"
@@ -50,20 +50,20 @@ services:
     networks:
       - msp_network
 
-  # Redis 缓存
+  # Redis cache.
   redis:
     image: redis:7-alpine
     container_name: msp_redis
     restart: unless-stopped
     env_file:
-      - ./backend/.env
-    command: sh -c 'redis-server --requirepass "$${REDIS_PASSWORD}" --maxmemory 512mb --maxmemory-policy allkeys-lru'
+      - ./.env
+    command: sh -c 'if [ -n "$${REDIS_PASSWORD}" ]; then redis-server --requirepass "$${REDIS_PASSWORD}" --maxmemory 512mb --maxmemory-policy allkeys-lru; else redis-server --maxmemory 512mb --maxmemory-policy allkeys-lru; fi'
     ports:
       - "127.0.0.1:${REDIS_PORT:-6379}:6379"
     volumes:
       - redis_data:/data
     healthcheck:
-      test: ["CMD-SHELL", "redis-cli -a $${REDIS_PASSWORD} ping | grep -q PONG"]
+      test: ["CMD-SHELL", "if [ -n \"$${REDIS_PASSWORD}\" ]; then redis-cli -a \"$${REDIS_PASSWORD}\" ping | grep -q PONG; else redis-cli ping | grep -q PONG; fi"]
       interval: 10s
       timeout: 5s
       retries: 5
@@ -77,21 +77,24 @@ services:
     networks:
       - msp_network
 
-  # 后端服务
+  # Go backend service.
   backend:
-    image: ${DOCKER_USERNAME:-your-dockerhub-username}/backend:latest
+    image: ${DOCKER_USERNAME:-your-dockerhub-username}/backend-go:${IMAGE_VERSION:-latest}
+    build:
+      context: ./backend-go
     container_name: msp_backend
     restart: unless-stopped
     env_file:
-      - ./backend/.env
+      - ./.env
     environment:
-      - DEBUG=false
-      - ENVIRONMENT=production
-      - LLM_POOL_WARMUP_ENABLED=false
+      - ENVIRONMENT=${ENVIRONMENT:-production}
+      - GO_API_HOST=0.0.0.0
+      - GO_API_PORT=8000
+      - UPLOADS_DIR=/app/uploads
       - POSTGRES_HOST=postgres
       - REDIS_HOST=redis
     ports:
-      - "127.0.0.1:${PY_AI_PORT:-8000}:8000"  # Python AI 服务端口
+      - "127.0.0.1:${GO_API_PORT:-8000}:8000"
     depends_on:
       postgres:
         condition: service_healthy
@@ -109,19 +112,19 @@ services:
         reservations:
           memory: 512M
     healthcheck:
-      test: ["CMD", "python", "-c", "import httpx; httpx.get('http://localhost:8000/health')"]
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost:8000/health"]
       interval: 30s
       timeout: 10s
       retries: 3
-      start_period: 40s
+      start_period: 15s
 
-  # 前端服务
+  # Frontend service.
   frontend:
-    image: ${DOCKER_USERNAME:-your-dockerhub-username}/frontend:latest
+    image: ${DOCKER_USERNAME:-your-dockerhub-username}/frontend:${IMAGE_VERSION:-latest}
     container_name: msp_frontend
     restart: unless-stopped
     ports:
-      - "9000:80"  # 改用 9000 端口，避免端口冲突
+      - "9000:80"
     depends_on:
       - backend
     networks:

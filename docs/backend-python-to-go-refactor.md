@@ -1,6 +1,6 @@
 # 后端 Python 到 Go 重构迁移文档
 
-**文档状态**：草案
+**文档状态**：P1 首轮 Go 骨架完成，业务接口迁移中
 **最后更新**：2026-04-18
 **适用范围**：`backend/` Python FastAPI 后端整体迁移到 Go 后端
 **重构原则**：接口兼容、数据连续、分阶段验收、每阶段完成必须更新本文档
@@ -212,7 +212,7 @@ backend-go/
 | 阶段 | 状态 | 目标 | 主要交付物 | 完成标记位置 |
 |------|------|------|------------|--------------|
 | P0 基线冻结 | TODO | 盘点 Python 后端、冻结 API 和数据基线 | API 清单、数据模型清单、现有测试基线 | 12.1 |
-| P1 Go 技术选型与骨架 | TODO | 确认 Go 框架、ORM/SQL、配置、日志、测试栈 | `backend-go/` 骨架、ADR、健康检查 | 12.2 |
+| P1 Go 技术选型与骨架 | DONE | 确认 Go 框架、ORM/SQL、配置、日志、测试栈 | `backend-go/` 骨架、ADR、健康检查 | 12.2 |
 | P2 数据访问与迁移体系 | TODO | 建立 PostgreSQL、Redis、迁移和事务模式 | Repository 基础、迁移策略、集成测试 | 12.3 |
 | P3 鉴权与用户域 | TODO | 迁移认证、用户、密码、权限基础能力 | `/auth`、用户上下文、管理员初始化 | 12.4 |
 | P4 核心学习域 | TODO | 迁移会话、练习、错题、进度、画像 | `/session`、`/exercise`、`/mistakes`、`/progress`、`/portrait` | 12.5 |
@@ -398,7 +398,7 @@ backend-go/
 
 | 优先级 | 模块 | 状态 | 备注 |
 |--------|------|------|------|
-| P0 | `/health`、`/metrics` | TODO | 先迁移服务可观测入口 |
+| P0 | `/health`、`/metrics` | DONE | Go P1 骨架已承接 `/health`、`/health/detailed`、`/metrics` |
 | P1 | `/auth` | TODO | 所有后续接口依赖用户上下文 |
 | P1 | `/admin/users` | TODO | 管理员和权限基础能力 |
 | P1 | `/admin/settings` | TODO | 系统配置影响运行时行为 |
@@ -484,6 +484,7 @@ pytest
 | R5 | Alembic 历史与 Go 迁移工具并存 | 迁移历史混乱 | OPEN | P2 冻结基线，只允许一个工具负责后续生产迁移 |
 | R6 | 上传文件路径或对象存储 key 改变 | 历史资源不可访问 | OPEN | P7 做历史文件访问回归 |
 | R7 | 缺少 git 元数据时无法做变更边界检查 | 并行任务冲突风险增加 | OPEN | 修改前后记录文件清单，避免触碰无关文件 |
+| R8 | 默认入口已切到 Go，但业务 `/api/v1/*` 尚未迁移 | 前端业务调用会收到 501 占位响应 | OPEN | 按 P3-P7 逐模块迁移；未迁移接口禁止静默回落 Python |
 
 ---
 
@@ -491,11 +492,11 @@ pytest
 
 | ADR | 日期 | 决策 | 状态 | 说明 |
 |-----|------|------|------|------|
-| ADR-001 | TODO | Go HTTP router 选择 | TODO | P1 决策 |
-| ADR-002 | TODO | Go 数据访问方式 | TODO | P1/P2 决策 |
+| ADR-001 | 2026-04-18 | Go HTTP router 选择 `net/http` `ServeMux` | DONE | P1 使用标准库，避免框架迁移期额外抽象 |
+| ADR-002 | 2026-04-18 | Go 数据访问方式选择 `pgx/v5` + `go-redis/v9` | DONE | P1 先建立连接和健康检查；Repository 在 P2 补齐 |
 | ADR-003 | TODO | Go 迁移工具与 Alembic 衔接 | TODO | P2 决策 |
 | ADR-004 | TODO | AI/Agent 重写或桥接方案 | TODO | P6 决策 |
-| ADR-005 | TODO | 部署切换与回滚策略 | TODO | P8/P9 决策 |
+| ADR-005 | 2026-04-18 | 默认启动和 Nginx 分流先切到 Go | DONE | Python 代码保留为迁移参考，不再由默认启动、compose、Nginx split routing 承流 |
 
 ---
 
@@ -514,14 +515,14 @@ pytest
 
 ### 12.2 P1 Go 技术选型与骨架
 
-- 状态：TODO
-- 开始日期：TODO
-- 完成日期：TODO
-- 负责人：TODO
-- 验证命令：TODO
-- 验证结果：TODO
-- 交付物链接：TODO
-- 遗留风险：TODO
+- 状态：DONE
+- 开始日期：2026-04-18
+- 完成日期：2026-04-18
+- 负责人：Codex
+- 验证命令：`go test ./...`、`go vet ./...`、`go run ./cmd/api` 后访问 `/health`、`/metrics`、`/api/v1/auth/login`
+- 验证结果：Go 单元测试和 vet 通过；本地 Go 服务可启动；`/health` 返回 healthy；`/metrics` 返回 Prometheus text；未迁移 `/api/v1/*` 返回 501 `NOT_IMPLEMENTED`
+- 交付物链接：`backend-go/`、`backend-go/Dockerfile`、`start.bat`、`docker-compose.yml`、`.env.example`、`nginx-site.conf`
+- 遗留风险：Docker CLI 在当前机器不可用，Docker 镜像构建未本地验证；业务 API 尚未迁移，默认 Go 入口会对未迁移接口返回 501
 
 ### 12.3 P2 数据访问与迁移体系
 
@@ -629,3 +630,5 @@ pytest
 
 - 创建后端 Python 到 Go 重构迁移主文档。
 - 建立阶段总览、完成标记规则、风险清单和阶段完成记录模板。
+- 完成 P1 首轮 Go API 骨架，默认启动、Docker 后端服务和 Nginx split routing 切到 Go；Python 后端保留为迁移参考，不再默认承流。
+- 清理废弃配置入口：删除 legacy Python `backend/Dockerfile` 和旧 split routing 配置，统一为根目录 `.env`/`.env.example` 与 `docker-compose.yml`。

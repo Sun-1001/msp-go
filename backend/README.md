@@ -1,6 +1,6 @@
-# 高等数学智能学习平台 - 后端
+# 高等数学智能学习平台 - Legacy Python 后端
 
-FastAPI 后端服务，提供 REST API 和基于 LangGraph 的多智能体系统。
+FastAPI 后端服务，保留为 Python 到 Go 迁移的历史参考和契约对照。默认启动入口已经切换到 `../backend-go`，不要把本目录作为默认后端服务部署。
 
 ## 技术栈
 
@@ -29,7 +29,8 @@ uv pip install -e ".[dev,ai]"
 pip install -e ".[dev,ai]"
 
 # 配置环境变量
-# 复制 .env.example -> .env，并修改配置
+# 项目只维护根目录 ../.env.example 模板；真实配置使用根目录 ../.env
+# 手动运行 legacy Python 时，请先将 ../.env 中需要的变量导出到当前 shell
 # 注意：CORS_ORIGINS 需要 JSON 数组格式，例如：
 # CORS_ORIGINS=["http://localhost:5173","http://127.0.0.1:5173"]
 
@@ -134,7 +135,7 @@ alembic downgrade -1
 
 ## 环境变量
 
-主要配置项（详见 `.env.example`）：
+主要配置项（详见根目录 `../.env.example`）：
 
 | 变量 | 说明 |
 |------|------|

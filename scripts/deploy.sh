@@ -13,8 +13,8 @@ NC='\033[0m'
 
 # 配置
 DOMAIN=${1:-""}
-COMPOSE_FILE="docker-compose.prod.yml"
-ENV_FILE="backend/.env"
+COMPOSE_FILE="docker-compose.yml"
+ENV_FILE=".env"
 NGINX_CONF_DIR="/etc/nginx/sites-available"
 NGINX_ENABLED_DIR="/etc/nginx/sites-enabled"
 
@@ -65,13 +65,13 @@ echo -e "${GREEN}✓ Nginx 已安装${NC}"
 # 配置环境变量
 echo -e "${BLUE}[2/8] 配置环境变量...${NC}"
 if [ ! -f "$ENV_FILE" ]; then
-    if [ -f "backend/.env.example" ]; then
-        cp backend/.env.example "$ENV_FILE"
+    if [ -f ".env.example" ]; then
+        cp .env.example "$ENV_FILE"
         echo -e "${YELLOW}已创建 ${ENV_FILE}，请编辑配置文件${NC}"
         read -p "按回车键继续编辑配置文件..."
         ${EDITOR:-nano} "$ENV_FILE"
     else
-        echo -e "${RED}找不到 backend/.env.example${NC}"
+        echo -e "${RED}找不到 .env.example${NC}"
         exit 1
     fi
 fi
@@ -97,7 +97,7 @@ fi
 
 # 拉取镜像
 echo -e "${BLUE}[4/8] 拉取 Docker 镜像...${NC}"
-docker pull ${DOCKER_USERNAME}/backend:latest
+docker pull ${DOCKER_USERNAME}/backend-go:latest
 docker pull ${DOCKER_USERNAME}/frontend:latest
 echo -e "${GREEN}✓ 镜像拉取完成${NC}"
 
@@ -110,10 +110,10 @@ echo -e "${GREEN}✓ 基础容器启动完成${NC}"
 echo -e "${BLUE}[6/8] 等待服务启动...${NC}"
 sleep 15
 
-# 初始化数据库
-echo -e "${BLUE}[7/8] 初始化数据库...${NC}"
-$DOCKER_COMPOSE -f $COMPOSE_FILE run --rm backend alembic upgrade head
-echo -e "${GREEN}✓ 数据库迁移完成${NC}"
+# 数据库迁移
+echo -e "${BLUE}[7/8] 数据库迁移...${NC}"
+echo -e "${YELLOW}Go 后端迁移执行器尚未接入；默认部署不再运行 Python Alembic。${NC}"
+echo -e "${YELLOW}如需初始化旧 schema，请按迁移文档手动执行 legacy Alembic 基线。${NC}"
 
 # 启动应用容器
 echo -e "${BLUE}启动应用容器...${NC}"
@@ -141,7 +141,7 @@ server {
         proxy_set_header X-Forwarded-Proto \$scheme;
     }
 
-    # 后端 API
+    # Go 后端 API
     location /api/ {
         proxy_pass http://localhost:8000;
         proxy_set_header Host \$host;

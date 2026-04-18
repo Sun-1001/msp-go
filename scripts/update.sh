@@ -13,8 +13,8 @@ NC='\033[0m'
 
 # 配置
 VERSION=${1:-latest}
-COMPOSE_FILE="docker-compose.prod.yml"
-ENV_FILE="backend/.env"
+COMPOSE_FILE="docker-compose.yml"
+ENV_FILE=".env"
 BACKUP_DIR="backups/$(date +%Y%m%d_%H%M%S)"
 
 echo -e "${GREEN}=== MathStudyPlatform 更新部署 ===${NC}"
@@ -52,7 +52,7 @@ echo -e "${GREEN}✓ 配置已备份到 ${BACKUP_DIR}${NC}"
 
 # 拉取最新镜像
 echo -e "${BLUE}[2/7] 拉取最新镜像...${NC}"
-docker pull ${DOCKER_USERNAME}/backend:${VERSION}
+docker pull ${DOCKER_USERNAME}/backend-go:${VERSION}
 docker pull ${DOCKER_USERNAME}/frontend:${VERSION}
 echo -e "${GREEN}✓ 镜像拉取完成${NC}"
 
@@ -76,8 +76,8 @@ echo -e "${BLUE}[6/7] 等待服务启动...${NC}"
 sleep 10
 
 # 运行数据库迁移
-echo -e "${BLUE}[7/7] 运行数据库迁移...${NC}"
-$DOCKER_COMPOSE -f "$COMPOSE_FILE" run --rm backend alembic upgrade head || echo -e "${YELLOW}⚠ 数据库迁移失败或无新迁移${NC}"
+echo -e "${BLUE}[7/7] 数据库迁移...${NC}"
+echo -e "${YELLOW}Go 后端迁移执行器尚未接入；更新脚本不再运行 Python Alembic。${NC}"
 
 # 启动应用容器
 echo -e "${BLUE}启动应用容器...${NC}"
@@ -92,7 +92,7 @@ if $DOCKER_COMPOSE -f "$COMPOSE_FILE" ps | grep -q "Up"; then
 else
     echo -e "${RED}✗ 服务启动失败，查看日志:${NC}"
     $DOCKER_COMPOSE -f "$COMPOSE_FILE" logs --tail=50
-    echo -e "${YELLOW}回滚命令: $DOCKER_COMPOSE -f ${COMPOSE_FILE} down && cp ${BACKUP_DIR}/.env backend/ && $DOCKER_COMPOSE -f ${COMPOSE_FILE} up -d${NC}"
+    echo -e "${YELLOW}回滚命令: $DOCKER_COMPOSE -f ${COMPOSE_FILE} down && cp ${BACKUP_DIR}/.env . && $DOCKER_COMPOSE -f ${COMPOSE_FILE} up -d${NC}"
     exit 1
 fi
 
@@ -103,4 +103,4 @@ docker image prune -f
 echo -e "${GREEN}=== 更新部署完成 ===${NC}"
 echo -e "${BLUE}常用命令:${NC}"
 echo "  查看日志: $DOCKER_COMPOSE -f ${COMPOSE_FILE} logs -f"
-echo "  回滚版本: $DOCKER_COMPOSE -f ${COMPOSE_FILE} down && cp ${BACKUP_DIR}/.env backend/ && $DOCKER_COMPOSE -f ${COMPOSE_FILE} up -d"
+echo "  回滚版本: $DOCKER_COMPOSE -f ${COMPOSE_FILE} down && cp ${BACKUP_DIR}/.env . && $DOCKER_COMPOSE -f ${COMPOSE_FILE} up -d"
