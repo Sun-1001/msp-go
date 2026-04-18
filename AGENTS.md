@@ -2,9 +2,9 @@
 
 ## Backend Go Rewrite Tracking (Critical)
 
-- The canonical backend Python -> Go migration tracker is `docs/development/backend-python-to-go-refactor.md`.
+- The canonical backend Python -> Go migration tracker is `docs/backend-python-to-go-refactor.md`.
 - Every backend refactor phase must be marked in that document when the phase starts, blocks, resumes, or completes.
-- A phase is not complete until `docs/development/backend-python-to-go-refactor.md` records the phase status, completion date, verification commands, verification results, deliverables, and residual risks.
+- A phase is not complete until `docs/backend-python-to-go-refactor.md` records the phase status, completion date, verification commands, verification results, deliverables, and residual risks.
 - If implementation changes API behavior, database schema, deployment behavior, or migration scope, update the refactor document in the same change.
 - If the document cannot be updated, stop and report the reason before claiming the phase is complete.
 

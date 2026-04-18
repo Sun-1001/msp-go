@@ -148,7 +148,7 @@ alembic downgrade -1
 ## 相关文档
 
 - [模块详细文档](./CLAUDE.md)
-- [数据库迁移指南](../docs/development/MIGRATION_GUIDE.md)
+- [后端 Python 到 Go 重构迁移文档](../docs/backend-python-to-go-refactor.md)
 - [根目录 README](../README.md)
 
 ## 内存基线与门禁

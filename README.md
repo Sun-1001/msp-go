@@ -579,11 +579,7 @@ app/
 
 | 文档 | 说明 |
 |------|------|
-| [API 接口规范](docs/api/) | REST API 接口定义与规范 |
-| [架构设计文档](docs/architecture/) | 智能体系统设计、数据模型、状态管理、向量检索方案 |
-| [详细设计文档](docs/design/) | LangGraph 工作流、性能优化、代码示例 |
-| [部署指南](docs/deployment/) | 部署流程、API 代理配置 |
-| [开发文档](docs/development/) | 开发规范与最佳实践 |
+| [后端 Python 到 Go 重构迁移文档](docs/backend-python-to-go-refactor.md) | 后端 Go 重写阶段计划、验收规则和进度记录 |
 
 ## 发展路线图
 

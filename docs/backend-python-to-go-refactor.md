@@ -231,7 +231,7 @@ backend-go/
 目标：
 
 - 生成当前 Python API 实际路由清单。
-- 导出现有 OpenAPI JSON，并与 `docs/api/API接口规范.md` 对齐。
+- 导出现有 OpenAPI JSON，并作为 P0 基线交付物记录。
 - 盘点数据库表、索引、枚举、迁移头。
 - 跑通当前 Python 后端测试并记录结果。
 

@@ -84,5 +84,4 @@ src/
 ## 相关文档
 
 - [模块详细文档](./CLAUDE.md)
-- [动画系统文档](../docs/development/animation-system.md)
-- [日志工具文档](../docs/development/logger-system.md)
+- [后端 Python 到 Go 重构迁移文档](../docs/backend-python-to-go-refactor.md)
