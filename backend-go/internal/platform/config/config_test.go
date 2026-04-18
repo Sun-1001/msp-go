@@ -22,6 +22,15 @@ func TestLoadUsesEnvironmentAndBuildsAddresses(t *testing.T) {
 	t.Setenv("REDIS_PORT", "6380")
 	t.Setenv("REDIS_FALLBACK_CACHE_MAX_SIZE", "20")
 	t.Setenv("REQUEST_TIMEOUT_DEFAULT", "2.5")
+	t.Setenv("JWT_SECRET_KEY", "test-secret")
+	t.Setenv("JWT_ALGORITHM", "hs512")
+	t.Setenv("JWT_ACCESS_TOKEN_EXPIRE_MINUTES", "45")
+	t.Setenv("JWT_REFRESH_TOKEN_EXPIRE_DAYS", "10")
+	t.Setenv("ADMIN_USERNAME", "root")
+	t.Setenv("ADMIN_EMAIL", "root@example.com")
+	t.Setenv("ADMIN_PASSWORD", "Root1!")
+	t.Setenv("LOGIN_MAX_ATTEMPTS", "3")
+	t.Setenv("LOGIN_LOCKOUT_MINUTES", "9")
 
 	cfg, err := Load()
 	if err != nil {
@@ -55,6 +64,15 @@ func TestLoadUsesEnvironmentAndBuildsAddresses(t *testing.T) {
 	if !strings.Contains(cfg.DatabaseURL(), "postgres://user:secret@db:5433/msp") {
 		t.Fatalf("DatabaseURL() = %q", cfg.DatabaseURL())
 	}
+	if cfg.JWTAlgorithm != "HS512" || cfg.JWTAccessTokenExpire != 45*time.Minute || cfg.JWTRefreshTokenExpire != 10*24*time.Hour {
+		t.Fatalf("JWT config = %s/%s/%s", cfg.JWTAlgorithm, cfg.JWTAccessTokenExpire, cfg.JWTRefreshTokenExpire)
+	}
+	if cfg.AdminUsername != "root" || cfg.AdminEmail != "root@example.com" || cfg.AdminPassword != "Root1!" {
+		t.Fatalf("admin config = %s/%s/%s", cfg.AdminUsername, cfg.AdminEmail, cfg.AdminPassword)
+	}
+	if cfg.LoginMaxAttempts != 3 || cfg.LoginLockout != 9*time.Minute {
+		t.Fatalf("login lockout config = %d/%s", cfg.LoginMaxAttempts, cfg.LoginLockout)
+	}
 }
 
 func TestLoadRejectsInvalidPort(t *testing.T) {
@@ -71,5 +89,13 @@ func TestLoadRejectsInvalidPoolMinConns(t *testing.T) {
 
 	if _, err := Load(); err == nil {
 		t.Fatal("Load() error = nil, want invalid pool min conns error")
+	}
+}
+
+func TestLoadRejectsInvalidJWTAlgorithm(t *testing.T) {
+	t.Setenv("JWT_ALGORITHM", "RS256")
+
+	if _, err := Load(); err == nil {
+		t.Fatal("Load() error = nil, want invalid JWT algorithm error")
 	}
 }

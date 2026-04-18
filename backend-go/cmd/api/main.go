@@ -9,6 +9,9 @@ import (
 	"os/signal"
 	"syscall"
 
+	authhttp "mathstudy/backend-go/internal/adapter/http/auth"
+	adapterpostgres "mathstudy/backend-go/internal/adapter/postgres"
+	authapp "mathstudy/backend-go/internal/application/auth"
 	"mathstudy/backend-go/internal/platform/config"
 	"mathstudy/backend-go/internal/platform/health"
 	"mathstudy/backend-go/internal/platform/httpserver"
@@ -43,12 +46,51 @@ func main() {
 		}
 	}()
 
+	userRepo, err := adapterpostgres.NewUserRepository(dbPool)
+	if err != nil {
+		logger.Error("configure user repository", "error", err)
+		os.Exit(1)
+	}
+	tokenService, err := authapp.NewTokenService(
+		cfg.JWTSecretKey,
+		cfg.JWTAlgorithm,
+		cfg.JWTAccessTokenExpire,
+		cfg.JWTRefreshTokenExpire,
+	)
+	if err != nil {
+		logger.Error("configure token service", "error", err)
+		os.Exit(1)
+	}
+	loginLimiter := authapp.NewLoginLimiter(redisClient, cfg.LoginMaxAttempts, cfg.LoginLockout, logger)
+	authService, err := authapp.NewService(userRepo, userRepo, userRepo, tokenService, loginLimiter, logger)
+	if err != nil {
+		logger.Error("configure auth service", "error", err)
+		os.Exit(1)
+	}
+	if _, err := authService.InitAdmin(ctx, cfg.AdminUsername, cfg.AdminEmail, cfg.AdminPassword); err != nil {
+		logger.Error("initialize admin account", "error", err)
+		os.Exit(1)
+	}
+	authHandler, err := authhttp.NewHandler(cfg, logger, authService)
+	if err != nil {
+		logger.Error("configure auth handler", "error", err)
+		os.Exit(1)
+	}
+
 	store := metrics.NewStore(cfg.AppVersion, cfg.Environment)
 	checker := health.NewChecker(cfg.AppVersion, dbPool, health.RedisPingerFunc(func(ctx context.Context) error {
 		return redisClient.Ping(ctx).Err()
 	}))
 
-	handler, err := httpserver.NewHandler(cfg, logger, checker, store)
+	handler, err := httpserver.NewHandler(
+		cfg,
+		logger,
+		checker,
+		store,
+		httpserver.WithRoutes(func(mux *http.ServeMux) {
+			authHandler.Register(mux, cfg.APIV1Prefix+"/auth")
+		}),
+	)
 	if err != nil {
 		logger.Error("configure http handler", "error", err)
 		os.Exit(1)

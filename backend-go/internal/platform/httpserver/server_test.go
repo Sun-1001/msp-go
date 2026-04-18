@@ -45,6 +45,32 @@ func testHandler(t *testing.T) http.Handler {
 	return handler
 }
 
+func testHandlerWithRoutes(t *testing.T, registrar RouteRegistrar) http.Handler {
+	t.Helper()
+	cfg := config.Config{
+		AppVersion:       "test",
+		Environment:      "test",
+		APIV1Prefix:      "/api/v1",
+		CORSOrigins:      []string{"http://localhost:5173"},
+		CORSAllowMethods: []string{"GET", "POST", "OPTIONS"},
+		CORSAllowHeaders: []string{"Authorization", "Content-Type"},
+		RequestTimeout:   0,
+		MetricsEnabled:   true,
+		UploadsDir:       t.TempDir(),
+	}
+	handler, err := NewHandler(
+		cfg,
+		slog.New(slog.NewTextHandler(os.Stdout, nil)),
+		health.NewChecker("test", okPinger{}, okPinger{}),
+		metrics.NewStore("test", "test"),
+		WithRoutes(registrar),
+	)
+	if err != nil {
+		t.Fatalf("NewHandler() error = %v", err)
+	}
+	return handler
+}
+
 func TestHealthRoute(t *testing.T) {
 	handler := testHandler(t)
 	recorder := httptest.NewRecorder()
@@ -80,6 +106,22 @@ func TestAPIV1FallbackReturnsNotImplemented(t *testing.T) {
 	}
 	if body["code"] != "NOT_IMPLEMENTED" {
 		t.Fatalf("body = %#v", body)
+	}
+}
+
+func TestMigratedRouteRunsBeforeAPIV1Fallback(t *testing.T) {
+	handler := testHandlerWithRoutes(t, func(mux *http.ServeMux) {
+		mux.HandleFunc("GET /api/v1/auth/registration-status", func(w http.ResponseWriter, r *http.Request) {
+			writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
+		})
+	})
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodGet, "/api/v1/auth/registration-status", nil)
+
+	handler.ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status = %d", recorder.Code)
 	}
 }
 

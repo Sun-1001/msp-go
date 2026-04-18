@@ -1,6 +1,6 @@
 # 后端 Python 到 Go 重构迁移文档
 
-**文档状态**：P2 数据访问与迁移体系完成，P3 待开始
+**文档状态**：P3 鉴权与用户域完成，P4 待开始
 **最后更新**：2026-04-18
 **适用范围**：`backend/` Python FastAPI 后端整体迁移到 Go 后端
 **重构原则**：接口兼容、数据连续、分阶段验收、每阶段完成必须更新本文档
@@ -214,7 +214,7 @@ backend-go/
 | P0 基线冻结 | TODO | 盘点 Python 后端、冻结 API 和数据基线 | API 清单、数据模型清单、现有测试基线 | 12.1 |
 | P1 Go 技术选型与骨架 | DONE | 确认 Go 框架、ORM/SQL、配置、日志、测试栈 | `backend-go/` 骨架、ADR、健康检查 | 12.2 |
 | P2 数据访问与迁移体系 | DONE | 建立 PostgreSQL、Redis、迁移和事务模式 | Repository 基础、迁移策略、集成测试 | 12.3 |
-| P3 鉴权与用户域 | TODO | 迁移认证、用户、密码、权限基础能力 | `/auth`、用户上下文、管理员初始化 | 12.4 |
+| P3 鉴权与用户域 | DONE | 迁移认证、用户、密码、权限基础能力 | `/auth`、用户上下文、管理员初始化 | 12.4 |
 | P4 核心学习域 | TODO | 迁移会话、练习、错题、进度、画像 | `/session`、`/exercise`、`/mistakes`、`/progress`、`/portrait` | 12.5 |
 | P5 内容与教学管理域 | TODO | 迁移题库、资源、班级、教师统计、知识点 | `/questions`、`/resources`、`/classes`、`/teacher`、`/admin/knowledge` | 12.6 |
 | P6 AI 与 Agent 能力 | TODO | 迁移 LLM 配置、Agent 调用、数学求解、诊断 | `/admin/ai-config`、Agent 抽象、数学工具链 | 12.7 |
@@ -399,7 +399,7 @@ backend-go/
 | 优先级 | 模块 | 状态 | 备注 |
 |--------|------|------|------|
 | P0 | `/health`、`/metrics` | DONE | Go P1 骨架已承接 `/health`、`/health/detailed`、`/metrics` |
-| P1 | `/auth` | TODO | 所有后续接口依赖用户上下文 |
+| P1 | `/auth` | DONE | Go P3 已承接登录、注册、刷新、登出、当前用户、修改密码、注册状态、忘记密码公开申请/状态查询 |
 | P1 | `/admin/users` | TODO | 管理员和权限基础能力 |
 | P1 | `/admin/settings` | TODO | 系统配置影响运行时行为 |
 | P2 | `/session` | TODO | 学生端核心链路 |
@@ -490,7 +490,7 @@ pytest
 | R1 | API 文档与实际 FastAPI 路由存在差异 | 前端兼容失败 | OPEN | P0 导出实际 OpenAPI 并冻结真实契约 |
 | R2 | SQLAlchemy 模型语义迁移到 Go 后丢失隐含默认值 | 数据不一致 | OPEN | Repository 测试覆盖默认值、枚举、级联行为 |
 | R3 | LangGraph/SymPy 能力在 Go 中无直接等价实现 | AI 功能延期 | OPEN | P6 单独 ADR，允许临时双跑但必须定义退出条件 |
-| R4 | JWT/Cookie 兼容不完整 | 用户登录失效 | OPEN | P3 先做兼容测试，再切换流量 |
+| R4 | JWT/Cookie 兼容不完整 | 用户登录失效 | MITIGATED | P3 已实现 Python 兼容 JWT claims、HMAC 算法校验、refresh token HttpOnly Cookie 行为和轮换测试；后续 P8 继续做 Python/Go 双跑契约验证 |
 | R5 | Alembic 历史与 Go 迁移工具并存 | 迁移历史混乱 | MITIGATED | P2 已生成 Go 单步初始 schema；后续生产迁移由 Go runner 负责，Alembic 保留为历史参考 |
 | R6 | 上传文件路径或对象存储 key 改变 | 历史资源不可访问 | OPEN | P7 做历史文件访问回归 |
 | R7 | 缺少 git 元数据时无法做变更边界检查 | 并行任务冲突风险增加 | OPEN | 修改前后记录文件清单，避免触碰无关文件 |
@@ -508,6 +508,7 @@ pytest
 | ADR-003 | 2026-04-18 | 从 Python Alembic head 生成 Go 单步初始 schema，后续由 Go forward migration runner 承接 | DONE | `0001_initial_schema.up.sql` 由临时库执行 Alembic 至 `0019_performance_indexes_phase3` 后 `pg_dump` 生成；包含表、枚举、索引、外键和种子数据；`go_schema_migrations` 记录 Go 迁移状态 |
 | ADR-004 | TODO | AI/Agent 重写或桥接方案 | TODO | P6 决策 |
 | ADR-005 | 2026-04-18 | 默认启动和 Nginx 分流先切到 Go | DONE | Python 代码保留为迁移参考，不再由默认启动、compose、Nginx split routing 承流 |
+| ADR-006 | 2026-04-18 | P3 JWT 兼容层使用标准库 HMAC 实现，不引入额外 JWT 框架 | DONE | Go 侧显式验证 `alg`、`iss`、`aud`、`exp`、`iat`、`jti` 和 `type`，生成与 Python PyJWT 兼容的 HS256/HS384/HS512 token；密码哈希使用 `bcrypt` 保持兼容 |
 
 ---
 
@@ -548,14 +549,14 @@ pytest
 
 ### 12.4 P3 鉴权与用户域
 
-- 状态：TODO
-- 开始日期：TODO
-- 完成日期：TODO
-- 负责人：TODO
-- 验证命令：TODO
-- 验证结果：TODO
-- 交付物链接：TODO
-- 遗留风险：TODO
+- 状态：DONE
+- 开始日期：2026-04-18
+- 完成日期：2026-04-18
+- 负责人：Codex
+- 验证命令：`gofmt -w ...`、`go test ./... -count=1`、`go vet ./...`、`MSP_GO_TEST_DATABASE_URL=postgres://.../math_platform?sslmode=disable go test ./internal/adapter/postgres -run TestUserRepositoryIntegration -count=1 -v`
+- 验证结果：Go 全量单元/契约测试通过；Go vet 通过；PostgreSQL 用户仓储集成测试在事务内通过并回滚；覆盖 JWT claims、bcrypt 密码、注册开关、登录失败锁定、refresh cookie 设置/清理、用户角色判断、用户仓储枚举映射和密码重置公开申请/状态查询
+- 交付物链接：`backend-go/internal/domain/user/`、`backend-go/internal/application/auth/`、`backend-go/internal/adapter/postgres/user_repository.go`、`backend-go/internal/adapter/http/auth/`、`backend-go/cmd/api/main.go`、`backend-go/internal/platform/config/`
+- 遗留风险：`/admin/users` 管理员用户 CRUD、用户导入导出、邮箱绑定/验证码接口仍未由 Go 承接；现有前端若调用这些未迁移接口仍会收到 501，占位风险将在后续用户管理/管理员域切片中处理；P8 仍需执行 Python/Go 双跑契约验证
 
 ### 12.5 P4 核心学习域
 
@@ -645,3 +646,4 @@ pytest
 - 清理废弃配置入口：删除 legacy Python `backend/Dockerfile` 和旧 split routing 配置，统一为根目录 `.env`/`.env.example` 与 `docker-compose.yml`。
 - P2 数据访问与迁移体系开始：拆分 PostgreSQL/Redis 基础设施、事务模式、Repository 基础和 Go 迁移衔接策略。
 - P2 完成：新增 pgx 连接池配置、事务封装、Repository 查询基类、Redis cache/LRU 降级、Go forward migration runner 和 `cmd/migrate`；从 Python Alembic head 生成 `0001_initial_schema.up.sql`；本地 `math_platform` 已清库并由 Go 迁移重建，重复迁移和迁移集成测试通过。
+- P3 完成：新增 Go 用户领域模型、Auth service、bcrypt 密码策略、Python 兼容 HMAC JWT、refresh token Cookie 轮换、登录失败锁定、用户上下文/角色判断、PostgreSQL 用户仓储、`/api/v1/auth/*` 核心路由和启动期管理员初始化。

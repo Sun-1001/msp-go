@@ -1,0 +1,390 @@
+package authhttp
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"log/slog"
+	"net/http"
+	"strings"
+	"time"
+
+	authapp "mathstudy/backend-go/internal/application/auth"
+	"mathstudy/backend-go/internal/domain/user"
+	"mathstudy/backend-go/internal/platform/config"
+)
+
+// Service is the auth application surface used by HTTP handlers.
+type Service interface {
+	Authenticate(context.Context, string, string) (authapp.AuthResult, error)
+	Register(context.Context, string, string, string, string) (authapp.AuthResult, error)
+	ChangePassword(context.Context, string, string, string) (bool, string, error)
+	GetUserByID(context.Context, string) (user.User, bool, error)
+	RefreshTokens(context.Context, string) (string, string, bool, error)
+	DecodeAccessToken(string) (authapp.Principal, bool)
+	DecodeRefreshToken(string) (string, bool)
+	RegistrationSettings(context.Context) (authapp.RegistrationSettings, error)
+	SubmitPasswordReset(context.Context, string, string, string) (authapp.PasswordResetResult, error)
+	PasswordResetStatus(context.Context, string, string) (authapp.PasswordResetStatus, error)
+}
+
+// Handler serves /auth endpoints.
+type Handler struct {
+	service       Service
+	logger        *slog.Logger
+	refreshMaxAge int
+	cookieSecure  bool
+	cookiePath    string
+}
+
+// NewHandler creates an auth HTTP handler with Python-compatible cookie behavior.
+func NewHandler(cfg config.Config, logger *slog.Logger, service Service) (*Handler, error) {
+	if service == nil {
+		return nil, errors.New("auth service is nil")
+	}
+	if logger == nil {
+		logger = slog.Default()
+	}
+	return &Handler{
+		service:       service,
+		logger:        logger,
+		refreshMaxAge: int(cfg.JWTRefreshTokenExpire / time.Second),
+		cookieSecure:  cfg.Environment != "development",
+		cookiePath:    cfg.APIV1Prefix + "/auth",
+	}, nil
+}
+
+// Register attaches auth routes under prefix, for example /api/v1/auth.
+func (h *Handler) Register(mux *http.ServeMux, prefix string) {
+	mux.HandleFunc("POST "+prefix+"/login", h.login)
+	mux.HandleFunc("PUT "+prefix+"/change-password", h.changePassword)
+	mux.HandleFunc("POST "+prefix+"/register", h.register)
+	mux.HandleFunc("POST "+prefix+"/refresh", h.refresh)
+	mux.HandleFunc("POST "+prefix+"/logout", h.logout)
+	mux.HandleFunc("GET "+prefix+"/me", h.me)
+	mux.HandleFunc("GET "+prefix+"/registration-status", h.registrationStatus)
+	mux.HandleFunc("POST "+prefix+"/forgot-password", h.forgotPassword)
+	mux.HandleFunc("GET "+prefix+"/forgot-password/status", h.forgotPasswordStatus)
+}
+
+type loginRequest struct {
+	Username string `json:"username"`
+	Password string `json:"password"`
+}
+
+type registerRequest struct {
+	Username string `json:"username"`
+	Email    string `json:"email"`
+	Password string `json:"password"`
+	Role     string `json:"role"`
+}
+
+type changePasswordRequest struct {
+	OldPassword string `json:"old_password"`
+	NewPassword string `json:"new_password"`
+}
+
+type forgotPasswordRequest struct {
+	Username string `json:"username"`
+	Email    string `json:"email"`
+	Reason   string `json:"reason"`
+}
+
+type loginResponse struct {
+	AccessToken string       `json:"access_token"`
+	TokenType   string       `json:"token_type"`
+	User        userResponse `json:"user"`
+}
+
+type refreshResponse struct {
+	AccessToken string `json:"access_token"`
+	TokenType   string `json:"token_type"`
+}
+
+type userResponse struct {
+	ID       string `json:"id"`
+	Username string `json:"username"`
+	Email    string `json:"email"`
+	Role     string `json:"role"`
+}
+
+type messageResponse struct {
+	Message string `json:"message"`
+}
+
+type registrationStatusResponse struct {
+	AllowStudent bool `json:"allow_student"`
+	AllowTeacher bool `json:"allow_teacher"`
+}
+
+type forgotPasswordResponse struct {
+	Success   bool    `json:"success"`
+	Message   string  `json:"message"`
+	RequestID *string `json:"request_id"`
+}
+
+type forgotPasswordStatusResponse struct {
+	HasPending bool    `json:"has_pending"`
+	Status     *string `json:"status"`
+	CreatedAt  *string `json:"created_at"`
+}
+
+type errorResponse struct {
+	Detail  string `json:"detail"`
+	Code    string `json:"code,omitempty"`
+	Message string `json:"message,omitempty"`
+}
+
+func (h *Handler) login(w http.ResponseWriter, r *http.Request) {
+	var request loginRequest
+	if !decodeRequest(w, r, &request) {
+		return
+	}
+	result, err := h.service.Authenticate(r.Context(), request.Username, request.Password)
+	if err != nil {
+		h.logger.Error("login failed", "error", err)
+		writeAuthError(w, http.StatusInternalServerError, "INTERNAL_ERROR", "登录失败，请稍后重试")
+		return
+	}
+	if !result.Success {
+		w.Header().Set("WWW-Authenticate", "Bearer")
+		writeAuthError(w, http.StatusUnauthorized, "UNAUTHORIZED", result.Error)
+		return
+	}
+	h.setRefreshCookie(w, result.RefreshToken)
+	writeJSON(w, http.StatusOK, loginResponse{
+		AccessToken: result.AccessToken,
+		TokenType:   "bearer",
+		User:        toUserResponse(result.User),
+	})
+}
+
+func (h *Handler) register(w http.ResponseWriter, r *http.Request) {
+	var request registerRequest
+	if !decodeRequest(w, r, &request) {
+		return
+	}
+	if strings.TrimSpace(request.Role) == "" {
+		request.Role = string(user.RoleStudent)
+	}
+	result, err := h.service.Register(r.Context(), request.Username, request.Email, request.Password, request.Role)
+	if err != nil {
+		h.logger.Error("register failed", "error", err)
+		writeAuthError(w, http.StatusInternalServerError, "INTERNAL_ERROR", "注册失败，请稍后重试")
+		return
+	}
+	if !result.Success {
+		writeAuthError(w, http.StatusBadRequest, "BAD_REQUEST", result.Error)
+		return
+	}
+	if result.AccessToken == "" || result.RefreshToken == "" || result.User.ID == "" {
+		writeAuthError(w, http.StatusInternalServerError, "INTERNAL_ERROR", "注册成功但未能生成登录凭证，请稍后重试")
+		return
+	}
+	h.setRefreshCookie(w, result.RefreshToken)
+	writeJSON(w, http.StatusOK, loginResponse{
+		AccessToken: result.AccessToken,
+		TokenType:   "bearer",
+		User:        toUserResponse(result.User),
+	})
+}
+
+func (h *Handler) changePassword(w http.ResponseWriter, r *http.Request) {
+	principal, ok := h.requirePrincipal(w, r)
+	if !ok {
+		return
+	}
+	var request changePasswordRequest
+	if !decodeRequest(w, r, &request) {
+		return
+	}
+	success, message, err := h.service.ChangePassword(r.Context(), principal.UserID, request.OldPassword, request.NewPassword)
+	if err != nil {
+		h.logger.Error("change password failed", "error", err)
+		writeAuthError(w, http.StatusInternalServerError, "INTERNAL_ERROR", "密码修改失败，请稍后重试")
+		return
+	}
+	if !success {
+		writeAuthError(w, http.StatusBadRequest, "BAD_REQUEST", message)
+		return
+	}
+	writeJSON(w, http.StatusOK, messageResponse{Message: message})
+}
+
+func (h *Handler) refresh(w http.ResponseWriter, r *http.Request) {
+	cookie, err := r.Cookie("refresh_token")
+	if err != nil || strings.TrimSpace(cookie.Value) == "" {
+		w.Header().Set("WWW-Authenticate", "Bearer")
+		writeAuthError(w, http.StatusUnauthorized, "UNAUTHORIZED", "Refresh token 不存在")
+		return
+	}
+	userID, ok := h.service.DecodeRefreshToken(cookie.Value)
+	if !ok {
+		h.clearRefreshCookie(w)
+		w.Header().Set("WWW-Authenticate", "Bearer")
+		writeAuthError(w, http.StatusUnauthorized, "UNAUTHORIZED", "Refresh token 无效或已过期")
+		return
+	}
+	accessToken, refreshToken, ok, err := h.service.RefreshTokens(r.Context(), userID)
+	if err != nil {
+		h.logger.Error("refresh token failed", "error", err)
+		writeAuthError(w, http.StatusInternalServerError, "INTERNAL_ERROR", "Token 刷新失败，请稍后重试")
+		return
+	}
+	if !ok {
+		h.clearRefreshCookie(w)
+		w.Header().Set("WWW-Authenticate", "Bearer")
+		writeAuthError(w, http.StatusUnauthorized, "UNAUTHORIZED", "用户不存在或已被禁用")
+		return
+	}
+	h.setRefreshCookie(w, refreshToken)
+	writeJSON(w, http.StatusOK, refreshResponse{AccessToken: accessToken, TokenType: "bearer"})
+}
+
+func (h *Handler) logout(w http.ResponseWriter, _ *http.Request) {
+	h.clearRefreshCookie(w)
+	writeJSON(w, http.StatusOK, messageResponse{Message: "登出成功"})
+}
+
+func (h *Handler) me(w http.ResponseWriter, r *http.Request) {
+	principal, ok := h.requirePrincipal(w, r)
+	if !ok {
+		return
+	}
+	account, ok, err := h.service.GetUserByID(r.Context(), principal.UserID)
+	if err != nil {
+		h.logger.Error("get current user failed", "error", err)
+		writeAuthError(w, http.StatusInternalServerError, "INTERNAL_ERROR", "获取用户信息失败")
+		return
+	}
+	if !ok {
+		writeAuthError(w, http.StatusNotFound, "NOT_FOUND", "用户不存在")
+		return
+	}
+	writeJSON(w, http.StatusOK, toUserResponse(account))
+}
+
+func (h *Handler) registrationStatus(w http.ResponseWriter, r *http.Request) {
+	settings, err := h.service.RegistrationSettings(r.Context())
+	if err != nil {
+		h.logger.Error("get registration status failed", "error", err)
+		writeAuthError(w, http.StatusInternalServerError, "INTERNAL_ERROR", "获取注册状态失败")
+		return
+	}
+	writeJSON(w, http.StatusOK, registrationStatusResponse{
+		AllowStudent: settings.AllowStudent,
+		AllowTeacher: settings.AllowTeacher,
+	})
+}
+
+func (h *Handler) forgotPassword(w http.ResponseWriter, r *http.Request) {
+	var request forgotPasswordRequest
+	if !decodeRequest(w, r, &request) {
+		return
+	}
+	result, err := h.service.SubmitPasswordReset(r.Context(), request.Username, request.Email, request.Reason)
+	if err != nil {
+		h.logger.Error("submit password reset failed", "error", err)
+		writeAuthError(w, http.StatusInternalServerError, "INTERNAL_ERROR", "提交失败，请稍后重试")
+		return
+	}
+	writeJSON(w, http.StatusOK, forgotPasswordResponse{
+		Success:   result.Success,
+		Message:   result.Message,
+		RequestID: result.RequestID,
+	})
+}
+
+func (h *Handler) forgotPasswordStatus(w http.ResponseWriter, r *http.Request) {
+	username := r.URL.Query().Get("username")
+	email := r.URL.Query().Get("email")
+	if username == "" || email == "" {
+		writeAuthError(w, http.StatusUnprocessableEntity, "VALIDATION_ERROR", "缺少 username 或 email")
+		return
+	}
+	status, err := h.service.PasswordResetStatus(r.Context(), username, email)
+	if err != nil {
+		h.logger.Error("get password reset status failed", "error", err)
+		writeAuthError(w, http.StatusInternalServerError, "INTERNAL_ERROR", "查询失败，请稍后重试")
+		return
+	}
+	var createdAt *string
+	if status.CreatedAt != nil {
+		value := status.CreatedAt.Format("2006-01-02T15:04:05.999999")
+		createdAt = &value
+	}
+	writeJSON(w, http.StatusOK, forgotPasswordStatusResponse{
+		HasPending: status.HasPending,
+		Status:     status.Status,
+		CreatedAt:  createdAt,
+	})
+}
+
+func (h *Handler) requirePrincipal(w http.ResponseWriter, r *http.Request) (authapp.Principal, bool) {
+	authHeader := strings.TrimSpace(r.Header.Get("Authorization"))
+	fields := strings.Fields(authHeader)
+	if len(fields) != 2 || !strings.EqualFold(fields[0], "Bearer") {
+		w.Header().Set("WWW-Authenticate", "Bearer")
+		writeAuthError(w, http.StatusUnauthorized, "UNAUTHORIZED", "未认证，请先登录")
+		return authapp.Principal{}, false
+	}
+	principal, ok := h.service.DecodeAccessToken(fields[1])
+	if !ok {
+		w.Header().Set("WWW-Authenticate", "Bearer")
+		writeAuthError(w, http.StatusUnauthorized, "UNAUTHORIZED", "未认证，请先登录")
+		return authapp.Principal{}, false
+	}
+	return principal, true
+}
+
+func (h *Handler) setRefreshCookie(w http.ResponseWriter, value string) {
+	http.SetCookie(w, &http.Cookie{
+		Name:     "refresh_token",
+		Value:    value,
+		Path:     h.cookiePath,
+		MaxAge:   h.refreshMaxAge,
+		HttpOnly: true,
+		Secure:   h.cookieSecure,
+		SameSite: http.SameSiteLaxMode,
+	})
+}
+
+func (h *Handler) clearRefreshCookie(w http.ResponseWriter) {
+	http.SetCookie(w, &http.Cookie{
+		Name:     "refresh_token",
+		Value:    "",
+		Path:     h.cookiePath,
+		MaxAge:   -1,
+		HttpOnly: true,
+		Secure:   h.cookieSecure,
+		SameSite: http.SameSiteLaxMode,
+	})
+}
+
+func decodeRequest(w http.ResponseWriter, r *http.Request, target any) bool {
+	decoder := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<20))
+	if err := decoder.Decode(target); err != nil {
+		writeAuthError(w, http.StatusUnprocessableEntity, "VALIDATION_ERROR", "请求体格式错误")
+		return false
+	}
+	return true
+}
+
+func toUserResponse(account user.User) userResponse {
+	return userResponse{
+		ID:       account.ID,
+		Username: account.Username,
+		Email:    account.Email,
+		Role:     string(account.Role),
+	}
+}
+
+func writeJSON(w http.ResponseWriter, status int, payload any) {
+	w.Header().Set("Content-Type", "application/json; charset=utf-8")
+	w.WriteHeader(status)
+	_ = json.NewEncoder(w).Encode(payload)
+}
+
+func writeAuthError(w http.ResponseWriter, status int, code, message string) {
+	writeJSON(w, status, errorResponse{Detail: message, Code: code, Message: message})
+}

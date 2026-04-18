@@ -13,8 +13,34 @@ import (
 	"mathstudy/backend-go/internal/platform/middleware"
 )
 
+// RouteRegistrar attaches migrated business routes to the shared mux.
+type RouteRegistrar func(*http.ServeMux)
+
+type handlerOptions struct {
+	registrars []RouteRegistrar
+}
+
+// Option customizes the HTTP handler tree.
+type Option func(*handlerOptions)
+
+// WithRoutes registers migrated business routes before the API fallback handler.
+func WithRoutes(registrar RouteRegistrar) Option {
+	return func(options *handlerOptions) {
+		if registrar != nil {
+			options.registrars = append(options.registrars, registrar)
+		}
+	}
+}
+
 // NewHandler builds the complete HTTP handler tree.
-func NewHandler(cfg config.Config, logger *slog.Logger, checker health.Checker, store *metrics.Store) (http.Handler, error) {
+func NewHandler(cfg config.Config, logger *slog.Logger, checker health.Checker, store *metrics.Store, opts ...Option) (http.Handler, error) {
+	options := handlerOptions{}
+	for _, opt := range opts {
+		if opt != nil {
+			opt(&options)
+		}
+	}
+
 	uploadsDir, err := filepath.Abs(cfg.UploadsDir)
 	if err != nil {
 		return nil, err
@@ -45,6 +71,9 @@ func NewHandler(cfg config.Config, logger *slog.Logger, checker health.Checker, 
 		_, _ = w.Write([]byte(store.Render()))
 	})
 	mux.Handle("/uploads/", http.StripPrefix("/uploads/", http.FileServer(http.Dir(uploadsDir))))
+	for _, registrar := range options.registrars {
+		registrar(mux)
+	}
 	mux.HandleFunc(cfg.APIV1Prefix+"/", notMigratedHandler)
 	mux.HandleFunc("/", notFoundHandler)
 

@@ -63,6 +63,18 @@ type Config struct {
 	RedisSocketTimeout        time.Duration
 	RedisConnectTimeout       time.Duration
 	RedisFallbackCacheMaxSize int
+
+	JWTSecretKey          string
+	JWTAlgorithm          string
+	JWTAccessTokenExpire  time.Duration
+	JWTRefreshTokenExpire time.Duration
+
+	AdminUsername string
+	AdminEmail    string
+	AdminPassword string
+
+	LoginMaxAttempts int
+	LoginLockout     time.Duration
 }
 
 // Load reads the single repository .env file without overwriting process env.
@@ -111,6 +123,15 @@ func Load() (Config, error) {
 		RedisSocketTimeout:        envSeconds("REDIS_SOCKET_TIMEOUT_SECONDS", 3*time.Second),
 		RedisConnectTimeout:       envSeconds("REDIS_SOCKET_CONNECT_TIMEOUT_SECONDS", 3*time.Second),
 		RedisFallbackCacheMaxSize: envInt("REDIS_FALLBACK_CACHE_MAX_SIZE", 500),
+		JWTSecretKey:              envString("JWT_SECRET_KEY", "your-secret-key-change-in-production"),
+		JWTAlgorithm:              strings.ToUpper(envString("JWT_ALGORITHM", "HS256")),
+		JWTAccessTokenExpire:      time.Duration(envInt("JWT_ACCESS_TOKEN_EXPIRE_MINUTES", 30)) * time.Minute,
+		JWTRefreshTokenExpire:     time.Duration(envInt("JWT_REFRESH_TOKEN_EXPIRE_DAYS", 7)) * 24 * time.Hour,
+		AdminUsername:             envString("ADMIN_USERNAME", "admin"),
+		AdminEmail:                envString("ADMIN_EMAIL", "admin@example.com"),
+		AdminPassword:             envString("ADMIN_PASSWORD", "admin123"),
+		LoginMaxAttempts:          envInt("LOGIN_MAX_ATTEMPTS", 5),
+		LoginLockout:              time.Duration(envInt("LOGIN_LOCKOUT_MINUTES", 15)) * time.Minute,
 	}
 
 	if cfg.Port <= 0 || cfg.Port > 65535 {
@@ -130,6 +151,33 @@ func Load() (Config, error) {
 	}
 	if cfg.RedisFallbackCacheMaxSize <= 0 {
 		return Config{}, errors.New("REDIS_FALLBACK_CACHE_MAX_SIZE must be greater than 0")
+	}
+	if !allowedJWTAlgorithms()[cfg.JWTAlgorithm] {
+		return Config{}, fmt.Errorf("JWT_ALGORITHM must be one of HS256, HS384, HS512, got %s", cfg.JWTAlgorithm)
+	}
+	if strings.TrimSpace(cfg.JWTSecretKey) == "" {
+		return Config{}, errors.New("JWT_SECRET_KEY must not be empty")
+	}
+	if cfg.JWTAccessTokenExpire <= 0 {
+		return Config{}, errors.New("JWT_ACCESS_TOKEN_EXPIRE_MINUTES must be greater than 0")
+	}
+	if cfg.JWTRefreshTokenExpire <= 0 {
+		return Config{}, errors.New("JWT_REFRESH_TOKEN_EXPIRE_DAYS must be greater than 0")
+	}
+	if strings.TrimSpace(cfg.AdminUsername) == "" {
+		return Config{}, errors.New("ADMIN_USERNAME must not be empty")
+	}
+	if strings.TrimSpace(cfg.AdminEmail) == "" {
+		return Config{}, errors.New("ADMIN_EMAIL must not be empty")
+	}
+	if strings.TrimSpace(cfg.AdminPassword) == "" {
+		return Config{}, errors.New("ADMIN_PASSWORD must not be empty")
+	}
+	if cfg.LoginMaxAttempts <= 0 {
+		return Config{}, errors.New("LOGIN_MAX_ATTEMPTS must be greater than 0")
+	}
+	if cfg.LoginLockout <= 0 {
+		return Config{}, errors.New("LOGIN_LOCKOUT_MINUTES must be greater than 0")
 	}
 	return cfg, nil
 }
@@ -298,4 +346,12 @@ func cleanPrefix(prefix string) string {
 		prefix = "/" + prefix
 	}
 	return strings.TrimRight(prefix, "/")
+}
+
+func allowedJWTAlgorithms() map[string]bool {
+	return map[string]bool{
+		"HS256": true,
+		"HS384": true,
+		"HS512": true,
+	}
 }
