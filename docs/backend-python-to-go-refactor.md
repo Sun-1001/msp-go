@@ -1,7 +1,7 @@
 # 后端 Python 到 Go 重构迁移文档
 
-**文档状态**：P3 鉴权与用户域完成，P4 核心学习域进行中
-**最后更新**：2026-04-25
+**文档状态**：P4 核心学习域进行中，P5 内容与教学管理域进行中（资源中心已迁移）
+**最后更新**：2026-04-26
 **适用范围**：`backend/` Python FastAPI 后端整体迁移到 Go 后端
 **重构原则**：接口兼容、数据连续、分阶段验收、每阶段完成必须更新本文档
 
@@ -216,7 +216,7 @@ backend-go/
 | P2 数据访问与迁移体系 | DONE | 建立 PostgreSQL、Redis、迁移和事务模式 | Repository 基础、迁移策略、集成测试 | 12.3 |
 | P3 鉴权与用户域 | DONE | 迁移认证、用户、密码、权限基础能力 | `/auth`、用户上下文、管理员初始化 | 12.4 |
 | P4 核心学习域 | IN_PROGRESS | 迁移会话、练习、错题、进度、画像 | `/session`、`/exercise`、`/mistakes`、`/progress`、`/portrait` | 12.5 |
-| P5 内容与教学管理域 | TODO | 迁移题库、资源、班级、教师统计、知识点 | `/questions`、`/resources`、`/classes`、`/teacher`、`/admin/knowledge` | 12.6 |
+| P5 内容与教学管理域 | IN_PROGRESS | 迁移题库、资源、班级、教师统计、知识点 | `/questions`、`/resources`、`/classes`、`/teacher`、`/admin/knowledge` | 12.6 |
 | P6 AI 与 Agent 能力 | TODO | 迁移 LLM 配置、Agent 调用、数学求解、诊断 | `/admin/ai-config`、Agent 抽象、数学工具链 | 12.7 |
 | P7 集成与运维域 | TODO | 迁移西电集成、上传、系统设置、安全日志、监控 | `/xidian`、`/upload`、`/admin/settings`、`/admin/security-logs`、`/metrics` | 12.8 |
 | P8 双跑与契约验证 | TODO | Python/Go 并行验证，确认接口和数据等价 | Contract tests、回归报告、性能报告 | 12.9 |
@@ -402,13 +402,13 @@ backend-go/
 | P1 | `/auth` | DONE | Go P3 已承接登录、注册、刷新、登出、当前用户、修改密码、注册状态、忘记密码公开申请/状态查询 |
 | P1 | `/admin/users` | TODO | 管理员和权限基础能力 |
 | P1 | `/admin/settings` | TODO | 系统配置影响运行时行为 |
-| P2 | `/session` | TODO | 学生端核心链路 |
-| P2 | `/exercise` | TODO | 练习提交和诊断链路 |
-| P2 | `/mistakes` | TODO | 错题本链路 |
+| P2 | `/session` | DONE | Go P4 已承接会话创建、历史、列表、结束、模式、删除、批删、任务取消和 SSE 形状兼容降级；Agent 流式质量等价留到 P6 |
+| P2 | `/exercise` | DONE | Go P4 已承接下一题、提交答案、题目详情、题目解析；AI OCR/LLM 诊断质量等价留到 P6 |
+| P2 | `/mistakes` | DONE | Go P4 已承接列表、统计、详情、标记掌握、删除和复习推荐 |
 | P2 | `/progress` | DONE | Go P4 首轮已承接 overview、mastery、statistics、path、knowledge-graph、class-ranking、chapters |
 | P2 | `/portrait` | DONE | Go P4 已承接读取、清除和模板画像生成；LLM 画像质量等价留到 P6 AI 能力收敛 |
 | P3 | `/questions` | TODO | 教师题库 |
-| P3 | `/resources` | TODO | 资源中心和收藏 |
+| P3 | `/resources` | DONE | Go P5 已承接资源列表、详情、创建、更新、软删除、统计、收藏列表和收藏切换；上传/对象存储仍归 P7 `/upload` |
 | P3 | `/classes` | TODO | 班级管理 |
 | P3 | `/teacher` | TODO | 教师统计 |
 | P3 | `/admin/knowledge` | TODO | 知识图谱维护 |
@@ -565,20 +565,20 @@ pytest
 - 完成日期：TODO
 - 负责人：Codex
 - 验证命令（阶段进行中）：`gofmt -w ...`、`go test ./... -count=1`、`go vet ./...`
-- 验证结果（阶段进行中）：Go 全量单元/契约测试通过；Go vet 通过；覆盖 `/progress` 鉴权、overview、mastery、statistics、path、knowledge-graph、class-ranking、chapters 的应用层和 HTTP 层主要路径；覆盖 `/portrait` 鉴权、读取、清除和模板画像生成的应用层与 HTTP 层主要路径
-- 交付物链接：`backend-go/internal/application/progress/`、`backend-go/internal/adapter/http/progress/`、`backend-go/internal/adapter/postgres/progress_repository.go`、`backend-go/internal/application/portrait/`、`backend-go/internal/adapter/http/portrait/`、`backend-go/internal/adapter/postgres/portrait_repository.go`、`backend-go/cmd/api/main.go`（进行中）
-- 遗留风险：`/session`、`/exercise`、`/mistakes` 尚未迁移；`/portrait/generate` 当前由 Go 模板报告生成承接，尚未恢复 Python 侧 LLM 画像质量，需在 P6 AI 能力中替换或补充双跑验证；`/progress` 和 `/portrait` 仍需在可用 PostgreSQL 测试库中补充 Repository 集成测试，并在 P8 做 Python/Go 双跑契约验证
+- 验证结果（阶段进行中）：Go 全量单元/契约测试通过；Go vet 通过；覆盖 `/progress` 鉴权、overview、mastery、statistics、path、knowledge-graph、class-ranking、chapters 的应用层和 HTTP 层主要路径；覆盖 `/portrait` 鉴权、读取、清除和模板画像生成的应用层与 HTTP 层主要路径；覆盖 `/mistakes` 鉴权、列表筛选/排序/分页、统计、详情、标记掌握、删除和复习推荐的应用层与 HTTP 层主要路径；覆盖 `/exercise` 鉴权、下一题选择、提交答案、BKT/profile 更新、题目详情和解析权限的应用层与 HTTP 层主要路径；覆盖 `/session` 鉴权、创建、历史、列表、结束、模式、删除、批删、任务取消和 SSE 形状兼容降级的应用层与 HTTP 层主要路径
+- 交付物链接：`backend-go/internal/application/progress/`、`backend-go/internal/adapter/http/progress/`、`backend-go/internal/adapter/postgres/progress_repository.go`、`backend-go/internal/application/portrait/`、`backend-go/internal/adapter/http/portrait/`、`backend-go/internal/adapter/postgres/portrait_repository.go`、`backend-go/internal/application/mistake/`、`backend-go/internal/adapter/http/mistake/`、`backend-go/internal/adapter/postgres/mistake_repository.go`、`backend-go/internal/application/exercise/`、`backend-go/internal/adapter/http/exercise/`、`backend-go/internal/adapter/postgres/exercise_repository.go`、`backend-go/internal/application/session/`、`backend-go/internal/adapter/http/session/`、`backend-go/internal/adapter/postgres/session_repository.go`、`backend-go/cmd/api/main.go`（进行中）
+- 遗留风险：`/session/{id}/chat` 当前保存用户消息并返回 SSE 形状兼容的导师占位回复，尚未恢复 Python 侧 Agent 工作流、资源推荐兜底和画像更新；`/portrait/generate` 当前由 Go 模板报告生成承接，尚未恢复 Python 侧 LLM 画像质量；`/exercise/submit` 当前使用规范化文本比对和基础诊断承接，图片 OCR、数学等价多层判定和 LLM 诊断质量需在 P6 AI 能力中替换或补充双跑验证；`/progress`、`/portrait`、`/mistakes`、`/exercise` 和 `/session` 仍需在可用 PostgreSQL 测试库中补充 Repository 集成测试，并在 P8 做 Python/Go 双跑契约验证
 
 ### 12.6 P5 内容与教学管理域
 
-- 状态：TODO
-- 开始日期：TODO
+- 状态：IN_PROGRESS
+- 开始日期：2026-04-26
 - 完成日期：TODO
-- 负责人：TODO
-- 验证命令：TODO
-- 验证结果：TODO
-- 交付物链接：TODO
-- 遗留风险：TODO
+- 负责人：Codex
+- 验证命令（阶段进行中）：`gofmt -w ...`、`go test ./... -count=1`、`go vet ./...`
+- 验证结果（阶段进行中）：Go 全量单元/契约测试通过；Go vet 通过；覆盖 `/resources` 鉴权、列表筛选/分页、详情、教师权限校验、创建默认值、统计/收藏字面量路由、404 映射和软删除响应；PostgreSQL adapter 编译通过并实现 `contents`、`content_assets`、`user_favorites` 的资源中心读写语义。
+- 交付物链接：`backend-go/internal/application/resource/`、`backend-go/internal/adapter/http/resource/`、`backend-go/internal/adapter/postgres/resource_repository.go`、`backend-go/cmd/api/main.go`（进行中）
+- 遗留风险：`/questions`、`/classes`、`/teacher`、`/admin/knowledge` 仍未由 Go 承接；`/resources` 仍需在可用 PostgreSQL 测试库中补充 Repository 集成测试，并在 P8 做 Python/Go 双跑契约验证；资源文件上传和对象存储能力不属于本切片，仍留到 P7 `/upload`。
 
 ### 12.7 P6 AI 与 Agent 能力
 
@@ -653,3 +653,11 @@ pytest
 - P4 核心学习域开始：优先迁移 `/api/v1/progress/*` 学生端进度查询链路，避开 LLM 画像生成和流式会话等后续高耦合能力。
 - P4 `/progress` 首轮完成：新增 Go progress application service、PostgreSQL read repository 和 HTTP handler，承接 overview、mastery、statistics、path、knowledge-graph、class-ranking、chapters；`go test ./... -count=1` 和 `go vet ./...` 通过。
 - P4 `/portrait` 首轮完成：新增 Go portrait application service、PostgreSQL repository 和 HTTP handler，承接 GET `/portrait`、POST `/portrait/generate`、DELETE `/portrait`；生成入口先产出基于学习数据的模板画像，LLM 画像质量等价留到 P6；`go test ./... -count=1` 通过。
+- P4 `/mistakes` 首轮完成：新增 Go mistake application service、PostgreSQL repository 和 HTTP handler，承接列表、统计、详情、标记掌握、删除和复习推荐；保持 Python 的掌握度过滤、错误类型统计和复习优先级语义；`go test ./... -count=1` 和 `go vet ./...` 通过。
+- P4 `/exercise` 首轮完成：新增 Go exercise application service、PostgreSQL repository 和 HTTP handler，承接下一题、提交答案、题目详情和解析；提交答案在事务内写入 attempt、基础 diagnosis、learning session、BKT 状态和 student profile；AI OCR、数学等价判定和 LLM 诊断质量等价留到 P6；`go test ./... -count=1` 和 `go vet ./...` 通过。
+- P4 `/session` 首轮完成：新增 Go session application service、PostgreSQL repository 和 HTTP handler，承接创建、历史、列表、结束、模式更新、删除、批删、任务取消和 `/chat` SSE 形状兼容降级；完整 Agent 流式工作流、资源推荐和画像写回质量等价留到 P6；`go test ./... -count=1` 和 `go vet ./...` 通过。
+
+### 2026-04-26
+
+- P5 内容与教学管理域开始：优先迁移不依赖 AI/Agent 的 `/api/v1/resources` 资源中心链路。
+- P5 `/resources` 首轮完成：新增 Go resource application service、PostgreSQL repository 和 HTTP handler，承接列表、统计、收藏列表、详情、创建、更新、软删除和收藏切换；保持视频/文档到 `contents` 类型、附件到 `content_assets`、收藏到 `user_favorites` 的 Python 存储语义；`go test ./... -count=1` 和 `go vet ./...` 通过。

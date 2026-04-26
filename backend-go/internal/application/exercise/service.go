@@ -1,0 +1,940 @@
+package exercise
+
+import (
+	"context"
+	"errors"
+	"math"
+	"sort"
+	"strings"
+	"time"
+)
+
+// Public exercise errors mapped by the HTTP layer.
+var (
+	ErrNotFound   = errors.New("exercise not found")
+	ErrForbidden  = errors.New("student is not enrolled")
+	ErrBadRequest = errors.New("bad exercise request")
+)
+
+// Repository is the persistence surface required by exercise use cases.
+type Repository interface {
+	WithTx(context.Context, func(context.Context, Repository) error) error
+	GetTeacherIDForStudent(context.Context, string) (string, bool, error)
+	GetLatestSession(context.Context, string) (LearningSession, bool, error)
+	CreateSession(context.Context, string, time.Time) (LearningSession, error)
+	UpdateSessionCurrentContent(context.Context, string, *string) error
+	UpdateSessionAfterSubmit(context.Context, string, []string) error
+	GetExercise(context.Context, string) (Exercise, bool, error)
+	ListRecentContentIDs(context.Context, string, int) ([]string, error)
+	ListCandidateExercises(context.Context, CandidateFilter) ([]Exercise, error)
+	GetProfile(context.Context, string) (StudentProfile, bool, error)
+	HasSubmittedAttempt(context.Context, string, string) (bool, error)
+	ListBKTStates(context.Context, string, []string) (map[string]BKTState, error)
+	ListBKTParams(context.Context, []string) (map[string]BKTParams, error)
+	InsertAttempt(context.Context, AttemptRecord) error
+	InsertDiagnosis(context.Context, DiagnosisRecord) error
+	UpsertBKTStates(context.Context, []BKTState) error
+	UpdateProfileTracking(context.Context, string, ProfileTrackingUpdate) error
+}
+
+// AnswerChecker compares student and correct answers.
+type AnswerChecker interface {
+	CheckAnswer(context.Context, string, string, string) (AnswerCheckResult, error)
+}
+
+// LearningSession stores the minimal session state used by exercise flow.
+type LearningSession struct {
+	ID                string
+	StudentID         string
+	CurrentContentID  *string
+	ContentsAttempted []string
+}
+
+// Exercise stores problem content.
+type Exercise struct {
+	ID             string
+	OwnerTeacherID string
+	Status         string
+	Title          string
+	Body           string
+	Difficulty     float64
+	ConceptIDs     []string
+	Meta           map[string]any
+}
+
+// StudentProfile stores tracking data updated after attempts.
+type StudentProfile struct {
+	MasteryVector       map[string]float64
+	ErrorTendency       map[string]float64
+	PreferredDifficulty float64
+	LearningPace        float64
+	TotalExercises      int
+	CorrectCount        int
+}
+
+// CandidateFilter stores exercise selection filters.
+type CandidateFilter struct {
+	TeacherID      string
+	DifficultyMin  float64
+	DifficultyMax  float64
+	ExcludeContent []string
+	Limit          int
+}
+
+// BKTState stores one student-concept BKT state.
+type BKTState struct {
+	ID             string
+	StudentID      string
+	ConceptID      string
+	MasteryProb    float64
+	Confidence     float64
+	AttemptCount   int
+	CorrectCount   int
+	IncorrectCount int
+	PL0            float64
+	PT             float64
+	PG             float64
+	PS             float64
+	LastOutcome    *bool
+	LastAttemptAt  *time.Time
+	CreatedAt      time.Time
+	UpdatedAt      time.Time
+}
+
+// BKTParams stores BKT concept parameters.
+type BKTParams struct {
+	PL0 float64
+	PT  float64
+	PG  float64
+	PS  float64
+}
+
+// AttemptRecord stores data inserted into content_attempts.
+type AttemptRecord struct {
+	ID               string
+	ContentID        string
+	StudentID        string
+	StudentAnswer    string
+	StudentSteps     []string
+	IsCorrect        bool
+	Score            float64
+	StartedAt        time.Time
+	SubmittedAt      time.Time
+	TimeSpentSeconds int
+}
+
+// DiagnosisRecord stores data inserted into diagnosis_reports.
+type DiagnosisRecord struct {
+	ID             string
+	AttemptID      string
+	ErrorType      *string
+	ErrorSubtype   string
+	Severity       string
+	RelatedConcept []string
+	Explanation    string
+	Suggestion     string
+	CreatedAt      time.Time
+}
+
+// ProfileTrackingUpdate stores profile updates after one attempt.
+type ProfileTrackingUpdate struct {
+	MasteryVector  map[string]float64
+	ErrorTendency  map[string]float64
+	TotalExercises int
+	CorrectCount   int
+	UpdatedAt      time.Time
+}
+
+// NextQuery stores /exercise/next query params.
+type NextQuery struct {
+	ConceptID  string
+	Difficulty *float64
+}
+
+// SubmitRequest stores /exercise/submit request data.
+type SubmitRequest struct {
+	ExerciseID       string
+	AnswerText       string
+	AnswerImageURL   string
+	AnswerSteps      []string
+	TimeSpentSeconds int
+}
+
+// ExerciseResponse is the Python-compatible exercise summary response.
+type ExerciseResponse struct {
+	ID                   string   `json:"id"`
+	Title                string   `json:"title"`
+	Content              string   `json:"content"`
+	Difficulty           float64  `json:"difficulty"`
+	Type                 string   `json:"type"`
+	KnowledgePoints      []string `json:"knowledge_points"`
+	HintsAvailable       bool     `json:"hints_available"`
+	EstimatedTimeSeconds int      `json:"estimated_time_seconds"`
+	Options              []string `json:"options"`
+}
+
+// ExerciseDetailResponse is the Python-compatible exercise detail response.
+type ExerciseDetailResponse struct {
+	ID              string   `json:"id"`
+	Title           string   `json:"title"`
+	Content         string   `json:"content"`
+	Difficulty      float64  `json:"difficulty"`
+	Type            string   `json:"type"`
+	KnowledgePoints []string `json:"knowledge_points"`
+	Hints           []string `json:"hints"`
+	Options         []string `json:"options"`
+}
+
+// SolutionResponse is the Python-compatible solution response.
+type SolutionResponse struct {
+	ExerciseID string   `json:"exercise_id"`
+	Answer     string   `json:"answer"`
+	Steps      []string `json:"steps"`
+	Source     string   `json:"source"`
+}
+
+// SubmitResponse is the Python-compatible answer submission response.
+type SubmitResponse struct {
+	IsCorrect          bool               `json:"is_correct"`
+	Score              float64            `json:"score"`
+	StudentAnswerLatex string             `json:"student_answer_latex"`
+	CorrectAnswerLatex string             `json:"correct_answer_latex"`
+	Diagnosis          *DiagnosisDetail   `json:"diagnosis"`
+	Feedback           string             `json:"feedback"`
+	MasteryUpdate      map[string]float64 `json:"mastery_update"`
+	MasteryModel       string             `json:"mastery_model"`
+	NextRecommendation string             `json:"next_recommendation"`
+}
+
+// DiagnosisDetail stores lightweight diagnostic feedback.
+type DiagnosisDetail struct {
+	ErrorType        *string  `json:"error_type"`
+	ErrorDescription string   `json:"error_description"`
+	ErrorStepIndex   *int     `json:"error_step_index"`
+	Severity         string   `json:"severity"`
+	Suggestion       string   `json:"suggestion"`
+	RelatedConcepts  []string `json:"related_concepts"`
+}
+
+// AnswerCheckResult stores answer comparison output.
+type AnswerCheckResult struct {
+	IsCorrect  bool
+	Reason     string
+	Confidence float64
+}
+
+// Service implements adaptive exercise use cases.
+type Service struct {
+	repo    Repository
+	checker AnswerChecker
+	now     func() time.Time
+	newID   func() (string, error)
+}
+
+// NewService creates an exercise service.
+func NewService(repo Repository, checker AnswerChecker) (*Service, error) {
+	if repo == nil {
+		return nil, errors.New("exercise repository is nil")
+	}
+	if checker == nil {
+		checker = NormalizedAnswerChecker{}
+	}
+	return &Service{
+		repo:    repo,
+		checker: checker,
+		now:     time.Now,
+		newID:   NewUUID,
+	}, nil
+}
+
+// GetNextExercise returns the current pending exercise or selects a new one.
+func (s *Service) GetNextExercise(ctx context.Context, userID string, query NextQuery) (*ExerciseResponse, error) {
+	session, err := s.getOrCreateSession(ctx, userID)
+	if err != nil {
+		return nil, err
+	}
+	if session.CurrentContentID != nil {
+		current, ok, err := s.repo.GetExercise(ctx, *session.CurrentContentID)
+		if err != nil {
+			return nil, err
+		}
+		if ok && current.Status == "PUBLISHED" {
+			return toExerciseResponse(current), nil
+		}
+		if err := s.repo.UpdateSessionCurrentContent(ctx, session.ID, nil); err != nil {
+			return nil, err
+		}
+		session.CurrentContentID = nil
+	}
+
+	teacherID, ok, err := s.repo.GetTeacherIDForStudent(ctx, userID)
+	if err != nil {
+		return nil, err
+	}
+	if !ok {
+		return nil, ErrForbidden
+	}
+	profile, _, err := s.repo.GetProfile(ctx, userID)
+	if err != nil {
+		return nil, err
+	}
+	targetConcept, targetDifficulty := chooseTarget(query, profile.MasteryVector)
+	recentIDs, err := s.repo.ListRecentContentIDs(ctx, userID, 20)
+	if err != nil {
+		return nil, err
+	}
+
+	candidates, err := s.repo.ListCandidateExercises(ctx, CandidateFilter{
+		TeacherID:      teacherID,
+		DifficultyMin:  math.Max(0, targetDifficulty-0.15),
+		DifficultyMax:  math.Min(1, targetDifficulty+0.15),
+		ExcludeContent: recentIDs,
+		Limit:          20,
+	})
+	if err != nil {
+		return nil, err
+	}
+	candidates = preferConcept(candidates, targetConcept)
+	if len(candidates) == 0 {
+		candidates, err = s.repo.ListCandidateExercises(ctx, CandidateFilter{
+			TeacherID:      teacherID,
+			DifficultyMin:  0,
+			DifficultyMax:  1,
+			ExcludeContent: recentIDs,
+			Limit:          10,
+		})
+		if err != nil {
+			return nil, err
+		}
+		candidates = preferConcept(candidates, targetConcept)
+	}
+	if len(candidates) == 0 {
+		return nil, nil
+	}
+	selected := selectExercise(candidates)
+	currentID := selected.ID
+	if err := s.repo.UpdateSessionCurrentContent(ctx, session.ID, &currentID); err != nil {
+		return nil, err
+	}
+	return toExerciseResponse(selected), nil
+}
+
+// SubmitAnswer records an answer, performs lightweight grading, and updates tracking state.
+func (s *Service) SubmitAnswer(ctx context.Context, userID string, request SubmitRequest) (SubmitResponse, error) {
+	request.AnswerText = strings.TrimSpace(request.AnswerText)
+	request.AnswerImageURL = strings.TrimSpace(request.AnswerImageURL)
+	if request.ExerciseID == "" || (request.AnswerText == "" && request.AnswerImageURL == "") {
+		return SubmitResponse{}, ErrBadRequest
+	}
+	if request.AnswerImageURL != "" && !isSafeAnswerImageURL(request.AnswerImageURL) {
+		return SubmitResponse{}, ErrBadRequest
+	}
+
+	var response SubmitResponse
+	err := s.repo.WithTx(ctx, func(txCtx context.Context, repo Repository) error {
+		exercise, ok, err := repo.GetExercise(txCtx, request.ExerciseID)
+		if err != nil {
+			return err
+		}
+		if !ok || exercise.Status != "PUBLISHED" {
+			return ErrBadRequest
+		}
+		teacherID, ok, err := repo.GetTeacherIDForStudent(txCtx, userID)
+		if err != nil {
+			return err
+		}
+		if !ok {
+			return ErrForbidden
+		}
+		if exercise.OwnerTeacherID != teacherID {
+			return ErrBadRequest
+		}
+
+		correctAnswer := metaString(exercise.Meta, "answer")
+		if correctAnswer == "" {
+			return ErrBadRequest
+		}
+
+		studentAnswer := request.AnswerText
+		imageOnly := false
+		if studentAnswer == "" {
+			imageOnly = true
+			studentAnswer = request.AnswerImageURL
+		}
+		check := AnswerCheckResult{IsCorrect: false, Reason: "图片答案 OCR 判题能力将在 AI 迁移阶段恢复", Confidence: 0}
+		if !imageOnly {
+			check, err = s.checker.CheckAnswer(txCtx, studentAnswer, correctAnswer, metaString(exercise.Meta, "answer_type"))
+			if err != nil {
+				return err
+			}
+		}
+
+		now := s.now()
+		attemptID, err := s.newID()
+		if err != nil {
+			return err
+		}
+		attempt := AttemptRecord{
+			ID:               attemptID,
+			ContentID:        exercise.ID,
+			StudentID:        userID,
+			StudentAnswer:    studentAnswer,
+			StudentSteps:     request.AnswerSteps,
+			IsCorrect:        check.IsCorrect,
+			Score:            boolScore(check.IsCorrect),
+			StartedAt:        now,
+			SubmittedAt:      now,
+			TimeSpentSeconds: request.TimeSpentSeconds,
+		}
+		if err := repo.InsertAttempt(txCtx, attempt); err != nil {
+			return err
+		}
+
+		var diagnosis *DiagnosisDetail
+		var errorType *string
+		if !check.IsCorrect {
+			diagnosis = basicDiagnosis(check.Reason, imageOnly, exercise.ConceptIDs)
+			errorType = diagnosis.ErrorType
+			reportID, err := s.newID()
+			if err != nil {
+				return err
+			}
+			if err := repo.InsertDiagnosis(txCtx, DiagnosisRecord{
+				ID:             reportID,
+				AttemptID:      attempt.ID,
+				ErrorType:      errorType,
+				Severity:       diagnosis.Severity,
+				RelatedConcept: diagnosis.RelatedConcepts,
+				Explanation:    diagnosis.ErrorDescription,
+				Suggestion:     diagnosis.Suggestion,
+				CreatedAt:      now,
+			}); err != nil {
+				return err
+			}
+		}
+
+		session, err := s.getOrCreateSessionWithRepo(txCtx, repo, userID)
+		if err != nil {
+			return err
+		}
+		attempted := appendUnique(session.ContentsAttempted, exercise.ID)
+		if err := repo.UpdateSessionAfterSubmit(txCtx, session.ID, attempted); err != nil {
+			return err
+		}
+
+		masteryUpdate, err := s.updateTracking(txCtx, repo, userID, exercise, check.IsCorrect, errorType, now)
+		if err != nil {
+			return err
+		}
+
+		feedback := buildFeedback(check, diagnosis)
+		correctAnswerLatex := ""
+		if check.IsCorrect {
+			correctAnswerLatex = correctAnswer
+		}
+		response = SubmitResponse{
+			IsCorrect:          check.IsCorrect,
+			Score:              attempt.Score,
+			StudentAnswerLatex: studentAnswer,
+			CorrectAnswerLatex: correctAnswerLatex,
+			Diagnosis:          diagnosis,
+			Feedback:           feedback,
+			MasteryUpdate:      masteryUpdate,
+			MasteryModel:       "bkt",
+			NextRecommendation: nextRecommendation(check.IsCorrect, masteryUpdate),
+		}
+		return nil
+	})
+	if err != nil {
+		return SubmitResponse{}, err
+	}
+	return response, nil
+}
+
+// GetExercise returns exercise details when the student can access the teacher's content.
+func (s *Service) GetExercise(ctx context.Context, userID string, exerciseID string) (ExerciseDetailResponse, error) {
+	exercise, err := s.authorizedExercise(ctx, userID, exerciseID)
+	if err != nil {
+		return ExerciseDetailResponse{}, err
+	}
+	return ExerciseDetailResponse{
+		ID:              exercise.ID,
+		Title:           exercise.Title,
+		Content:         exercise.Body,
+		Difficulty:      exercise.Difficulty,
+		Type:            metaStringDefault(exercise.Meta, "type", "short_answer"),
+		KnowledgePoints: copyStrings(exercise.ConceptIDs),
+		Hints:           metaStringSlice(exercise.Meta, "hints"),
+		Options:         metaOptionalStringSlice(exercise.Meta, "options"),
+	}, nil
+}
+
+// GetSolution returns cached solution data after the student has attempted the exercise.
+func (s *Service) GetSolution(ctx context.Context, userID string, exerciseID string) (SolutionResponse, error) {
+	exercise, err := s.authorizedExercise(ctx, userID, exerciseID)
+	if err != nil {
+		return SolutionResponse{}, err
+	}
+	hasAttempt, err := s.repo.HasSubmittedAttempt(ctx, userID, exerciseID)
+	if err != nil {
+		return SolutionResponse{}, err
+	}
+	if !hasAttempt {
+		return SolutionResponse{}, ErrNotFound
+	}
+	steps := metaStringSlice(exercise.Meta, "solution_steps")
+	source := "unavailable"
+	if len(steps) > 0 {
+		source = "cached"
+	}
+	return SolutionResponse{
+		ExerciseID: exerciseID,
+		Answer:     metaString(exercise.Meta, "answer"),
+		Steps:      steps,
+		Source:     source,
+	}, nil
+}
+
+func (s *Service) authorizedExercise(ctx context.Context, userID string, exerciseID string) (Exercise, error) {
+	teacherID, ok, err := s.repo.GetTeacherIDForStudent(ctx, userID)
+	if err != nil {
+		return Exercise{}, err
+	}
+	if !ok {
+		return Exercise{}, ErrForbidden
+	}
+	exercise, ok, err := s.repo.GetExercise(ctx, exerciseID)
+	if err != nil {
+		return Exercise{}, err
+	}
+	if !ok || exercise.OwnerTeacherID != teacherID {
+		return Exercise{}, ErrNotFound
+	}
+	return exercise, nil
+}
+
+func (s *Service) getOrCreateSession(ctx context.Context, userID string) (LearningSession, error) {
+	return s.getOrCreateSessionWithRepo(ctx, s.repo, userID)
+}
+
+func (s *Service) getOrCreateSessionWithRepo(ctx context.Context, repo Repository, userID string) (LearningSession, error) {
+	session, ok, err := repo.GetLatestSession(ctx, userID)
+	if err != nil {
+		return LearningSession{}, err
+	}
+	if ok {
+		return session, nil
+	}
+	return repo.CreateSession(ctx, userID, s.now())
+}
+
+func (s *Service) updateTracking(ctx context.Context, repo Repository, userID string, exercise Exercise, isCorrect bool, errorType *string, now time.Time) (map[string]float64, error) {
+	profile, ok, err := repo.GetProfile(ctx, userID)
+	if err != nil {
+		return nil, err
+	}
+	if !ok {
+		return nil, nil
+	}
+	concepts := uniqueNonEmpty(exercise.ConceptIDs)
+	if len(concepts) == 0 {
+		return map[string]float64{}, repo.UpdateProfileTracking(ctx, userID, ProfileTrackingUpdate{
+			MasteryVector:  normalizeFloatMap(profile.MasteryVector),
+			ErrorTendency:  normalizeFloatMap(profile.ErrorTendency),
+			TotalExercises: profile.TotalExercises + 1,
+			CorrectCount:   profile.CorrectCount + boolInt(isCorrect),
+			UpdatedAt:      now,
+		})
+	}
+
+	states, err := repo.ListBKTStates(ctx, userID, concepts)
+	if err != nil {
+		return nil, err
+	}
+	params, err := repo.ListBKTParams(ctx, concepts)
+	if err != nil {
+		return nil, err
+	}
+
+	mastery := normalizeFloatMap(profile.MasteryVector)
+	tendency := normalizeFloatMap(profile.ErrorTendency)
+	if errorType != nil && !isCorrect {
+		tendency[*errorType] += 1
+	}
+	masteryUpdate := map[string]float64{}
+	upserts := make([]BKTState, 0, len(concepts))
+	for _, conceptID := range concepts {
+		state, hasState := states[conceptID]
+		baseParams := params[conceptID]
+		if baseParams == (BKTParams{}) {
+			baseParams = defaultBKTParams()
+		}
+		personalized := personalizeBKT(baseParams, profile.PreferredDifficulty, profile.LearningPace, exercise.Difficulty, optionalStringValue(errorType))
+		prior := mastery[conceptID]
+		if prior == 0 {
+			prior = personalized.PL0
+		}
+		if hasState {
+			prior = state.MasteryProb
+			if state.LastAttemptAt != nil {
+				daysSince := now.Sub(*state.LastAttemptAt).Hours() / 24.0
+				prior = applyForgetting(prior, daysSince, state.PL0)
+			}
+		} else {
+			id, err := s.newID()
+			if err != nil {
+				return nil, err
+			}
+			state = BKTState{
+				ID:        id,
+				StudentID: userID,
+				ConceptID: conceptID,
+				CreatedAt: now,
+			}
+		}
+		result := bktUpdate(prior, isCorrect, personalized, state.AttemptCount)
+		nextMastery := round4(result.mastery)
+		nextConfidence := round4(result.confidence)
+		mastery[conceptID] = nextMastery
+		masteryUpdate[conceptID] = nextMastery
+		outcome := isCorrect
+		state.StudentID = userID
+		state.ConceptID = conceptID
+		state.MasteryProb = nextMastery
+		state.Confidence = nextConfidence
+		state.AttemptCount++
+		state.CorrectCount += boolInt(isCorrect)
+		state.IncorrectCount += boolInt(!isCorrect)
+		state.PL0 = round4(personalized.PL0)
+		state.PT = round4(personalized.PT)
+		state.PG = round4(personalized.PG)
+		state.PS = round4(personalized.PS)
+		state.LastOutcome = &outcome
+		state.LastAttemptAt = &now
+		state.UpdatedAt = now
+		upserts = append(upserts, state)
+	}
+	if err := repo.UpsertBKTStates(ctx, upserts); err != nil {
+		return nil, err
+	}
+	if err := repo.UpdateProfileTracking(ctx, userID, ProfileTrackingUpdate{
+		MasteryVector:  mastery,
+		ErrorTendency:  tendency,
+		TotalExercises: profile.TotalExercises + 1,
+		CorrectCount:   profile.CorrectCount + boolInt(isCorrect),
+		UpdatedAt:      now,
+	}); err != nil {
+		return nil, err
+	}
+	return masteryUpdate, nil
+}
+
+// NormalizedAnswerChecker is a deterministic local checker used before P6 AI parity.
+type NormalizedAnswerChecker struct{}
+
+// CheckAnswer compares normalized strings.
+func (NormalizedAnswerChecker) CheckAnswer(_ context.Context, studentAnswer string, correctAnswer string, _ string) (AnswerCheckResult, error) {
+	if normalizeAnswer(studentAnswer) == normalizeAnswer(correctAnswer) {
+		return AnswerCheckResult{IsCorrect: true, Reason: "答案与标准答案一致", Confidence: 1}, nil
+	}
+	return AnswerCheckResult{IsCorrect: false, Reason: "答案与标准答案不一致", Confidence: 0.3}, nil
+}
+
+func chooseTarget(query NextQuery, mastery map[string]float64) (string, float64) {
+	targetConcept := strings.TrimSpace(query.ConceptID)
+	targetDifficulty := 0.5
+	if query.Difficulty != nil {
+		targetDifficulty = *query.Difficulty
+	}
+	if targetConcept != "" || query.Difficulty != nil || len(mastery) == 0 {
+		return targetConcept, clamp(targetDifficulty, 0, 1)
+	}
+	keys := sortedKeys(mastery)
+	midConcept := ""
+	midMastery := 0.0
+	weakestConcept := ""
+	weakestMastery := 1.0
+	for _, concept := range keys {
+		value := mastery[concept]
+		if value < 0.4 && value < weakestMastery {
+			weakestConcept = concept
+			weakestMastery = value
+		} else if value >= 0.4 && value < 0.8 && midConcept == "" {
+			midConcept = concept
+			midMastery = value
+		}
+	}
+	if weakestConcept != "" {
+		return weakestConcept, math.Max(0.2, weakestMastery)
+	}
+	if midConcept != "" {
+		return midConcept, clamp(midMastery+0.1, 0, 1)
+	}
+	return "", targetDifficulty
+}
+
+func preferConcept(candidates []Exercise, conceptID string) []Exercise {
+	if conceptID == "" || len(candidates) == 0 {
+		return candidates
+	}
+	matched := []Exercise{}
+	for _, candidate := range candidates {
+		if containsString(candidate.ConceptIDs, conceptID) {
+			matched = append(matched, candidate)
+		}
+	}
+	if len(matched) > 0 {
+		return matched
+	}
+	return candidates
+}
+
+func selectExercise(candidates []Exercise) Exercise {
+	sort.Slice(candidates, func(i, j int) bool {
+		return candidates[i].ID < candidates[j].ID
+	})
+	return candidates[0]
+}
+
+func toExerciseResponse(exercise Exercise) *ExerciseResponse {
+	return &ExerciseResponse{
+		ID:                   exercise.ID,
+		Title:                exercise.Title,
+		Content:              exercise.Body,
+		Difficulty:           exercise.Difficulty,
+		Type:                 metaStringDefault(exercise.Meta, "type", "short_answer"),
+		KnowledgePoints:      copyStrings(exercise.ConceptIDs),
+		HintsAvailable:       len(metaStringSlice(exercise.Meta, "hints")) > 0,
+		EstimatedTimeSeconds: metaIntDefault(exercise.Meta, "estimated_time_seconds", 300),
+		Options:              metaOptionalStringSlice(exercise.Meta, "options"),
+	}
+}
+
+func basicDiagnosis(reason string, imageOnly bool, concepts []string) *DiagnosisDetail {
+	explanation := "答案不正确"
+	suggestion := "请重新检查解题过程"
+	if reason != "" {
+		explanation = reason
+	}
+	if imageOnly {
+		suggestion = "图片答案已记录，OCR 诊断能力将在 AI 迁移阶段恢复；请优先提交文本答案以获得自动判题。"
+	}
+	return &DiagnosisDetail{
+		ErrorType:        nil,
+		ErrorDescription: explanation,
+		ErrorStepIndex:   nil,
+		Severity:         "medium",
+		Suggestion:       suggestion,
+		RelatedConcepts:  copyStrings(concepts),
+	}
+}
+
+func buildFeedback(check AnswerCheckResult, diagnosis *DiagnosisDetail) string {
+	if check.IsCorrect {
+		if check.Reason == "" {
+			return "回答正确！"
+		}
+		return "回答正确！" + check.Reason
+	}
+	if diagnosis != nil && diagnosis.Suggestion != "" {
+		return diagnosis.Suggestion
+	}
+	if check.Reason != "" {
+		return "答案不正确。" + check.Reason
+	}
+	return "答案不正确。"
+}
+
+func nextRecommendation(isCorrect bool, masteryUpdate map[string]float64) string {
+	if isCorrect || len(masteryUpdate) == 0 {
+		return "continue"
+	}
+	sum := 0.0
+	for _, value := range masteryUpdate {
+		sum += value
+	}
+	if sum/float64(len(masteryUpdate)) < 0.3 {
+		return "review"
+	}
+	return "continue"
+}
+
+func isSafeAnswerImageURL(imageURL string) bool {
+	return strings.HasPrefix(imageURL, "/uploads/")
+}
+
+func normalizeAnswer(value string) string {
+	replacer := strings.NewReplacer(" ", "", "\t", "", "\n", "", "\r", "")
+	return strings.ToLower(replacer.Replace(strings.TrimSpace(value)))
+}
+
+func metaString(meta map[string]any, key string) string {
+	if meta == nil {
+		return ""
+	}
+	if value, ok := meta[key].(string); ok {
+		return value
+	}
+	return ""
+}
+
+func metaStringDefault(meta map[string]any, key string, fallback string) string {
+	value := metaString(meta, key)
+	if value == "" {
+		return fallback
+	}
+	return value
+}
+
+func metaStringSlice(meta map[string]any, key string) []string {
+	values, ok := readStringSlice(meta, key)
+	if !ok {
+		return []string{}
+	}
+	return values
+}
+
+func metaOptionalStringSlice(meta map[string]any, key string) []string {
+	values, ok := readStringSlice(meta, key)
+	if !ok {
+		return nil
+	}
+	return values
+}
+
+func readStringSlice(meta map[string]any, key string) ([]string, bool) {
+	if meta == nil {
+		return nil, false
+	}
+	value, exists := meta[key]
+	if !exists || value == nil {
+		return nil, false
+	}
+	switch typed := value.(type) {
+	case []string:
+		return copyStrings(typed), true
+	case []any:
+		result := make([]string, 0, len(typed))
+		for _, item := range typed {
+			if text, ok := item.(string); ok {
+				result = append(result, text)
+			}
+		}
+		return result, true
+	default:
+		return nil, false
+	}
+}
+
+func metaIntDefault(meta map[string]any, key string, fallback int) int {
+	if meta == nil {
+		return fallback
+	}
+	switch value := meta[key].(type) {
+	case int:
+		return value
+	case float64:
+		return int(value)
+	default:
+		return fallback
+	}
+}
+
+func appendUnique(values []string, value string) []string {
+	result := copyStrings(values)
+	if !containsString(result, value) {
+		result = append(result, value)
+	}
+	return result
+}
+
+func containsString(values []string, value string) bool {
+	for _, item := range values {
+		if item == value {
+			return true
+		}
+	}
+	return false
+}
+
+func copyStrings(values []string) []string {
+	if values == nil {
+		return []string{}
+	}
+	result := make([]string, len(values))
+	copy(result, values)
+	return result
+}
+
+func uniqueNonEmpty(values []string) []string {
+	seen := map[string]struct{}{}
+	result := []string{}
+	for _, value := range values {
+		value = strings.TrimSpace(value)
+		if value == "" {
+			continue
+		}
+		if _, ok := seen[value]; ok {
+			continue
+		}
+		seen[value] = struct{}{}
+		result = append(result, value)
+	}
+	sort.Strings(result)
+	return result
+}
+
+func sortedKeys(values map[string]float64) []string {
+	keys := make([]string, 0, len(values))
+	for key := range values {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	return keys
+}
+
+func normalizeFloatMap(values map[string]float64) map[string]float64 {
+	if values == nil {
+		return map[string]float64{}
+	}
+	result := make(map[string]float64, len(values))
+	for key, value := range values {
+		result[key] = value
+	}
+	return result
+}
+
+func optionalStringValue(value *string) string {
+	if value == nil {
+		return ""
+	}
+	return *value
+}
+
+func boolScore(value bool) float64 {
+	if value {
+		return 1
+	}
+	return 0
+}
+
+func boolInt(value bool) int {
+	if value {
+		return 1
+	}
+	return 0
+}
+
+func clamp(value float64, floor float64, ceiling float64) float64 {
+	if value < floor {
+		return floor
+	}
+	if value > ceiling {
+		return ceiling
+	}
+	return value
+}
+
+func round4(value float64) float64 {
+	return math.Round(value*10000) / 10000
+}
