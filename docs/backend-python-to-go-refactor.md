@@ -1,7 +1,7 @@
 # 后端 Python 到 Go 重构迁移文档
 
-**文档状态**：P4 核心学习域进行中，P5 内容与教学管理域进行中（资源中心已迁移）
-**最后更新**：2026-04-26
+**文档状态**：P4 核心学习域进行中，P5 内容与教学管理域进行中（资源中心、班级管理已迁移）
+**最后更新**：2026-04-27
 **适用范围**：`backend/` Python FastAPI 后端整体迁移到 Go 后端
 **重构原则**：接口兼容、数据连续、分阶段验收、每阶段完成必须更新本文档
 
@@ -409,7 +409,7 @@ backend-go/
 | P2 | `/portrait` | DONE | Go P4 已承接读取、清除和模板画像生成；LLM 画像质量等价留到 P6 AI 能力收敛 |
 | P3 | `/questions` | TODO | 教师题库 |
 | P3 | `/resources` | DONE | Go P5 已承接资源列表、详情、创建、更新、软删除、统计、收藏列表和收藏切换；上传/对象存储仍归 P7 `/upload` |
-| P3 | `/classes` | TODO | 班级管理 |
+| P3 | `/classes` | DONE | Go P5 已承接教师创建/列表/详情/移除学生/解散班级，以及学生查询、加入、退出、当前班级 |
 | P3 | `/teacher` | TODO | 教师统计 |
 | P3 | `/admin/knowledge` | TODO | 知识图谱维护 |
 | P4 | `/admin/ai-config` | TODO | AI 配置 |
@@ -575,10 +575,10 @@ pytest
 - 开始日期：2026-04-26
 - 完成日期：TODO
 - 负责人：Codex
-- 验证命令（阶段进行中）：`gofmt -w ...`、`go test ./... -count=1`、`go vet ./...`
-- 验证结果（阶段进行中）：Go 全量单元/契约测试通过；Go vet 通过；覆盖 `/resources` 鉴权、列表筛选/分页、详情、教师权限校验、创建默认值、统计/收藏字面量路由、404 映射和软删除响应；PostgreSQL adapter 编译通过并实现 `contents`、`content_assets`、`user_favorites` 的资源中心读写语义。
-- 交付物链接：`backend-go/internal/application/resource/`、`backend-go/internal/adapter/http/resource/`、`backend-go/internal/adapter/postgres/resource_repository.go`、`backend-go/cmd/api/main.go`（进行中）
-- 遗留风险：`/questions`、`/classes`、`/teacher`、`/admin/knowledge` 仍未由 Go 承接；`/resources` 仍需在可用 PostgreSQL 测试库中补充 Repository 集成测试，并在 P8 做 Python/Go 双跑契约验证；资源文件上传和对象存储能力不属于本切片，仍留到 P7 `/upload`。
+- 验证命令（阶段进行中）：`gofmt -w ...`、`go test ./... -count=1`、`go vet ./...`、`go test ./internal/adapter/postgres -run TestClassRepositoryIntegration -count=1 -v`
+- 验证结果（阶段进行中）：Go 全量单元/契约测试通过；Go vet 通过；覆盖 `/resources` 鉴权、列表筛选/分页、详情、教师权限校验、创建默认值、统计/收藏字面量路由、404 映射和软删除响应；PostgreSQL adapter 编译通过并实现 `contents`、`content_assets`、`user_favorites` 的资源中心读写语义。覆盖 `/classes` 鉴权、教师创建/列表/详情/移除学生/解散班级、学生 lookup/join/leave/me、班级号规范化、角色限制、404/409/422 映射；PostgreSQL adapter 编译通过并实现 `classes`、`class_enrollments`、`users` 的班级管理读写语义，解散班级时显式先删成员再删班级以保持外键兼容；`TestClassRepositoryIntegration` 已补充真实 PostgreSQL 验证入口，本轮未设置 `MSP_GO_TEST_DATABASE_URL` 时按预期跳过。
+- 交付物链接：`backend-go/internal/application/resource/`、`backend-go/internal/adapter/http/resource/`、`backend-go/internal/adapter/postgres/resource_repository.go`、`backend-go/internal/application/classroom/`、`backend-go/internal/adapter/http/classroom/`、`backend-go/internal/adapter/postgres/class_repository.go`、`backend-go/cmd/api/main.go`（进行中）
+- 遗留风险：`/questions`、`/teacher`、`/admin/knowledge` 仍未由 Go 承接；`/resources` 仍需补充 Repository 集成测试；`/classes` 仓储集成测试入口已补充但本轮未连接真实 PostgreSQL 测试库执行；上述模块仍需在 P8 做 Python/Go 双跑契约验证；资源文件上传和对象存储能力不属于本切片，仍留到 P7 `/upload`。
 
 ### 12.7 P6 AI 与 Agent 能力
 
@@ -661,3 +661,7 @@ pytest
 
 - P5 内容与教学管理域开始：优先迁移不依赖 AI/Agent 的 `/api/v1/resources` 资源中心链路。
 - P5 `/resources` 首轮完成：新增 Go resource application service、PostgreSQL repository 和 HTTP handler，承接列表、统计、收藏列表、详情、创建、更新、软删除和收藏切换；保持视频/文档到 `contents` 类型、附件到 `content_assets`、收藏到 `user_favorites` 的 Python 存储语义；`go test ./... -count=1` 和 `go vet ./...` 通过。
+
+### 2026-04-27
+
+- P5 `/classes` 首轮完成：新增 Go classroom application service、PostgreSQL repository 和 HTTP handler，承接教师创建班级、班级列表、班级详情、移除学生、解散班级，以及学生班级号查询、加入班级、退出班级、当前班级查询；保持 `classes`、`class_enrollments` 存储语义和教师/学生角色限制；`go test ./... -count=1` 和 `go vet ./...` 通过；`TestClassRepositoryIntegration` 已补充真实 PostgreSQL 验证入口，当前未设置 `MSP_GO_TEST_DATABASE_URL` 时按预期跳过。

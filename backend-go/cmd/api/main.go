@@ -10,6 +10,7 @@ import (
 	"syscall"
 
 	authhttp "mathstudy/backend-go/internal/adapter/http/auth"
+	classroomhttp "mathstudy/backend-go/internal/adapter/http/classroom"
 	exercisehttp "mathstudy/backend-go/internal/adapter/http/exercise"
 	mistakehttp "mathstudy/backend-go/internal/adapter/http/mistake"
 	portraithttp "mathstudy/backend-go/internal/adapter/http/portrait"
@@ -18,6 +19,7 @@ import (
 	sessionhttp "mathstudy/backend-go/internal/adapter/http/session"
 	adapterpostgres "mathstudy/backend-go/internal/adapter/postgres"
 	authapp "mathstudy/backend-go/internal/application/auth"
+	classroomapp "mathstudy/backend-go/internal/application/classroom"
 	exerciseapp "mathstudy/backend-go/internal/application/exercise"
 	mistakeapp "mathstudy/backend-go/internal/application/mistake"
 	portraitapp "mathstudy/backend-go/internal/application/portrait"
@@ -178,6 +180,21 @@ func main() {
 		logger.Error("configure resource handler", "error", err)
 		os.Exit(1)
 	}
+	classRepo, err := adapterpostgres.NewClassRepository(dbPool)
+	if err != nil {
+		logger.Error("configure class repository", "error", err)
+		os.Exit(1)
+	}
+	classService, err := classroomapp.NewService(classRepo)
+	if err != nil {
+		logger.Error("configure class service", "error", err)
+		os.Exit(1)
+	}
+	classHandler, err := classroomhttp.NewHandler(logger, classService, authService)
+	if err != nil {
+		logger.Error("configure class handler", "error", err)
+		os.Exit(1)
+	}
 
 	store := metrics.NewStore(cfg.AppVersion, cfg.Environment)
 	checker := health.NewChecker(cfg.AppVersion, dbPool, health.RedisPingerFunc(func(ctx context.Context) error {
@@ -197,6 +214,7 @@ func main() {
 			exerciseHandler.Register(mux, cfg.APIV1Prefix+"/exercise")
 			sessionHandler.Register(mux, cfg.APIV1Prefix+"/session")
 			resourceHandler.Register(mux, cfg.APIV1Prefix+"/resources")
+			classHandler.Register(mux, cfg.APIV1Prefix+"/classes")
 		}),
 	)
 	if err != nil {
