@@ -9,6 +9,7 @@ import (
 	"os/signal"
 	"syscall"
 
+	adminuserhttp "mathstudy/backend-go/internal/adapter/http/adminuser"
 	authhttp "mathstudy/backend-go/internal/adapter/http/auth"
 	bkthttp "mathstudy/backend-go/internal/adapter/http/bkt"
 	classroomhttp "mathstudy/backend-go/internal/adapter/http/classroom"
@@ -22,6 +23,7 @@ import (
 	sessionhttp "mathstudy/backend-go/internal/adapter/http/session"
 	teacherhttp "mathstudy/backend-go/internal/adapter/http/teacher"
 	adapterpostgres "mathstudy/backend-go/internal/adapter/postgres"
+	adminuserapp "mathstudy/backend-go/internal/application/adminuser"
 	authapp "mathstudy/backend-go/internal/application/auth"
 	bktapp "mathstudy/backend-go/internal/application/bkt"
 	classroomapp "mathstudy/backend-go/internal/application/classroom"
@@ -263,6 +265,16 @@ func main() {
 		logger.Error("configure bkt handler", "error", err)
 		os.Exit(1)
 	}
+	adminUserService, err := adminuserapp.NewService(userRepo)
+	if err != nil {
+		logger.Error("configure admin user service", "error", err)
+		os.Exit(1)
+	}
+	adminUserHandler, err := adminuserhttp.NewHandler(logger, adminUserService, authService)
+	if err != nil {
+		logger.Error("configure admin user handler", "error", err)
+		os.Exit(1)
+	}
 
 	store := metrics.NewStore(cfg.AppVersion, cfg.Environment)
 	checker := health.NewChecker(cfg.AppVersion, dbPool, health.RedisPingerFunc(func(ctx context.Context) error {
@@ -285,6 +297,7 @@ func main() {
 			questionHandler.Register(mux, cfg.APIV1Prefix+"/questions")
 			classHandler.Register(mux, cfg.APIV1Prefix+"/classes")
 			teacherHandler.Register(mux, cfg.APIV1Prefix+"/teacher")
+			adminUserHandler.Register(mux, cfg.APIV1Prefix+"/admin/users")
 			knowledgeHandler.Register(mux, cfg.APIV1Prefix+"/admin/knowledge")
 			bktHandler.Register(mux, cfg.APIV1Prefix+"/admin/bkt")
 		}),
