@@ -413,7 +413,7 @@ backend-go/
 | P3 | `/teacher` | DONE | Go P5 已承接教师工作台统计、学生管理统计、教师数据分析、班级分析和教师视角学生详情 |
 | P3 | `/admin/knowledge` | DONE | Go P5 已承接知识节点/关系 CRUD、分页筛选、章节、简要节点列表和统计 |
 | P4 | `/admin/ai-config` | TODO | AI 配置；需纳入全新 AI/Agent 架构设计后再实现 |
-| P4 | `/admin/bkt` | TODO | BKT 参数维护 |
+| P4 | `/admin/bkt` | DONE | Go P4 已承接参数列表、单项更新、默认重置和缺失知识点参数种子化 |
 | P5 | `/xidian` | TODO | 外部系统集成 |
 | P5 | `/upload` | TODO | 文件上传和对象存储 |
 | P5 | `/admin/security-logs` | TODO | 审计、安全日志 |
@@ -565,9 +565,9 @@ pytest
 - 完成日期：TODO
 - 负责人：Codex
 - 验证命令（阶段进行中）：`gofmt -w ...`、`go test ./... -count=1`、`go vet ./...`
-- 验证结果（阶段进行中）：Go 全量单元/契约测试通过；Go vet 通过；覆盖 `/progress` 鉴权、overview、mastery、statistics、path、knowledge-graph、class-ranking、chapters 的应用层和 HTTP 层主要路径；覆盖 `/portrait` 鉴权、读取、清除和模板画像生成的应用层与 HTTP 层主要路径；覆盖 `/mistakes` 鉴权、列表筛选/排序/分页、统计、详情、标记掌握、删除和复习推荐的应用层与 HTTP 层主要路径；覆盖 `/exercise` 鉴权、下一题选择、提交答案、BKT/profile 更新、题目详情和解析权限的应用层与 HTTP 层主要路径；覆盖 `/session` 鉴权、创建、历史、列表、结束、模式、删除、批删、任务取消和 SSE 形状兼容降级的应用层与 HTTP 层主要路径
-- 交付物链接：`backend-go/internal/application/progress/`、`backend-go/internal/adapter/http/progress/`、`backend-go/internal/adapter/postgres/progress_repository.go`、`backend-go/internal/application/portrait/`、`backend-go/internal/adapter/http/portrait/`、`backend-go/internal/adapter/postgres/portrait_repository.go`、`backend-go/internal/application/mistake/`、`backend-go/internal/adapter/http/mistake/`、`backend-go/internal/adapter/postgres/mistake_repository.go`、`backend-go/internal/application/exercise/`、`backend-go/internal/adapter/http/exercise/`、`backend-go/internal/adapter/postgres/exercise_repository.go`、`backend-go/internal/application/session/`、`backend-go/internal/adapter/http/session/`、`backend-go/internal/adapter/postgres/session_repository.go`、`backend-go/cmd/api/main.go`（进行中）
-- 遗留风险：`/session/{id}/chat` 当前保存用户消息并返回 SSE 形状兼容的导师占位回复，尚未恢复 Python 侧 Agent 工作流、资源推荐兜底和画像更新；`/portrait/generate` 当前由 Go 模板报告生成承接，尚未恢复 Python 侧 LLM 画像质量；`/exercise/submit` 当前使用规范化文本比对和基础诊断承接，图片 OCR、数学等价多层判定和 LLM 诊断质量需在 P6 AI 能力中替换或补充双跑验证；`/progress`、`/portrait`、`/mistakes`、`/exercise` 和 `/session` 仍需在可用 PostgreSQL 测试库中补充 Repository 集成测试，并在 P8 做 Python/Go 双跑契约验证
+- 验证结果（阶段进行中）：Go 全量单元/契约测试通过；Go vet 通过；覆盖 `/progress` 鉴权、overview、mastery、statistics、path、knowledge-graph、class-ranking、chapters 的应用层和 HTTP 层主要路径；覆盖 `/portrait` 鉴权、读取、清除和模板画像生成的应用层与 HTTP 层主要路径；覆盖 `/mistakes` 鉴权、列表筛选/排序/分页、统计、详情、标记掌握、删除和复习推荐的应用层与 HTTP 层主要路径；覆盖 `/exercise` 鉴权、下一题选择、提交答案、BKT/profile 更新、题目详情和解析权限的应用层与 HTTP 层主要路径；覆盖 `/session` 鉴权、创建、历史、列表、结束、模式、删除、批删、任务取消和 SSE 形状兼容降级的应用层与 HTTP 层主要路径；覆盖 `/admin/bkt` 管理员鉴权、参数分页、概率校验、单项更新、默认重置和缺失知识点参数种子化的应用层与 HTTP 层主要路径。2026-05-01 本轮 `go test ./... -count=1` 和 `go vet ./...` 通过。
+- 交付物链接：`backend-go/internal/application/progress/`、`backend-go/internal/adapter/http/progress/`、`backend-go/internal/adapter/postgres/progress_repository.go`、`backend-go/internal/application/portrait/`、`backend-go/internal/adapter/http/portrait/`、`backend-go/internal/adapter/postgres/portrait_repository.go`、`backend-go/internal/application/mistake/`、`backend-go/internal/adapter/http/mistake/`、`backend-go/internal/adapter/postgres/mistake_repository.go`、`backend-go/internal/application/exercise/`、`backend-go/internal/adapter/http/exercise/`、`backend-go/internal/adapter/postgres/exercise_repository.go`、`backend-go/internal/application/session/`、`backend-go/internal/adapter/http/session/`、`backend-go/internal/adapter/postgres/session_repository.go`、`backend-go/internal/application/bkt/`、`backend-go/internal/adapter/http/bkt/`、`backend-go/internal/adapter/postgres/bkt_repository.go`、`backend-go/cmd/api/main.go`（进行中）
+- 遗留风险：`/session/{id}/chat` 当前保存用户消息并返回 SSE 形状兼容的导师占位回复，尚未恢复 Python 侧 Agent 工作流、资源推荐兜底和画像更新；`/portrait/generate` 当前由 Go 模板报告生成承接，尚未恢复 Python 侧 LLM 画像质量；`/exercise/submit` 当前使用规范化文本比对和基础诊断承接，图片 OCR、数学等价多层判定和 LLM 诊断质量需在 P6 AI 能力中替换或补充双跑验证；`/progress`、`/portrait`、`/mistakes`、`/exercise`、`/session` 和 `/admin/bkt` 仍需在可用 PostgreSQL 测试库中补充 Repository 集成测试，并在 P8 做 Python/Go 双跑契约验证
 
 ### 12.6 P5 内容与教学管理域
 
@@ -668,3 +668,7 @@ pytest
 - P5 `/classes` 首轮完成：新增 Go classroom application service、PostgreSQL repository 和 HTTP handler，承接教师创建班级、班级列表、班级详情、移除学生、解散班级，以及学生班级号查询、加入班级、退出班级、当前班级查询；保持 `classes`、`class_enrollments` 存储语义和教师/学生角色限制；`go test ./... -count=1` 和 `go vet ./...` 通过；`TestClassRepositoryIntegration` 已补充真实 PostgreSQL 验证入口，当前未设置 `MSP_GO_TEST_DATABASE_URL` 时按预期跳过。
 - P5 `/questions` 首轮完成：新增 Go question application service、PostgreSQL repository 和 HTTP handler，承接题目 CRUD、列表、分组、统计、批量发布、批量删除、批量复制和批量导入；保持 `contents` 中 `PROBLEM` 类型、题型/答案信息写入 `meta`、使用统计来自 `content_attempts`、标题自动匹配 `knowledge_nodes` 的 Python 存储语义；`/questions/ai-parse` 先提供非 LLM 形状兼容占位，LLM 解析质量留到 P6；`go test ./... -count=1` 和 `go vet ./...` 通过。
 - P5 `/teacher` 与 `/admin/knowledge` 首轮完成：新增 Go teacher/knowledge application service、PostgreSQL repository 和 HTTP handler，承接教师统计分析与知识图谱管理全路径；`go test ./internal/application/teacher ./internal/application/knowledge ./internal/adapter/http/teacher ./internal/adapter/http/knowledge ./internal/adapter/postgres` 和 `go vet ./...` 通过；本轮 `go test ./...` 除既有 `internal/platform/redis` miniredis socket 初始化失败外，其余包通过。
+
+### 2026-05-01
+
+- P4 `/admin/bkt` 首轮完成：新增 Go BKT 参数 application service、PostgreSQL repository 和 HTTP handler，承接参数分页列表、单项概率更新、默认重置和缺失知识点参数种子化；保持 Python 的默认参数 `p_l0=0.25`、`p_t=0.12`、`p_g=0.20`、`p_s=0.10` 及概率校验边界；`go test ./... -count=1` 和 `go vet ./...` 通过。

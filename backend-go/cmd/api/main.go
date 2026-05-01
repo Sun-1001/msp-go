@@ -10,6 +10,7 @@ import (
 	"syscall"
 
 	authhttp "mathstudy/backend-go/internal/adapter/http/auth"
+	bkthttp "mathstudy/backend-go/internal/adapter/http/bkt"
 	classroomhttp "mathstudy/backend-go/internal/adapter/http/classroom"
 	exercisehttp "mathstudy/backend-go/internal/adapter/http/exercise"
 	knowledgehttp "mathstudy/backend-go/internal/adapter/http/knowledge"
@@ -22,6 +23,7 @@ import (
 	teacherhttp "mathstudy/backend-go/internal/adapter/http/teacher"
 	adapterpostgres "mathstudy/backend-go/internal/adapter/postgres"
 	authapp "mathstudy/backend-go/internal/application/auth"
+	bktapp "mathstudy/backend-go/internal/application/bkt"
 	classroomapp "mathstudy/backend-go/internal/application/classroom"
 	exerciseapp "mathstudy/backend-go/internal/application/exercise"
 	knowledgeapp "mathstudy/backend-go/internal/application/knowledge"
@@ -246,6 +248,21 @@ func main() {
 		logger.Error("configure knowledge handler", "error", err)
 		os.Exit(1)
 	}
+	bktRepo, err := adapterpostgres.NewBKTRepository(dbPool)
+	if err != nil {
+		logger.Error("configure bkt repository", "error", err)
+		os.Exit(1)
+	}
+	bktService, err := bktapp.NewService(bktRepo)
+	if err != nil {
+		logger.Error("configure bkt service", "error", err)
+		os.Exit(1)
+	}
+	bktHandler, err := bkthttp.NewHandler(logger, bktService, authService)
+	if err != nil {
+		logger.Error("configure bkt handler", "error", err)
+		os.Exit(1)
+	}
 
 	store := metrics.NewStore(cfg.AppVersion, cfg.Environment)
 	checker := health.NewChecker(cfg.AppVersion, dbPool, health.RedisPingerFunc(func(ctx context.Context) error {
@@ -269,6 +286,7 @@ func main() {
 			classHandler.Register(mux, cfg.APIV1Prefix+"/classes")
 			teacherHandler.Register(mux, cfg.APIV1Prefix+"/teacher")
 			knowledgeHandler.Register(mux, cfg.APIV1Prefix+"/admin/knowledge")
+			bktHandler.Register(mux, cfg.APIV1Prefix+"/admin/bkt")
 		}),
 	)
 	if err != nil {
