@@ -9,6 +9,7 @@ import (
 	"os/signal"
 	"syscall"
 
+	admininboxhttp "mathstudy/backend-go/internal/adapter/http/admininbox"
 	adminuserhttp "mathstudy/backend-go/internal/adapter/http/adminuser"
 	authhttp "mathstudy/backend-go/internal/adapter/http/auth"
 	bkthttp "mathstudy/backend-go/internal/adapter/http/bkt"
@@ -23,6 +24,7 @@ import (
 	sessionhttp "mathstudy/backend-go/internal/adapter/http/session"
 	teacherhttp "mathstudy/backend-go/internal/adapter/http/teacher"
 	adapterpostgres "mathstudy/backend-go/internal/adapter/postgres"
+	admininboxapp "mathstudy/backend-go/internal/application/admininbox"
 	adminuserapp "mathstudy/backend-go/internal/application/adminuser"
 	authapp "mathstudy/backend-go/internal/application/auth"
 	bktapp "mathstudy/backend-go/internal/application/bkt"
@@ -275,6 +277,16 @@ func main() {
 		logger.Error("configure admin user handler", "error", err)
 		os.Exit(1)
 	}
+	adminInboxService, err := admininboxapp.NewService(userRepo, loginLimiter)
+	if err != nil {
+		logger.Error("configure admin inbox service", "error", err)
+		os.Exit(1)
+	}
+	adminInboxHandler, err := admininboxhttp.NewHandler(logger, adminInboxService, authService)
+	if err != nil {
+		logger.Error("configure admin inbox handler", "error", err)
+		os.Exit(1)
+	}
 
 	store := metrics.NewStore(cfg.AppVersion, cfg.Environment)
 	checker := health.NewChecker(cfg.AppVersion, dbPool, health.RedisPingerFunc(func(ctx context.Context) error {
@@ -298,6 +310,7 @@ func main() {
 			classHandler.Register(mux, cfg.APIV1Prefix+"/classes")
 			teacherHandler.Register(mux, cfg.APIV1Prefix+"/teacher")
 			adminUserHandler.Register(mux, cfg.APIV1Prefix+"/admin/users")
+			adminInboxHandler.Register(mux, cfg.APIV1Prefix+"/admin/inbox")
 			knowledgeHandler.Register(mux, cfg.APIV1Prefix+"/admin/knowledge")
 			bktHandler.Register(mux, cfg.APIV1Prefix+"/admin/bkt")
 		}),

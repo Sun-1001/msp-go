@@ -11,6 +11,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	admininboxapp "mathstudy/backend-go/internal/application/admininbox"
 	authapp "mathstudy/backend-go/internal/application/auth"
 	"mathstudy/backend-go/internal/domain/user"
 )
@@ -105,4 +106,64 @@ func TestUserRepositoryIntegration(t *testing.T) {
 	if !ok || !status.HasPending || status.Status == nil || *status.Status != "pending" {
 		t.Fatalf("LatestPasswordResetRequestStatus() = %#v/%t", status, ok)
 	}
+
+	requests, total, pendingCount, err := repo.ListPasswordResetRequests(ctx, admininboxapp.ListFilter{Status: "pending", Page: 1, PageSize: 100})
+	if err != nil {
+		t.Fatalf("ListPasswordResetRequests() error = %v", err)
+	}
+	if total < 1 || pendingCount < 1 || !containsPasswordResetRequest(requests, requestID) {
+		t.Fatalf("ListPasswordResetRequests() total=%d pending=%d items=%#v", total, pendingCount, requests)
+	}
+	count, err := repo.CountPendingPasswordResetRequests(ctx)
+	if err != nil {
+		t.Fatalf("CountPendingPasswordResetRequests() error = %v", err)
+	}
+	if count < 1 {
+		t.Fatalf("CountPendingPasswordResetRequests() = %d, want at least 1", count)
+	}
+
+	newHash := "$2b$12$06Eun3P3CyQRyGr8cbfLJejoV/j4bF9nB7aLBBPEy1nlYnjxncE.G"
+	reviewedAt := time.Now().UTC()
+	reviewResult, err := repo.ReviewPasswordResetRequest(ctx, admininboxapp.ReviewUpdate{
+		RequestID:    requestID,
+		AdminID:      account.ID,
+		Action:       "approve",
+		PasswordHash: &newHash,
+		ReviewedAt:   reviewedAt,
+	})
+	if err != nil {
+		t.Fatalf("ReviewPasswordResetRequest(approve) error = %v", err)
+	}
+	if !reviewResult.Found || !reviewResult.UserFound || reviewResult.AlreadyProcessed || reviewResult.Username != account.Username {
+		t.Fatalf("ReviewPasswordResetRequest(approve) = %#v", reviewResult)
+	}
+	updated, ok, err := repo.GetByID(ctx, account.ID)
+	if err != nil {
+		t.Fatalf("GetByID(after review) error = %v", err)
+	}
+	if !ok || updated.HashedPassword != newHash {
+		t.Fatalf("updated user = %#v ok=%t", updated, ok)
+	}
+
+	reviewResult, err = repo.ReviewPasswordResetRequest(ctx, admininboxapp.ReviewUpdate{
+		RequestID:  requestID,
+		AdminID:    account.ID,
+		Action:     "reject",
+		ReviewedAt: reviewedAt,
+	})
+	if err != nil {
+		t.Fatalf("ReviewPasswordResetRequest(processed) error = %v", err)
+	}
+	if !reviewResult.Found || !reviewResult.AlreadyProcessed {
+		t.Fatalf("ReviewPasswordResetRequest(processed) = %#v", reviewResult)
+	}
+}
+
+func containsPasswordResetRequest(items []admininboxapp.RequestItem, id string) bool {
+	for _, item := range items {
+		if item.ID == id {
+			return true
+		}
+	}
+	return false
 }

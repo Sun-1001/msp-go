@@ -1,6 +1,6 @@
 # 后端 Python 到 Go 重构迁移文档
 
-**文档状态**：P4 核心学习域进行中，P5 内容与教学管理域已完成，P6 AI 与 Agent 能力待全新架构设计
+**文档状态**：P4 核心学习域进行中，P5 内容与教学管理域已完成，P7 集成与运维域进行中，P6 AI 与 Agent 能力待全新架构设计
 **最后更新**：2026-05-01
 **适用范围**：`backend/` Python FastAPI 后端整体迁移到 Go 后端
 **重构原则**：接口兼容、数据连续、分阶段验收、每阶段完成必须更新本文档
@@ -218,7 +218,7 @@ backend-go/
 | P4 核心学习域 | IN_PROGRESS | 迁移会话、练习、错题、进度、画像 | `/session`、`/exercise`、`/mistakes`、`/progress`、`/portrait` | 12.5 |
 | P5 内容与教学管理域 | DONE | 迁移题库、资源、班级、教师统计、知识点 | `/questions`、`/resources`、`/classes`、`/teacher`、`/admin/knowledge` | 12.6 |
 | P6 AI 与 Agent 能力 | TODO | 设计全新的 AI/Agent 架构后迁移 LLM 配置、Agent 调用、数学求解、诊断 | `/admin/ai-config`、Agent 抽象、数学工具链 | 12.7 |
-| P7 集成与运维域 | TODO | 迁移西电集成、上传、系统设置、安全日志、监控 | `/xidian`、`/upload`、`/admin/settings`、`/admin/security-logs`、`/metrics` | 12.8 |
+| P7 集成与运维域 | IN_PROGRESS | 迁移西电集成、上传、系统设置、安全日志、监控和管理员辅助能力 | `/xidian`、`/upload`、`/admin/settings`、`/admin/security-logs`、`/admin/inbox`、`/admin/stats`、`/metrics` | 12.8 |
 | P8 双跑与契约验证 | TODO | Python/Go 并行验证，确认接口和数据等价 | Contract tests、回归报告、性能报告 | 12.9 |
 | P9 流量切换与 Python 下线 | TODO | 切换生产入口，保留回滚窗口，下线 Python 服务 | 部署配置、回滚手册、归档清单 | 12.10 |
 
@@ -417,7 +417,8 @@ backend-go/
 | P5 | `/xidian` | TODO | 外部系统集成 |
 | P5 | `/upload` | TODO | 文件上传和对象存储 |
 | P5 | `/admin/security-logs` | TODO | 审计、安全日志 |
-| P5 | `/admin/stats`、`/admin/inbox` | TODO | 管理员辅助能力 |
+| P5 | `/admin/inbox` | DONE | Go P7 已承接密码重置申请列表、待处理计数和审批通过/拒绝；审批通过会重置用户密码并清理登录失败计数 |
+| P5 | `/admin/stats` | TODO | 管理员统计辅助能力 |
 
 ---
 
@@ -556,7 +557,7 @@ pytest
 - 验证命令：`gofmt -w ...`、`go test ./... -count=1`、`go vet ./...`、`MSP_GO_TEST_DATABASE_URL=postgres://.../math_platform?sslmode=disable go test ./internal/adapter/postgres -run TestUserRepositoryIntegration -count=1 -v`、`go test ./internal/application/adminuser ./internal/adapter/http/adminuser ./internal/adapter/postgres`
 - 验证结果：Go 全量单元/契约测试通过；Go vet 通过；PostgreSQL 用户仓储集成测试在事务内通过并回滚；覆盖 JWT claims、bcrypt 密码、注册开关、登录失败锁定、refresh cookie 设置/清理、用户角色判断、用户仓储枚举映射和密码重置公开申请/状态查询。2026-05-01 追加覆盖 `/admin/users` 管理员鉴权、账户统计、用户分页筛选、创建/重复校验、更新密码和显示名、状态切换、物理删除关联清理、CSV UTF-8/GBK 导入解析和 CSV 导出。
 - 交付物链接：`backend-go/internal/domain/user/`、`backend-go/internal/application/auth/`、`backend-go/internal/application/adminuser/`、`backend-go/internal/adapter/postgres/user_repository.go`、`backend-go/internal/adapter/postgres/admin_user_repository.go`、`backend-go/internal/adapter/http/auth/`、`backend-go/internal/adapter/http/adminuser/`、`backend-go/cmd/api/main.go`、`backend-go/internal/platform/config/`
-- 遗留风险：邮箱绑定/验证码接口仍未由 Go 承接；管理员系统设置、安全日志、统计、信箱仍留在后续非 AI 管理员域切片；P8 仍需执行 Python/Go 双跑契约验证
+- 遗留风险：邮箱绑定/验证码接口仍未由 Go 承接；管理员系统设置、安全日志、统计仍留在后续非 AI 管理员域切片；P8 仍需执行 Python/Go 双跑契约验证
 
 ### 12.5 P4 核心学习域
 
@@ -594,14 +595,14 @@ pytest
 
 ### 12.8 P7 集成与运维域
 
-- 状态：TODO
-- 开始日期：TODO
+- 状态：IN_PROGRESS
+- 开始日期：2026-05-01
 - 完成日期：TODO
-- 负责人：TODO
-- 验证命令：TODO
-- 验证结果：TODO
-- 交付物链接：TODO
-- 遗留风险：TODO
+- 负责人：Codex
+- 验证命令（阶段进行中）：`gofmt -w ...`、`go test ./internal/application/admininbox ./internal/adapter/http/admininbox ./internal/adapter/postgres -count=1`、`go test ./... -count=1`、`go vet ./...`
+- 验证结果（阶段进行中）：Go 全量单元/契约测试通过；Go vet 通过；覆盖 `/admin/inbox` 管理员鉴权、密码重置申请列表分页/状态筛选、待处理计数、审批通过生成临时密码并更新用户密码哈希、审批拒绝记录原因、已处理/不存在/用户缺失等业务分支；已补充 PostgreSQL 集成测试入口覆盖列表、计数和事务审批路径，未设置 `MSP_GO_TEST_DATABASE_URL` 时按既有模式跳过。
+- 交付物链接：`backend-go/internal/application/admininbox/`、`backend-go/internal/adapter/http/admininbox/`、`backend-go/internal/adapter/postgres/password_reset_admin_repository.go`、`backend-go/cmd/api/main.go`
+- 遗留风险：P7 仍未承接 `/xidian`、`/upload`、`/admin/settings`、`/admin/security-logs`、`/admin/stats` 以及更完整的日志脱敏/生产运维检查；`/admin/inbox` 仍需在可用 PostgreSQL 测试库中执行真实集成测试，并在 P8 做 Python/Go 双跑契约验证。
 
 ### 12.9 P8 双跑与契约验证
 
@@ -673,3 +674,4 @@ pytest
 
 - P4 `/admin/bkt` 首轮完成：新增 Go BKT 参数 application service、PostgreSQL repository 和 HTTP handler，承接参数分页列表、单项概率更新、默认重置和缺失知识点参数种子化；保持 Python 的默认参数 `p_l0=0.25`、`p_t=0.12`、`p_g=0.20`、`p_s=0.10` 及概率校验边界；`go test ./... -count=1` 和 `go vet ./...` 通过。
 - P3 `/admin/users` 追加完成：新增 Go admin user application service、PostgreSQL repository 方法和 HTTP handler，承接账户统计、用户分页筛选、创建、更新、状态切换、物理删除、CSV 导入导出；删除用户时显式清理学习会话、画像、班级、内容、导入任务和西电账号/快照等非级联依赖；本轮定向 `go test ./internal/application/adminuser ./internal/adapter/http/adminuser ./internal/adapter/postgres` 通过。
+- P7 `/admin/inbox` 首轮完成：新增 Go admin inbox application service、PostgreSQL repository 方法和 HTTP handler，承接密码重置申请列表、待处理计数、审批通过/拒绝；审批通过在事务内更新用户密码哈希并清理登录失败计数；补充可选 PostgreSQL 集成测试入口；本轮 `go test ./... -count=1` 和 `go vet ./...` 通过。
