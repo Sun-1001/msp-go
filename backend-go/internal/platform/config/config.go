@@ -75,6 +75,11 @@ type Config struct {
 
 	LoginMaxAttempts int
 	LoginLockout     time.Duration
+
+	LogArchiveAfterDays int
+	LogDeleteAfterDays  int
+	LogCleanupBatchSize int
+	LogMaxCount         int
 }
 
 // Load reads the single repository .env file without overwriting process env.
@@ -132,6 +137,10 @@ func Load() (Config, error) {
 		AdminPassword:             envString("ADMIN_PASSWORD", "admin123"),
 		LoginMaxAttempts:          envInt("LOGIN_MAX_ATTEMPTS", 5),
 		LoginLockout:              time.Duration(envInt("LOGIN_LOCKOUT_MINUTES", 15)) * time.Minute,
+		LogArchiveAfterDays:       envInt("LOG_ARCHIVE_AFTER_DAYS", 30),
+		LogDeleteAfterDays:        envInt("LOG_DELETE_AFTER_DAYS", 90),
+		LogCleanupBatchSize:       envInt("LOG_CLEANUP_BATCH_SIZE", 500),
+		LogMaxCount:               envInt("LOG_MAX_COUNT", 100000),
 	}
 
 	if cfg.Port <= 0 || cfg.Port > 65535 {
@@ -178,6 +187,18 @@ func Load() (Config, error) {
 	}
 	if cfg.LoginLockout <= 0 {
 		return Config{}, errors.New("LOGIN_LOCKOUT_MINUTES must be greater than 0")
+	}
+	if cfg.LogArchiveAfterDays <= 0 {
+		return Config{}, errors.New("LOG_ARCHIVE_AFTER_DAYS must be greater than 0")
+	}
+	if cfg.LogDeleteAfterDays <= 0 {
+		return Config{}, errors.New("LOG_DELETE_AFTER_DAYS must be greater than 0")
+	}
+	if cfg.LogCleanupBatchSize <= 0 {
+		return Config{}, errors.New("LOG_CLEANUP_BATCH_SIZE must be greater than 0")
+	}
+	if cfg.LogMaxCount <= 0 {
+		return Config{}, errors.New("LOG_MAX_COUNT must be greater than 0")
 	}
 	return cfg, nil
 }

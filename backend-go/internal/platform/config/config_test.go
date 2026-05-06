@@ -31,6 +31,10 @@ func TestLoadUsesEnvironmentAndBuildsAddresses(t *testing.T) {
 	t.Setenv("ADMIN_PASSWORD", "Root1!")
 	t.Setenv("LOGIN_MAX_ATTEMPTS", "3")
 	t.Setenv("LOGIN_LOCKOUT_MINUTES", "9")
+	t.Setenv("LOG_ARCHIVE_AFTER_DAYS", "14")
+	t.Setenv("LOG_DELETE_AFTER_DAYS", "60")
+	t.Setenv("LOG_CLEANUP_BATCH_SIZE", "250")
+	t.Setenv("LOG_MAX_COUNT", "5000")
 
 	cfg, err := Load()
 	if err != nil {
@@ -72,6 +76,9 @@ func TestLoadUsesEnvironmentAndBuildsAddresses(t *testing.T) {
 	}
 	if cfg.LoginMaxAttempts != 3 || cfg.LoginLockout != 9*time.Minute {
 		t.Fatalf("login lockout config = %d/%s", cfg.LoginMaxAttempts, cfg.LoginLockout)
+	}
+	if cfg.LogArchiveAfterDays != 14 || cfg.LogDeleteAfterDays != 60 || cfg.LogCleanupBatchSize != 250 || cfg.LogMaxCount != 5000 {
+		t.Fatalf("log cleanup config = %d/%d/%d/%d", cfg.LogArchiveAfterDays, cfg.LogDeleteAfterDays, cfg.LogCleanupBatchSize, cfg.LogMaxCount)
 	}
 }
 

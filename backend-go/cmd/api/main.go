@@ -8,8 +8,14 @@ import (
 	"os"
 	"os/signal"
 	"syscall"
+	"time"
+
+	"github.com/jackc/pgx/v5/pgxpool"
+	goredis "github.com/redis/go-redis/v9"
 
 	admininboxhttp "mathstudy/backend-go/internal/adapter/http/admininbox"
+	adminsettingshttp "mathstudy/backend-go/internal/adapter/http/adminsettings"
+	adminstatshttp "mathstudy/backend-go/internal/adapter/http/adminstats"
 	adminuserhttp "mathstudy/backend-go/internal/adapter/http/adminuser"
 	authhttp "mathstudy/backend-go/internal/adapter/http/auth"
 	bkthttp "mathstudy/backend-go/internal/adapter/http/bkt"
@@ -21,10 +27,13 @@ import (
 	progresshttp "mathstudy/backend-go/internal/adapter/http/progress"
 	questionhttp "mathstudy/backend-go/internal/adapter/http/question"
 	resourcehttp "mathstudy/backend-go/internal/adapter/http/resource"
+	securityloghttp "mathstudy/backend-go/internal/adapter/http/securitylog"
 	sessionhttp "mathstudy/backend-go/internal/adapter/http/session"
 	teacherhttp "mathstudy/backend-go/internal/adapter/http/teacher"
 	adapterpostgres "mathstudy/backend-go/internal/adapter/postgres"
 	admininboxapp "mathstudy/backend-go/internal/application/admininbox"
+	adminsettingsapp "mathstudy/backend-go/internal/application/adminsettings"
+	adminstatsapp "mathstudy/backend-go/internal/application/adminstats"
 	adminuserapp "mathstudy/backend-go/internal/application/adminuser"
 	authapp "mathstudy/backend-go/internal/application/auth"
 	bktapp "mathstudy/backend-go/internal/application/bkt"
@@ -36,6 +45,7 @@ import (
 	progressapp "mathstudy/backend-go/internal/application/progress"
 	questionapp "mathstudy/backend-go/internal/application/question"
 	resourceapp "mathstudy/backend-go/internal/application/resource"
+	securitylogapp "mathstudy/backend-go/internal/application/securitylog"
 	sessionapp "mathstudy/backend-go/internal/application/session"
 	teacherapp "mathstudy/backend-go/internal/application/teacher"
 	"mathstudy/backend-go/internal/platform/config"
@@ -287,6 +297,56 @@ func main() {
 		logger.Error("configure admin inbox handler", "error", err)
 		os.Exit(1)
 	}
+	adminStatsRepo, err := adapterpostgres.NewAdminStatsRepository(dbPool)
+	if err != nil {
+		logger.Error("configure admin stats repository", "error", err)
+		os.Exit(1)
+	}
+	adminStatsService, err := adminstatsapp.NewService(adminStatsRepo, adminStatusProvider(dbPool, redisClient))
+	if err != nil {
+		logger.Error("configure admin stats service", "error", err)
+		os.Exit(1)
+	}
+	adminStatsHandler, err := adminstatshttp.NewHandler(logger, adminStatsService, authService)
+	if err != nil {
+		logger.Error("configure admin stats handler", "error", err)
+		os.Exit(1)
+	}
+	adminSettingsRepo, err := adapterpostgres.NewAdminSettingsRepository(dbPool)
+	if err != nil {
+		logger.Error("configure admin settings repository", "error", err)
+		os.Exit(1)
+	}
+	adminSettingsService, err := adminsettingsapp.NewService(adminSettingsRepo, cfg.AppName, cfg.AppVersion, poolStatsProvider(dbPool, cfg))
+	if err != nil {
+		logger.Error("configure admin settings service", "error", err)
+		os.Exit(1)
+	}
+	adminSettingsHandler, err := adminsettingshttp.NewHandler(logger, adminSettingsService, authService)
+	if err != nil {
+		logger.Error("configure admin settings handler", "error", err)
+		os.Exit(1)
+	}
+	securityLogRepo, err := adapterpostgres.NewSecurityLogRepository(dbPool)
+	if err != nil {
+		logger.Error("configure security log repository", "error", err)
+		os.Exit(1)
+	}
+	securityLogService, err := securitylogapp.NewService(securityLogRepo, securitylogapp.CleanupConfig{
+		ArchiveAfterDays: cfg.LogArchiveAfterDays,
+		DeleteAfterDays:  cfg.LogDeleteAfterDays,
+		BatchSize:        cfg.LogCleanupBatchSize,
+		MaxLogCount:      cfg.LogMaxCount,
+	})
+	if err != nil {
+		logger.Error("configure security log service", "error", err)
+		os.Exit(1)
+	}
+	securityLogHandler, err := securityloghttp.NewHandler(logger, securityLogService, authService)
+	if err != nil {
+		logger.Error("configure security log handler", "error", err)
+		os.Exit(1)
+	}
 
 	store := metrics.NewStore(cfg.AppVersion, cfg.Environment)
 	checker := health.NewChecker(cfg.AppVersion, dbPool, health.RedisPingerFunc(func(ctx context.Context) error {
@@ -311,6 +371,9 @@ func main() {
 			teacherHandler.Register(mux, cfg.APIV1Prefix+"/teacher")
 			adminUserHandler.Register(mux, cfg.APIV1Prefix+"/admin/users")
 			adminInboxHandler.Register(mux, cfg.APIV1Prefix+"/admin/inbox")
+			adminStatsHandler.Register(mux, cfg.APIV1Prefix+"/admin/stats")
+			adminSettingsHandler.Register(mux, cfg.APIV1Prefix+"/admin/settings")
+			securityLogHandler.Register(mux, cfg.APIV1Prefix+"/admin/security-logs")
 			knowledgeHandler.Register(mux, cfg.APIV1Prefix+"/admin/knowledge")
 			bktHandler.Register(mux, cfg.APIV1Prefix+"/admin/bkt")
 		}),
@@ -363,4 +426,48 @@ func newLogger(cfg config.Config) *slog.Logger {
 		level = slog.LevelDebug
 	}
 	return slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: level}))
+}
+
+func adminStatusProvider(dbPool *pgxpool.Pool, redisClient *goredis.Client) adminstatsapp.StatusProviderFunc {
+	return func(ctx context.Context) ([]adminstatsapp.ServiceStatus, error) {
+		return []adminstatsapp.ServiceStatus{
+			pingStatus(ctx, "PostgreSQL", func(ctx context.Context) error { return dbPool.Ping(ctx) }),
+			pingStatus(ctx, "Redis", func(ctx context.Context) error { return redisClient.Ping(ctx).Err() }),
+		}, nil
+	}
+}
+
+func pingStatus(ctx context.Context, name string, ping func(context.Context) error) adminstatsapp.ServiceStatus {
+	start := time.Now()
+	status := "running"
+	checkCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
+	defer cancel()
+	if err := ping(checkCtx); err != nil {
+		status = "stopped"
+	}
+	latency := float64(time.Since(start).Microseconds()) / 1000
+	return adminstatsapp.ServiceStatus{Name: name, Status: status, LatencyMS: &latency}
+}
+
+func poolStatsProvider(dbPool *pgxpool.Pool, cfg config.Config) adminsettingsapp.PoolStatsProviderFunc {
+	return func() adminsettingsapp.ConnectionPoolStatus {
+		stats := dbPool.Stat()
+		maxConns := int(stats.MaxConns())
+		acquired := int(stats.AcquiredConns())
+		idle := int(stats.IdleConns())
+		usage := 0.0
+		if maxConns > 0 {
+			usage = float64(acquired) / float64(maxConns) * 100
+		}
+		return adminsettingsapp.ConnectionPoolStatus{
+			PoolSize:     maxConns,
+			MaxOverflow:  0,
+			CheckedOut:   acquired,
+			CheckedIn:    idle,
+			Overflow:     0,
+			PoolTimeout:  int(cfg.DBConnectTimeout.Seconds()),
+			PoolRecycle:  int(cfg.DBPoolRecycle.Seconds()),
+			UsagePercent: usage,
+		}
+	}
 }
