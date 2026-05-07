@@ -143,7 +143,7 @@ func Load() (Config, error) {
 		IdleTimeout:               envSeconds("HTTP_IDLE_TIMEOUT", 60*time.Second),
 		ShutdownTimeout:           envSeconds("HTTP_SHUTDOWN_TIMEOUT", 10*time.Second),
 		MetricsEnabled:            envBool("METRICS_ENABLED", true),
-		UploadsDir:                envString("UPLOADS_DIR", filepath.Join("..", "backend", "uploads")),
+		UploadsDir:                envString("UPLOADS_DIR", filepath.Join("..", "uploads")),
 		PostgresHost:              envString("POSTGRES_HOST", "localhost"),
 		PostgresPort:              envInt("POSTGRES_PORT", 5432),
 		PostgresUser:              envString("POSTGRES_USER", "postgres"),

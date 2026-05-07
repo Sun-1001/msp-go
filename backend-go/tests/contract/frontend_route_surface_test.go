@@ -75,10 +75,10 @@ func TestFrontendAPICallsAreCoveredByGoOrExplicitlyClassified(t *testing.T) {
 
 func frontendRouteExceptions() map[string]string {
 	return map[string]string{
-		"POST /auth/bind-email":           "frontend profile email binding flow; no legacy Python v1 route or schema support exists",
-		"GET /auth/verify-email":          "dormant frontend verification page; not registered in app routes and no legacy Python v1 route exists",
-		"POST /auth/verify-email-by-code": "frontend registration/profile verification flow; no legacy Python v1 route or schema support exists",
-		"POST /logs":                      "best-effort browser remote logging default; no legacy Python v1 route exists and frontend ignores delivery failure",
+		"POST /auth/bind-email":           "frontend profile email binding flow; no current Go route or schema support exists",
+		"GET /auth/verify-email":          "dormant frontend verification page; not registered in app routes and no current Go route exists",
+		"POST /auth/verify-email-by-code": "frontend registration/profile verification flow; no current Go route or schema support exists",
+		"POST /logs":                      "best-effort browser remote logging default; no current Go route exists and frontend ignores delivery failure",
 		"POST /questions/import":          "deprecated frontend helper; current UI uses /questions/batch/import",
 		"GET /questions/export":           "deprecated frontend helper; current UI exports client-side data",
 		"GET /questions/template":         "deprecated frontend helper; no active UI call path was found",

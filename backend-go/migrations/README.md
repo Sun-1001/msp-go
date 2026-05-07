@@ -4,8 +4,8 @@ P2 freezes the existing Python Alembic history as a generated Go one-step schema
 
 Current rules:
 
-- Keep existing Alembic files in `backend/alembic/versions/` as historical reference for the generated schema.
-- Rebuild `0001_initial_schema.up.sql` from a clean temporary database upgraded to Alembic head when Python history changes before cutover.
+- The Alembic history has been retired from this tree; use git history or archived release artifacts if the original Python migration chain must be inspected.
+- Do not regenerate `0001_initial_schema.up.sql` from Python history after cutover; add reviewed Go forward migrations instead.
 - Add new Go migrations as `NNNN_description.up.sql` files in this directory.
 - Run `go run ./cmd/migrate` from `backend-go/` to apply pending Go migrations.
 - Rollbacks are operational: restore from backup or apply a reviewed compensating forward migration.
