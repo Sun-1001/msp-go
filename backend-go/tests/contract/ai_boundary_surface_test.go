@@ -7,7 +7,7 @@ import (
 	"testing"
 )
 
-func TestAIBoundariesRemainExplicitTODOs(t *testing.T) {
+func TestRemainingAIBoundariesStayExplicit(t *testing.T) {
 	root := repoRoot(t)
 	expectations := []struct {
 		file     string
@@ -26,13 +26,6 @@ func TestAIBoundariesRemainExplicitTODOs(t *testing.T) {
 			required: []string{
 				"ParseQuestions returns a deterministic shape-compatible parse fallback",
 				"LLM extraction remains a P6 TODO",
-			},
-		},
-		{
-			file: "backend-go/internal/application/session/service.go",
-			required: []string{
-				"ProcessChatFallback stores the user message and a compatible placeholder assistant message",
-				"AI 流式辅导能力正在迁移到 Go",
 			},
 		},
 		{
@@ -63,13 +56,55 @@ func TestAIBoundariesRemainExplicitTODOs(t *testing.T) {
 	}
 }
 
+func TestSessionChatWiresEinoAgentRuntime(t *testing.T) {
+	root := repoRoot(t)
+	expectations := []struct {
+		file     string
+		required []string
+	}{
+		{
+			file: "backend-go/internal/adapter/llm/einoagent/agent.go",
+			required: []string{
+				"adk.NewChatModelAgent",
+				"einoopenai.NewChatModel",
+				"tutorInstruction",
+			},
+		},
+		{
+			file: "backend-go/internal/application/session/service.go",
+			required: []string{
+				"type ChatAgent interface",
+				"WithChatAgent",
+				"ProcessChat stores the user message",
+			},
+		},
+		{
+			file: "backend-go/cmd/api/main.go",
+			required: []string{
+				"einoagent.NewTutorAgent",
+				"sessionapp.WithChatAgent",
+			},
+		},
+	}
+
+	for _, expectation := range expectations {
+		t.Run(expectation.file, func(t *testing.T) {
+			source := readFile(t, filepath.Join(root, expectation.file))
+			for _, required := range expectation.required {
+				if !strings.Contains(source, required) {
+					t.Fatalf("%s must wire Eino agent runtime marker %q", expectation.file, required)
+				}
+			}
+		})
+	}
+}
+
 func TestGoBackendDoesNotWireLegacyAIWorkflowStacks(t *testing.T) {
 	root := repoRoot(t)
 	forbidden := []string{
 		"langchain",
 		"langgraph",
 		"litellm",
-		"openai",
 		"paddleocr",
 		"sympy",
 		"tesseract",

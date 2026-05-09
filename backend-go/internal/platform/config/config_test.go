@@ -35,6 +35,14 @@ func TestLoadUsesEnvironmentAndBuildsAddresses(t *testing.T) {
 	t.Setenv("LOG_DELETE_AFTER_DAYS", "60")
 	t.Setenv("LOG_CLEANUP_BATCH_SIZE", "250")
 	t.Setenv("LOG_MAX_COUNT", "5000")
+	t.Setenv("EINO_ENABLED", "true")
+	t.Setenv("EINO_BASE_URL", "https://api.example.com/v1")
+	t.Setenv("EINO_API_KEY", "test-key")
+	t.Setenv("EINO_MODEL", "deepseek-chat")
+	t.Setenv("EINO_TIMEOUT_SECONDS", "12.5")
+	t.Setenv("EINO_TEMPERATURE", "0.2")
+	t.Setenv("EINO_MAX_TOKENS", "900")
+	t.Setenv("EINO_MAX_ITERATIONS", "5")
 
 	cfg, err := Load()
 	if err != nil {
@@ -82,6 +90,12 @@ func TestLoadUsesEnvironmentAndBuildsAddresses(t *testing.T) {
 	}
 	if cfg.StorageBackend != "local" {
 		t.Fatalf("StorageBackend = %q", cfg.StorageBackend)
+	}
+	if !cfg.EinoEnabled || cfg.EinoBaseURL != "https://api.example.com/v1" || cfg.EinoAPIKey != "test-key" || cfg.EinoModel != "deepseek-chat" {
+		t.Fatalf("Eino config = %#v", cfg)
+	}
+	if cfg.EinoTimeout != 12500*time.Millisecond || cfg.EinoTemperature != 0.2 || cfg.EinoMaxTokens != 900 || cfg.EinoMaxIterations != 5 {
+		t.Fatalf("Eino tuning config = %s/%f/%d/%d", cfg.EinoTimeout, cfg.EinoTemperature, cfg.EinoMaxTokens, cfg.EinoMaxIterations)
 	}
 }
 
@@ -187,5 +201,15 @@ func TestLoadRejectsInvalidStorageBackend(t *testing.T) {
 
 	if _, err := Load(); err == nil {
 		t.Fatal("Load() error = nil, want invalid storage backend error")
+	}
+}
+
+func TestLoadRejectsEnabledEinoWithoutRequiredModelConfig(t *testing.T) {
+	t.Setenv("EINO_ENABLED", "true")
+	t.Setenv("EINO_API_KEY", "test-key")
+	t.Setenv("EINO_MODEL", "")
+
+	if _, err := Load(); err == nil {
+		t.Fatal("Load() error = nil, want missing Eino model error")
 	}
 }

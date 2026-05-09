@@ -17,7 +17,7 @@ import (
 // Service is the session application surface used by HTTP handlers.
 type Service interface {
 	CreateSession(context.Context, string, *string, string) (sessionapp.CreateSessionResponse, error)
-	ProcessChatFallback(context.Context, string, string, string, []string) (sessionapp.ChatResult, error)
+	ProcessChat(context.Context, string, string, string, []string) (sessionapp.ChatResult, error)
 	GetHistory(context.Context, string, string, int, int) (sessionapp.HistoryResponse, error)
 	GetSessions(context.Context, string, int, int) (sessionapp.SessionListResponse, error)
 	EndSession(context.Context, string, string) (sessionapp.EndResponse, error)
@@ -126,7 +126,7 @@ func (h *Handler) chat(w http.ResponseWriter, r *http.Request) {
 		writeSessionError(w, http.StatusUnprocessableEntity, "VALIDATION_ERROR", "消息内容不能为空")
 		return
 	}
-	result, err := h.service.ProcessChatFallback(r.Context(), r.PathValue("session_id"), principal.UserID, request.Message, request.Attachments)
+	result, err := h.service.ProcessChat(r.Context(), r.PathValue("session_id"), principal.UserID, request.Message, request.Attachments)
 	if err != nil {
 		if errors.Is(err, sessionapp.ErrNotFound) {
 			writeSessionSSEError(w, "SESSION_NOT_FOUND", "会话不存在或无权访问")

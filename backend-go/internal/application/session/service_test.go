@@ -3,6 +3,7 @@ package session
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 )
@@ -28,19 +29,24 @@ func TestCreateSessionStoresWelcomeMessage(t *testing.T) {
 	}
 }
 
-func TestProcessChatFallbackStoresMessagesAndReturnsSSEData(t *testing.T) {
+func TestProcessChatUsesConfiguredAgentAndReturnsSSEData(t *testing.T) {
 	now := time.Date(2026, time.April, 26, 9, 0, 0, 0, time.UTC)
 	repo := &fakeSessionRepo{
 		session:    LearningSession{ID: "session-1", StudentID: "student-1", IsActive: true},
 		hasSession: true,
+		messages: []Message{
+			{ID: "history-1", Role: "assistant", Content: "上一条建议", CreatedAt: now.Add(-time.Minute)},
+		},
+		messageTotal: 1,
 	}
 	service := newTestService(repo, now, "user-msg", "ai-msg", "task-1")
+	service.agent = fakeChatAgent{output: ChatAgentOutput{Agent: "tutor", Content: "Eino 回复"}}
 
-	result, err := service.ProcessChatFallback(context.Background(), "session-1", "student-1", "你好", []string{"/uploads/a.png"})
+	result, err := service.ProcessChat(context.Background(), "session-1", "student-1", "你好", []string{"/uploads/a.png"})
 	if err != nil {
-		t.Fatalf("ProcessChatFallback() error = %v", err)
+		t.Fatalf("ProcessChat() error = %v", err)
 	}
-	if result.TaskID != "task-1" || result.MessageID != "ai-msg" || result.Agent != "tutor" || result.Content == "" {
+	if result.TaskID != "task-1" || result.MessageID != "ai-msg" || result.Agent != "tutor" || result.Content != "Eino 回复" {
 		t.Fatalf("result = %#v", result)
 	}
 	if len(repo.insertedMessages) != 2 {
@@ -49,21 +55,41 @@ func TestProcessChatFallbackStoresMessagesAndReturnsSSEData(t *testing.T) {
 	if repo.insertedMessages[0].Role != "user" || repo.insertedMessages[0].Attachments[0] != "/uploads/a.png" {
 		t.Fatalf("user message = %#v", repo.insertedMessages[0])
 	}
-	if repo.insertedMessages[1].Role != "assistant" {
+	if repo.insertedMessages[1].Role != "assistant" || repo.insertedMessages[1].Content != "Eino 回复" {
 		t.Fatalf("assistant message = %#v", repo.insertedMessages[1])
 	}
 }
 
-func TestProcessChatFallbackRejectsInactiveSession(t *testing.T) {
+func TestProcessChatFallsBackWhenAgentIsNotConfigured(t *testing.T) {
+	now := time.Date(2026, time.April, 26, 9, 0, 0, 0, time.UTC)
+	repo := &fakeSessionRepo{
+		session:    LearningSession{ID: "session-1", StudentID: "student-1", IsActive: true},
+		hasSession: true,
+	}
+	service := newTestService(repo, now, "user-msg", "ai-msg", "task-1")
+
+	result, err := service.ProcessChat(context.Background(), "session-1", "student-1", "你好", nil)
+	if err != nil {
+		t.Fatalf("ProcessChat() error = %v", err)
+	}
+	if result.Agent != "tutor" || result.Content == "" {
+		t.Fatalf("result = %#v", result)
+	}
+	if !strings.Contains(result.Content, "Eino 智能体尚未启用") {
+		t.Fatalf("fallback content = %q", result.Content)
+	}
+}
+
+func TestProcessChatRejectsInactiveSession(t *testing.T) {
 	repo := &fakeSessionRepo{
 		session:    LearningSession{ID: "session-1", StudentID: "student-1", IsActive: false},
 		hasSession: true,
 	}
 	service := newTestService(repo, time.Date(2026, time.April, 26, 9, 0, 0, 0, time.UTC), "id")
 
-	_, err := service.ProcessChatFallback(context.Background(), "session-1", "student-1", "你好", nil)
+	_, err := service.ProcessChat(context.Background(), "session-1", "student-1", "你好", nil)
 	if !errors.Is(err, ErrNotFound) {
-		t.Fatalf("ProcessChatFallback() error = %v, want ErrNotFound", err)
+		t.Fatalf("ProcessChat() error = %v, want ErrNotFound", err)
 	}
 }
 
@@ -194,6 +220,18 @@ type fakeSessionRepo struct {
 	updateOK          bool
 	deleteOK          bool
 	batchDeleted      int
+}
+
+type fakeChatAgent struct {
+	output ChatAgentOutput
+	err    error
+}
+
+func (a fakeChatAgent) Generate(context.Context, ChatAgentInput) (ChatAgentOutput, error) {
+	if a.err != nil {
+		return ChatAgentOutput{}, a.err
+	}
+	return a.output, nil
 }
 
 func (r *fakeSessionRepo) CreateSession(_ context.Context, session LearningSession, welcome Message) error {

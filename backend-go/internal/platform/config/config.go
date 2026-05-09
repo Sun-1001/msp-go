@@ -119,6 +119,15 @@ type Config struct {
 	XidianCaptchaHeight           int
 	XidianPieceWidth              int
 	XidianPieceHeight             int
+
+	EinoEnabled       bool
+	EinoBaseURL       string
+	EinoAPIKey        string
+	EinoModel         string
+	EinoTimeout       time.Duration
+	EinoTemperature   float64
+	EinoMaxTokens     int
+	EinoMaxIterations int
 }
 
 // Load reads the single repository .env file without overwriting process env.
@@ -212,6 +221,14 @@ func Load() (Config, error) {
 		XidianCaptchaHeight:           envInt("XIDIAN_CAPTCHA_HEIGHT", 155),
 		XidianPieceWidth:              envInt("XIDIAN_PIECE_WIDTH", 44),
 		XidianPieceHeight:             envInt("XIDIAN_PIECE_HEIGHT", 155),
+		EinoEnabled:                   envBool("EINO_ENABLED", false),
+		EinoBaseURL:                   envString("EINO_BASE_URL", ""),
+		EinoAPIKey:                    envString("EINO_API_KEY", ""),
+		EinoModel:                     envString("EINO_MODEL", ""),
+		EinoTimeout:                   envSeconds("EINO_TIMEOUT_SECONDS", 45*time.Second),
+		EinoTemperature:               envFloat("EINO_TEMPERATURE", 0.3),
+		EinoMaxTokens:                 envInt("EINO_MAX_TOKENS", 1200),
+		EinoMaxIterations:             envInt("EINO_MAX_ITERATIONS", 8),
 	}
 
 	if cfg.Port <= 0 || cfg.Port > 65535 {
@@ -278,6 +295,9 @@ func Load() (Config, error) {
 		return Config{}, err
 	}
 	if err := validateXidianConfig(cfg); err != nil {
+		return Config{}, err
+	}
+	if err := validateEinoConfig(cfg); err != nil {
 		return Config{}, err
 	}
 	return cfg, nil
@@ -376,6 +396,18 @@ func envInt(key string, fallback int) int {
 		return fallback
 	}
 	parsed, err := strconv.Atoi(value)
+	if err != nil {
+		return fallback
+	}
+	return parsed
+}
+
+func envFloat(key string, fallback float64) float64 {
+	value := strings.TrimSpace(os.Getenv(key))
+	if value == "" {
+		return fallback
+	}
+	parsed, err := strconv.ParseFloat(value, 64)
 	if err != nil {
 		return fallback
 	}
@@ -596,4 +628,29 @@ func validateXidianConfig(cfg Config) error {
 		"XIDIAN_YJSPT_BASE": cfg.XidianYjsptBase,
 		"XIDIAN_USER_AGENT": cfg.XidianUserAgent,
 	})
+}
+
+func validateEinoConfig(cfg Config) error {
+	if !cfg.EinoEnabled {
+		return nil
+	}
+	if strings.TrimSpace(cfg.EinoAPIKey) == "" {
+		return errors.New("EINO_API_KEY must not be empty when EINO_ENABLED=true")
+	}
+	if strings.TrimSpace(cfg.EinoModel) == "" {
+		return errors.New("EINO_MODEL must not be empty when EINO_ENABLED=true")
+	}
+	if cfg.EinoTimeout <= 0 {
+		return errors.New("EINO_TIMEOUT_SECONDS must be greater than 0 when EINO_ENABLED=true")
+	}
+	if cfg.EinoTemperature < 0 || cfg.EinoTemperature > 2 {
+		return errors.New("EINO_TEMPERATURE must be between 0 and 2 when EINO_ENABLED=true")
+	}
+	if cfg.EinoMaxTokens < 0 {
+		return errors.New("EINO_MAX_TOKENS must be zero or greater when EINO_ENABLED=true")
+	}
+	if cfg.EinoMaxIterations <= 0 {
+		return errors.New("EINO_MAX_ITERATIONS must be greater than 0 when EINO_ENABLED=true")
+	}
+	return nil
 }

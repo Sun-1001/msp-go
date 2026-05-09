@@ -138,6 +138,26 @@ type ChatResult struct {
 	Content   string
 }
 
+// ChatAgent generates assistant responses for a learning session.
+type ChatAgent interface {
+	Generate(context.Context, ChatAgentInput) (ChatAgentOutput, error)
+}
+
+// ChatAgentInput carries session context into the configured agent runtime.
+type ChatAgentInput struct {
+	SessionID   string
+	StudentID   string
+	Message     string
+	Attachments []string
+	History     []Message
+}
+
+// ChatAgentOutput stores the generated assistant message.
+type ChatAgentOutput struct {
+	Agent   string
+	Content string
+}
+
 // CancelTaskResponse is the Python-compatible task cancellation response.
 type CancelTaskResponse struct {
 	Success bool   `json:"success"`
@@ -147,16 +167,31 @@ type CancelTaskResponse struct {
 // Service implements session use cases.
 type Service struct {
 	repo  Repository
+	agent ChatAgent
 	now   func() time.Time
 	newID func() (string, error)
 }
 
+// Option customizes the session service.
+type Option func(*Service)
+
+// WithChatAgent enables AI-backed chat generation for session messages.
+func WithChatAgent(agent ChatAgent) Option {
+	return func(service *Service) {
+		service.agent = agent
+	}
+}
+
 // NewService creates a session service.
-func NewService(repo Repository) (*Service, error) {
+func NewService(repo Repository, options ...Option) (*Service, error) {
 	if repo == nil {
 		return nil, errors.New("session repository is nil")
 	}
-	return &Service{repo: repo, now: time.Now, newID: NewUUID}, nil
+	service := &Service{repo: repo, now: time.Now, newID: NewUUID}
+	for _, option := range options {
+		option(service)
+	}
+	return service, nil
 }
 
 // CreateSession creates a learning session and welcome message.
@@ -210,14 +245,18 @@ func (s *Service) CreateSession(ctx context.Context, userID string, topic *strin
 	}, nil
 }
 
-// ProcessChatFallback stores the user message and a compatible placeholder assistant message.
-func (s *Service) ProcessChatFallback(ctx context.Context, sessionID string, userID string, message string, attachments []string) (ChatResult, error) {
+// ProcessChat stores the user message and generates a compatible assistant SSE payload.
+func (s *Service) ProcessChat(ctx context.Context, sessionID string, userID string, message string, attachments []string) (ChatResult, error) {
 	current, ok, err := s.repo.GetSession(ctx, sessionID, userID)
 	if err != nil {
 		return ChatResult{}, err
 	}
 	if !ok || !current.IsActive {
 		return ChatResult{}, ErrNotFound
+	}
+	history, err := s.recentHistory(ctx, sessionID)
+	if err != nil {
+		return ChatResult{}, err
 	}
 	now := s.now()
 	userMessageID, err := s.newID()
@@ -242,19 +281,67 @@ func (s *Service) ProcessChatFallback(ctx context.Context, sessionID string, use
 	}); err != nil {
 		return ChatResult{}, err
 	}
-	agent := "tutor"
-	content := "AI 流式辅导能力正在迁移到 Go；你的消息已保存，完整 Agent 回复将在 AI 能力迁移阶段恢复。"
+	output, err := s.generateAssistant(ctx, ChatAgentInput{
+		SessionID:   sessionID,
+		StudentID:   userID,
+		Message:     message,
+		Attachments: attachments,
+		History:     history,
+	})
+	if err != nil {
+		return ChatResult{}, err
+	}
+	agent := output.Agent
+	if agent == "" {
+		agent = "tutor"
+	}
 	if err := s.repo.InsertMessage(ctx, Message{
 		ID:        assistantMessageID,
 		SessionID: sessionID,
 		Role:      "assistant",
-		Content:   content,
+		Content:   output.Content,
 		Agent:     &agent,
 		CreatedAt: now,
 	}); err != nil {
 		return ChatResult{}, err
 	}
-	return ChatResult{TaskID: taskID, MessageID: assistantMessageID, Agent: agent, Content: content}, nil
+	return ChatResult{TaskID: taskID, MessageID: assistantMessageID, Agent: agent, Content: output.Content}, nil
+}
+
+func (s *Service) recentHistory(ctx context.Context, sessionID string) ([]Message, error) {
+	const limit = 30
+	messages, total, err := s.repo.ListMessages(ctx, sessionID, limit, 0)
+	if err != nil {
+		return nil, err
+	}
+	if total <= limit {
+		return messages, nil
+	}
+	messages, _, err = s.repo.ListMessages(ctx, sessionID, limit, total-limit)
+	if err != nil {
+		return nil, err
+	}
+	return messages, nil
+}
+
+func (s *Service) generateAssistant(ctx context.Context, input ChatAgentInput) (ChatAgentOutput, error) {
+	if s.agent == nil {
+		return ChatAgentOutput{
+			Agent:   "tutor",
+			Content: "Eino 智能体尚未启用；你的消息已保存。请在后端配置 EINO_ENABLED、EINO_API_KEY 和 EINO_MODEL 后恢复智能导师回复。",
+		}, nil
+	}
+	output, err := s.agent.Generate(ctx, input)
+	if err != nil {
+		return ChatAgentOutput{}, err
+	}
+	if output.Agent == "" {
+		output.Agent = "tutor"
+	}
+	if output.Content == "" {
+		output.Content = "智能导师暂未生成有效回复，请稍后重试。"
+	}
+	return output, nil
 }
 
 // GetHistory returns a page of session messages.

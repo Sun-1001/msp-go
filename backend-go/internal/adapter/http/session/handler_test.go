@@ -251,7 +251,7 @@ func (s *fakeSessionService) CreateSession(_ context.Context, userID string, top
 	return s.createResponse, s.createErr
 }
 
-func (s *fakeSessionService) ProcessChatFallback(_ context.Context, sessionID string, userID string, message string, attachments []string) (sessionapp.ChatResult, error) {
+func (s *fakeSessionService) ProcessChat(_ context.Context, sessionID string, userID string, message string, attachments []string) (sessionapp.ChatResult, error) {
 	s.lastSessionID = sessionID
 	s.lastUserID = userID
 	s.lastChatMessage = message

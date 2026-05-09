@@ -33,6 +33,7 @@ import (
 	teacherhttp "mathstudy/backend-go/internal/adapter/http/teacher"
 	uploadhttp "mathstudy/backend-go/internal/adapter/http/upload"
 	xidianhttp "mathstudy/backend-go/internal/adapter/http/xidian"
+	einoagent "mathstudy/backend-go/internal/adapter/llm/einoagent"
 	adapterpostgres "mathstudy/backend-go/internal/adapter/postgres"
 	storageadapter "mathstudy/backend-go/internal/adapter/storage"
 	admininboxapp "mathstudy/backend-go/internal/application/admininbox"
@@ -202,7 +203,25 @@ func main() {
 		logger.Error("configure session repository", "error", err)
 		os.Exit(1)
 	}
-	sessionService, err := sessionapp.NewService(sessionRepo)
+	var tutorAgent sessionapp.ChatAgent
+	if cfg.EinoEnabled {
+		tutorAgent, err = einoagent.NewTutorAgent(ctx, einoagent.Config{
+			Enabled:       cfg.EinoEnabled,
+			BaseURL:       cfg.EinoBaseURL,
+			APIKey:        cfg.EinoAPIKey,
+			Model:         cfg.EinoModel,
+			Timeout:       cfg.EinoTimeout,
+			Temperature:   cfg.EinoTemperature,
+			MaxTokens:     cfg.EinoMaxTokens,
+			MaxIterations: cfg.EinoMaxIterations,
+		})
+		if err != nil {
+			logger.Error("configure Eino tutor agent", "error", err)
+			os.Exit(1)
+		}
+		logger.Info("Eino tutor agent enabled", "model", cfg.EinoModel)
+	}
+	sessionService, err := sessionapp.NewService(sessionRepo, sessionapp.WithChatAgent(tutorAgent))
 	if err != nil {
 		logger.Error("configure session service", "error", err)
 		os.Exit(1)
