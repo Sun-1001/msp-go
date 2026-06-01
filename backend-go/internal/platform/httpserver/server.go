@@ -2,8 +2,10 @@ package httpserver
 
 import (
 	"log/slog"
+	"net"
 	"net/http"
 	"os"
+	"path"
 	"path/filepath"
 	"strings"
 
@@ -48,12 +50,20 @@ func NewHandler(cfg config.Config, logger *slog.Logger, checker health.Checker, 
 	if err := os.MkdirAll(uploadsDir, 0o755); err != nil {
 		return nil, err
 	}
+	managementAccess, err := newManagementAccess(cfg.ManagementAllowedCIDRs)
+	if err != nil {
+		return nil, err
+	}
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /health", func(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, checker.Simple())
 	})
 	mux.HandleFunc("GET /health/detailed", func(w http.ResponseWriter, r *http.Request) {
+		if !managementAccess.Allow(r) {
+			writeError(w, http.StatusForbidden, "FORBIDDEN", "management endpoint is restricted")
+			return
+		}
 		status := checker.Detailed(r.Context())
 		httpStatus := http.StatusOK
 		if status.Status != "healthy" {
@@ -66,11 +76,15 @@ func NewHandler(cfg config.Config, logger *slog.Logger, checker health.Checker, 
 			writeError(w, http.StatusNotFound, "NOT_FOUND", "metrics disabled")
 			return
 		}
+		if !managementAccess.Allow(r) {
+			writeError(w, http.StatusForbidden, "FORBIDDEN", "management endpoint is restricted")
+			return
+		}
 		w.Header().Set("Content-Type", metrics.ContentType)
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write([]byte(store.Render()))
 	})
-	mux.Handle("/uploads/", http.StripPrefix("/uploads/", http.FileServer(http.Dir(uploadsDir))))
+	mux.Handle("/uploads/", http.StripPrefix("/uploads/", uploadsFileHandler(uploadsDir)))
 	for _, registrar := range options.registrars {
 		registrar(mux)
 	}
@@ -99,4 +113,68 @@ func notFoundHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeError(w, http.StatusNotFound, "NOT_FOUND", "route not found")
+}
+
+func uploadsFileHandler(root string) http.Handler {
+	fs := http.Dir(root)
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet && r.Method != http.MethodHead {
+			writeError(w, http.StatusMethodNotAllowed, "METHOD_NOT_ALLOWED", "method not allowed")
+			return
+		}
+		cleanPath := strings.TrimPrefix(path.Clean("/"+r.URL.Path), "/")
+		if cleanPath == "" || strings.HasSuffix(r.URL.Path, "/") {
+			writeError(w, http.StatusNotFound, "NOT_FOUND", "uploaded file not found")
+			return
+		}
+		file, err := fs.Open(cleanPath)
+		if err != nil {
+			writeError(w, http.StatusNotFound, "NOT_FOUND", "uploaded file not found")
+			return
+		}
+		defer file.Close()
+		stat, err := file.Stat()
+		if err != nil || stat.IsDir() {
+			writeError(w, http.StatusNotFound, "NOT_FOUND", "uploaded file not found")
+			return
+		}
+		http.ServeContent(w, r, stat.Name(), stat.ModTime(), file)
+	})
+}
+
+type managementAccess struct {
+	networks []*net.IPNet
+}
+
+func newManagementAccess(cidrs []string) (managementAccess, error) {
+	access := managementAccess{networks: []*net.IPNet{}}
+	for _, cidr := range cidrs {
+		cidr = strings.TrimSpace(cidr)
+		if cidr == "" {
+			continue
+		}
+		_, network, err := net.ParseCIDR(cidr)
+		if err != nil {
+			return managementAccess{}, err
+		}
+		access.networks = append(access.networks, network)
+	}
+	return access, nil
+}
+
+func (a managementAccess) Allow(r *http.Request) bool {
+	host, _, err := net.SplitHostPort(r.RemoteAddr)
+	if err != nil {
+		host = r.RemoteAddr
+	}
+	ip := net.ParseIP(strings.TrimSpace(host))
+	if ip == nil {
+		return false
+	}
+	for _, network := range a.networks {
+		if network.Contains(ip) {
+			return true
+		}
+	}
+	return false
 }

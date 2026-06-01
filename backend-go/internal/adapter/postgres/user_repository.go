@@ -142,7 +142,7 @@ func (r UserRepository) UpdatePassword(ctx context.Context, userID string, hashe
 
 // RegistrationSettings reads the public registration toggles with Python-compatible defaults.
 func (r UserRepository) RegistrationSettings(ctx context.Context) (authapp.RegistrationSettings, error) {
-	settings := authapp.RegistrationSettings{AllowStudent: true, AllowTeacher: true}
+	settings := authapp.RegistrationSettings{AllowStudent: true, AllowTeacher: false}
 	rows, err := r.DB().Query(ctx, `
 		SELECT key, value
 		FROM public.system_settings

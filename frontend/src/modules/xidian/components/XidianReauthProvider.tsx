@@ -4,7 +4,7 @@ import { Button } from '@/components/ui/Button';
 import { Input } from '@/components/ui/Input';
 import { XCircle, RefreshCw } from 'lucide-react';
 import { xidianService, type XidianCaptchaChallenge } from '@/modules/xidian/services/xidianService';
-import { loadCredential, saveCredential } from '../services/credentialStorage';
+import { clearCredential } from '../services/credentialStorage';
 import { getApiErrorMessage } from '@/libs/http/apiClient';
 import { XIDIAN_REAUTH_EVENT } from '@/libs/auth/xidianEvents';
 import { XidianReauthContext } from '../hooks/useXidianReauth';
@@ -39,7 +39,6 @@ export const XidianReauthProvider: React.FC<XidianReauthProviderProps> = ({ chil
   const [sliderValue, setSliderValue] = useState(0);
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
-  const [rememberPassword, setRememberPassword] = useState(false);
 
   const pendingRequestRef = useRef<ReauthRequest | null>(null);
 
@@ -58,13 +57,8 @@ export const XidianReauthProvider: React.FC<XidianReauthProviderProps> = ({ chil
   }, []);
 
   const openModal = useCallback(async () => {
-    // 尝试加载保存的凭证
-    const saved = loadCredential();
-    const nextFormData = saved
-      ? { username: saved.username, password: saved.password }
-      : { username: '', password: '' };
-    setFormData(nextFormData);
-    setRememberPassword(!!saved);
+    clearCredential();
+    setFormData({ username: '', password: '' });
     setSliderValue(0);
     setError(null);
     setIsOpen(true);
@@ -95,10 +89,6 @@ export const XidianReauthProvider: React.FC<XidianReauthProviderProps> = ({ chil
       setError('请先获取验证码');
       return;
     }
-    if (!formData.username || !formData.password) {
-      setError('请输入学号和密码');
-      return;
-    }
 
     setSubmitting(true);
     setError(null);
@@ -107,14 +97,9 @@ export const XidianReauthProvider: React.FC<XidianReauthProviderProps> = ({ chil
       await xidianService.completeBinding({
         challenge_id: captchaChallenge.challenge_id,
         slider_position: sliderValue,
-        username: formData.username,
-        password: formData.password,
+        username: formData.username || undefined,
+        password: formData.password || undefined,
       });
-
-      // 验证成功，如果勾选了记住密码则保存
-      if (rememberPassword) {
-        saveCredential(formData.username, formData.password);
-      }
 
       closeModal(true);
     } catch (err) {
@@ -128,6 +113,7 @@ export const XidianReauthProvider: React.FC<XidianReauthProviderProps> = ({ chil
 
   // 监听全局重新验证事件
   useEffect(() => {
+    clearCredential();
     const handleReauthEvent = () => {
       if (!isOpen) {
         openModal();
@@ -177,23 +163,6 @@ export const XidianReauthProvider: React.FC<XidianReauthProviderProps> = ({ chil
               onChange={(e) => setFormData((prev) => ({ ...prev, password: e.target.value }))}
               disabled={submitting}
             />
-          </div>
-
-          <div className="flex items-center gap-2">
-            <input
-              type="checkbox"
-              id="remember-password"
-              checked={rememberPassword}
-              onChange={(e) => setRememberPassword(e.target.checked)}
-              disabled={submitting}
-              className="h-4 w-4 rounded border-surface-300 text-primary-600 focus:ring-primary-500"
-            />
-            <label
-              htmlFor="remember-password"
-              className="text-sm text-surface-600 dark:text-surface-400"
-            >
-              记住密码（方便下次自动填入）
-            </label>
           </div>
 
           <div className="space-y-2">

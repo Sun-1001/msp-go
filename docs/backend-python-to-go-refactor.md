@@ -1,7 +1,7 @@
 # 后端 Python 到 Go 重构迁移文档
 
 **Document status**: P4 in progress; P5 done; P6 AI/Agent in progress (Eino agent framework integration started); P7 in progress; P8 static contract handoff done; P9 Python backend removed by user confirmation
-**Last updated**: 2026-05-08
+**Last updated**: 2026-06-01
 **适用范围**：原 `backend/` Python FastAPI 后端整体迁移到 Go 后端；`backend/` 已从当前工作区删除
 **重构原则**：接口兼容、数据连续、分阶段验收、每阶段完成必须更新本文档
 
@@ -399,7 +399,7 @@ backend-go/
 
 | 优先级 | 模块 | 状态 | 备注 |
 |--------|------|------|------|
-| P0 | `/health`、`/metrics` | DONE | Go P1 骨架已承接 `/health`、`/health/detailed`、`/metrics` |
+| P0 | `/health`、`/metrics` | DONE | Go P1 骨架已承接 `/health`、`/health/detailed`、`/metrics`；2026-06-01 起 `/health/detailed` 和 `/metrics` 默认限制在 `MANAGEMENT_ALLOWED_CIDRS` 内访问 |
 | P1 | `/auth` | DONE | Go P3 已承接登录、注册、刷新、登出、当前用户、修改密码、注册状态、忘记密码公开申请/状态查询 |
 | P1 | `/admin/users` | DONE | Go P3 追加承接管理员用户统计、列表、创建、更新、状态切换、删除、CSV 导入导出 |
 | P1 | `/admin/settings` | DONE | Go P7 已承接注册开关、通用信息、可导出表、数据库 JSON 导入导出和数据库监控 |
@@ -415,7 +415,7 @@ backend-go/
 | P3 | `/admin/knowledge` | DONE | Go P5 已承接知识节点/关系 CRUD、分页筛选、章节、简要节点列表和统计 |
 | P4 | `/admin/ai-config` | TODO | AI 配置；Go 已注册管理员鉴权的 501 `AI_CONFIG_TODO` 占位接口，完整 LLM provider/model/Agent 配置需纳入全新 AI/Agent 架构设计后再实现 |
 | P5 | `/xidian` | DONE | Go P7 已承接绑定状态、验证码挑战、绑定完成、解绑、课表/考试/成绩同步和快照读取；外部门户 live 验证留到有西电凭证的集成环境 |
-| P5 | `/upload` | DONE | Go P7 已承接图片上传、教师资源文件上传、本地 `/uploads` 文件落盘、S3 兼容对象存储和七牛云对象存储适配 |
+| P5 | `/upload` | DONE | Go P7 已承接图片上传、教师资源文件上传、本地 `/uploads` 文件落盘、S3 兼容对象存储和七牛云对象存储适配；2026-06-01 起图片上传要求登录、增加用户/IP 速率限制、按真实图片内容校验，本地 `/uploads` 禁止目录索引 |
 | P5 | `/admin/security-logs` | DONE | Go P7 已承接列表筛选/分页/日期分组、统计、删除、JSON/CSV 导出、归档、每日报告、清理和容量查询 |
 | P5 | `/admin/inbox` | DONE | Go P7 已承接密码重置申请列表、待处理计数和审批通过/拒绝；审批通过会重置用户密码并清理登录失败计数 |
 | P5 | `/admin/stats` | DONE | Go P7 已承接总览、用户增长、最近活动和系统状态 |
@@ -764,3 +764,8 @@ pytest
 - 验证结果：上述定向 Go 测试通过，覆盖 DKT 更新、PostgreSQL adapter 编译、动态路径规划、题目生成和路由契约；前端生产构建通过，保留既有 Vite large chunk 警告。
 - 交付物链接：`backend-go/internal/application/exercise/`、`backend-go/internal/adapter/postgres/exercise_repository.go`、`backend-go/internal/application/progress/`、`backend-go/internal/adapter/postgres/progress_repository.go`、`backend-go/internal/application/question/`、`backend-go/internal/adapter/http/question/`、`backend-go/migrations/0002_replace_bkt_with_dkt.up.sql`、`frontend/src/modules/exercise/services/exerciseService.ts`。
 - 遗留风险：当前无学生历史训练数据，DKT 为可替换的本地 SAKT-lite 估算器，不是离线训练后的 Transformer 权重；推荐后续以 pyKT 训练 AKT/SAKT 模型并通过独立推理服务接入，真实 PostgreSQL migration 仍需在集成环境执行 `go run ./cmd/migrate` 验证。
+- P7 安全评估修复完成：根据 `output/security-assessment-2026-06-01.md` 修复上传、注册默认权限、运维端点暴露、安全响应头和依赖漏洞；`POST /api/v1/upload/image` 改为要求登录并加用户/IP 本地速率限制，图片内容改为 `http.DetectContentType` + 图片解码/WEBP 签名校验；本地 `/uploads` 静态访问禁止目录索引，仅服务具体文件；`allow_teacher_registration` 初始迁移和缺省读取改为 `false`；`/health/detailed`、`/metrics` 默认限制在 `MANAGEMENT_ALLOWED_CIDRS` 内访问；Go/Nginx 补充 CSP、Permissions-Policy 等安全头；前端移除西电密码 localStorage 持久化并清理旧键；Go toolchain 锁定 `go1.25.10`，Docker builder 升级到 `golang:1.25.10-alpine`；前端生产/开发依赖漏洞清零。
+- 验证命令：`go test ./...`、`go vet ./...`、`go version`、`go run golang.org/x/vuln/cmd/govulncheck@latest ./...`、`npm test -- --run`、`npm run build`、`npm audit --json`、`npm audit --omit=dev --json`。
+- 验证结果：Go 全量测试和 vet 通过；`go version` 返回 `go1.25.10 windows/amd64`；`govulncheck` 报告代码路径 0 个漏洞；前端 157 个 Vitest 测试通过；生产构建通过，保留既有 Vite large chunk 警告；npm full/prod audit 均为 0 漏洞。
+- 交付物链接：`backend-go/internal/adapter/http/upload/`、`backend-go/internal/application/upload/`、`backend-go/internal/platform/httpserver/`、`backend-go/internal/platform/middleware/middleware.go`、`backend-go/internal/platform/config/config.go`、`backend-go/migrations/0001_initial_schema.up.sql`、`frontend/src/modules/xidian/`、`frontend/src/pages/common/ProfilePage.tsx`、`frontend/nginx.conf`、`frontend/package.json`、`frontend/package-lock.json`、`backend-go/go.mod`、`backend-go/Dockerfile`。
+- 遗留风险：上传速率限制为进程内本地限制，横向扩容时仍建议接 Redis/网关级限流；`/metrics` 和 `/health/detailed` 的实际生产可达性还需按部署网络与 `MANAGEMENT_ALLOWED_CIDRS` 做 smoke；HSTS 仍应在最终 HTTPS 入口启用并验证。

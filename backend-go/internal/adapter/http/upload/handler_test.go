@@ -13,20 +13,40 @@ import (
 	"net/textproto"
 	"os"
 	"testing"
+	"time"
 
 	authapp "mathstudy/backend-go/internal/application/auth"
 	uploadapp "mathstudy/backend-go/internal/application/upload"
 	"mathstudy/backend-go/internal/domain/user"
 )
 
-func TestImageUploadDoesNotRequireAuthentication(t *testing.T) {
-	service := &fakeUploadService{imageResponse: uploadapp.Response{FileID: "file-1", URL: "/uploads/images/file-1.png", Filename: "file-1.png", ContentType: "image/png", Size: 4}}
-	handler := newTestHandler(t, service, &fakeAuthenticator{})
+func TestImageUploadRequiresAuthentication(t *testing.T) {
+	handler := newTestHandler(t, &fakeUploadService{}, &fakeAuthenticator{})
 	mux := http.NewServeMux()
 	handler.Register(mux, "/api/v1/upload")
 
 	recorder := httptest.NewRecorder()
 	request := multipartRequest(t, "/api/v1/upload/image", "image.png", "image/png", "data")
+	mux.ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusUnauthorized {
+		t.Fatalf("status = %d, body = %s", recorder.Code, recorder.Body.String())
+	}
+	if got := recorder.Header().Get("WWW-Authenticate"); got != "Bearer" {
+		t.Fatalf("WWW-Authenticate = %q", got)
+	}
+}
+
+func TestImageUploadForwardsAuthenticatedFile(t *testing.T) {
+	service := &fakeUploadService{imageResponse: uploadapp.Response{FileID: "file-1", URL: "/uploads/images/file-1.png", Filename: "file-1.png", ContentType: "image/png", Size: 4}}
+	auth := &fakeAuthenticator{principal: authapp.Principal{UserID: "student-1", Role: user.RoleStudent}}
+	handler := newTestHandler(t, service, auth)
+	mux := http.NewServeMux()
+	handler.Register(mux, "/api/v1/upload")
+
+	recorder := httptest.NewRecorder()
+	request := multipartRequest(t, "/api/v1/upload/image", "image.png", "image/png", "data")
+	request.Header.Set("Authorization", "Bearer token")
 	mux.ServeHTTP(recorder, request)
 
 	if recorder.Code != http.StatusOK {
@@ -110,12 +130,14 @@ func TestUploadMapsServiceErrors(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			handler := newTestHandler(t, &fakeUploadService{imageErr: tt.err}, &fakeAuthenticator{})
+			auth := &fakeAuthenticator{principal: authapp.Principal{UserID: "student-1", Role: user.RoleStudent}}
+			handler := newTestHandler(t, &fakeUploadService{imageErr: tt.err}, auth)
 			mux := http.NewServeMux()
 			handler.Register(mux, "/api/v1/upload")
 
 			recorder := httptest.NewRecorder()
 			request := multipartRequest(t, "/api/v1/upload/image", "image.png", "image/png", "data")
+			request.Header.Set("Authorization", "Bearer token")
 			mux.ServeHTTP(recorder, request)
 
 			if recorder.Code != tt.status {
@@ -133,7 +155,8 @@ func TestUploadMapsServiceErrors(t *testing.T) {
 }
 
 func TestUploadRejectsMissingMultipartFile(t *testing.T) {
-	handler := newTestHandler(t, &fakeUploadService{}, &fakeAuthenticator{})
+	auth := &fakeAuthenticator{principal: authapp.Principal{UserID: "student-1", Role: user.RoleStudent}}
+	handler := newTestHandler(t, &fakeUploadService{}, auth)
 	mux := http.NewServeMux()
 	handler.Register(mux, "/api/v1/upload")
 
@@ -145,10 +168,35 @@ func TestUploadRejectsMissingMultipartFile(t *testing.T) {
 	recorder := httptest.NewRecorder()
 	request := httptest.NewRequest(http.MethodPost, "/api/v1/upload/image", body)
 	request.Header.Set("Content-Type", writer.FormDataContentType())
+	request.Header.Set("Authorization", "Bearer token")
 	mux.ServeHTTP(recorder, request)
 
 	if recorder.Code != http.StatusBadRequest {
 		t.Fatalf("status = %d, body = %s", recorder.Code, recorder.Body.String())
+	}
+}
+
+func TestUploadRateLimitUsesAuthenticatedUser(t *testing.T) {
+	auth := &fakeAuthenticator{principal: authapp.Principal{UserID: "student-1", Role: user.RoleStudent}}
+	handler := newTestHandler(t, &fakeUploadService{}, auth)
+	handler.limiter = newUploadRateLimiter(1, time.Minute)
+	mux := http.NewServeMux()
+	handler.Register(mux, "/api/v1/upload")
+
+	first := httptest.NewRecorder()
+	firstRequest := multipartRequest(t, "/api/v1/upload/image", "image.png", "image/png", "data")
+	firstRequest.Header.Set("Authorization", "Bearer token")
+	mux.ServeHTTP(first, firstRequest)
+	if first.Code != http.StatusOK {
+		t.Fatalf("first status = %d, body = %s", first.Code, first.Body.String())
+	}
+
+	second := httptest.NewRecorder()
+	secondRequest := multipartRequest(t, "/api/v1/upload/image", "image.png", "image/png", "data")
+	secondRequest.Header.Set("Authorization", "Bearer token")
+	mux.ServeHTTP(second, secondRequest)
+	if second.Code != http.StatusTooManyRequests {
+		t.Fatalf("second status = %d, body = %s", second.Code, second.Body.String())
 	}
 }
 

@@ -474,7 +474,7 @@ INSERT INTO public.knowledge_relations (id, source_id, target_id, relation_type,
 INSERT INTO public.knowledge_relations (id, source_id, target_id, relation_type, weight, description, created_at) VALUES ('f7f7e3b4-6f0e-4bc4-932b-6ab06fd93ffd', '92ae59c3-fdc2-4831-9703-214fe84d0534', '438f44d7-6e86-49bd-920e-e403d5f61010', 'USED_IN', 0.8, '不定积分用于分部积分法', '2026-04-18 12:43:27.62304');
 INSERT INTO public.knowledge_relations (id, source_id, target_id, relation_type, weight, description, created_at) VALUES ('c7e08092-0791-4a2f-ad0d-aabf33243252', '92ae59c3-fdc2-4831-9703-214fe84d0534', '6874b84e-e8ba-404c-bb34-a41add97075a', 'HAS_PREREQUISITE', 0.95, '不定积分是定积分的前置知识', '2026-04-18 12:43:27.62304');
 INSERT INTO public.system_settings (key, value, description, updated_at) VALUES ('allow_student_registration', 'true', '是否允许学生注册', '2026-04-18 12:43:27.62304');
-INSERT INTO public.system_settings (key, value, description, updated_at) VALUES ('allow_teacher_registration', 'true', '是否允许教师注册', '2026-04-18 12:43:27.62304');
+INSERT INTO public.system_settings (key, value, description, updated_at) VALUES ('allow_teacher_registration', 'false', '是否允许教师注册', '2026-04-18 12:43:27.62304');
 
 -- Primary and unique constraints
 ALTER TABLE ONLY public.agent_model_configs

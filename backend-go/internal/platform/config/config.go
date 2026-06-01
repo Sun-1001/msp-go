@@ -32,17 +32,18 @@ type Config struct {
 	Host string
 	Port int
 
-	APIV1Prefix       string
-	CORSOrigins       []string
-	CORSAllowMethods  []string
-	CORSAllowHeaders  []string
-	RequestTimeout    time.Duration
-	ReadHeaderTimeout time.Duration
-	ReadTimeout       time.Duration
-	WriteTimeout      time.Duration
-	IdleTimeout       time.Duration
-	ShutdownTimeout   time.Duration
-	MetricsEnabled    bool
+	APIV1Prefix            string
+	CORSOrigins            []string
+	CORSAllowMethods       []string
+	CORSAllowHeaders       []string
+	RequestTimeout         time.Duration
+	ReadHeaderTimeout      time.Duration
+	ReadTimeout            time.Duration
+	WriteTimeout           time.Duration
+	IdleTimeout            time.Duration
+	ShutdownTimeout        time.Duration
+	MetricsEnabled         bool
+	ManagementAllowedCIDRs []string
 
 	UploadsDir string
 
@@ -155,6 +156,7 @@ func Load() (Config, error) {
 		IdleTimeout:               envSeconds("HTTP_IDLE_TIMEOUT", 60*time.Second),
 		ShutdownTimeout:           envSeconds("HTTP_SHUTDOWN_TIMEOUT", 10*time.Second),
 		MetricsEnabled:            envBool("METRICS_ENABLED", true),
+		ManagementAllowedCIDRs:    envList("MANAGEMENT_ALLOWED_CIDRS", []string{"127.0.0.1/32", "::1/128", "10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16"}),
 		UploadsDir:                envString("UPLOADS_DIR", filepath.Join("..", "uploads")),
 		PostgresHost:              envString("POSTGRES_HOST", "localhost"),
 		PostgresPort:              envInt("POSTGRES_PORT", 5432),

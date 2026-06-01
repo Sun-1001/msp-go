@@ -3,6 +3,7 @@ package upload
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"errors"
 	"io"
 	"strings"
@@ -10,17 +11,18 @@ import (
 )
 
 func TestSaveImageStoresAllowedContentType(t *testing.T) {
-	storage := &fakeStorage{object: StoredObject{URL: "/uploads/images/id-1.png", Size: 4, ContentType: "image/png"}}
+	content := validPNGBytes(t)
+	storage := &fakeStorage{object: StoredObject{URL: "/uploads/images/id-1.png", Size: int64(len(content)), ContentType: "image/png"}}
 	service := newTestService(storage, "id-1")
 
-	response, err := service.SaveImage(context.Background(), bytes.NewBufferString("data"), FileMeta{ContentType: " image/png ", Size: 4})
+	response, err := service.SaveImage(context.Background(), bytes.NewReader(content), FileMeta{ContentType: " image/png ", Size: int64(len(content))})
 	if err != nil {
 		t.Fatalf("SaveImage() error = %v", err)
 	}
-	if storage.key != "images/id-1.png" || storage.contentType != "image/png" || string(storage.data) != "data" {
+	if storage.key != "images/id-1.png" || storage.contentType != "image/png" || !bytes.Equal(storage.data, content) {
 		t.Fatalf("storage call = key %q contentType %q data %q", storage.key, storage.contentType, storage.data)
 	}
-	if response.FileID != "id-1" || response.Filename != "id-1.png" || response.URL != "/uploads/images/id-1.png" || response.Size != 4 {
+	if response.FileID != "id-1" || response.Filename != "id-1.png" || response.URL != "/uploads/images/id-1.png" || response.Size != int64(len(content)) {
 		t.Fatalf("response = %#v", response)
 	}
 }
@@ -53,6 +55,9 @@ func TestSaveRejectsInvalidContentTypeAndLargeFiles(t *testing.T) {
 	if _, err := service.SaveImage(context.Background(), strings.NewReader("data"), FileMeta{ContentType: "image/svg+xml"}); !errors.Is(err, ErrInvalidContentType) {
 		t.Fatalf("invalid type error = %v, want ErrInvalidContentType", err)
 	}
+	if _, err := service.SaveImage(context.Background(), strings.NewReader("not a png"), FileMeta{ContentType: "image/png"}); !errors.Is(err, ErrInvalidContentType) {
+		t.Fatalf("spoofed type error = %v, want ErrInvalidContentType", err)
+	}
 	if _, err := service.SaveImage(context.Background(), strings.NewReader("data"), FileMeta{ContentType: "image/png", Size: MaxImageSize + 1}); !errors.Is(err, ErrFileTooLarge) {
 		t.Fatalf("meta size error = %v, want ErrFileTooLarge", err)
 	}
@@ -63,14 +68,15 @@ func TestSaveRejectsInvalidContentTypeAndLargeFiles(t *testing.T) {
 }
 
 func TestSaveReturnsStorageAndIDErrors(t *testing.T) {
+	content := validPNGBytes(t)
 	service := newTestService(&fakeStorage{err: errors.New("store failed")}, "id-1")
-	if _, err := service.SaveImage(context.Background(), strings.NewReader("data"), FileMeta{ContentType: "image/png"}); err == nil || err.Error() != "store failed" {
+	if _, err := service.SaveImage(context.Background(), bytes.NewReader(content), FileMeta{ContentType: "image/png", Size: int64(len(content))}); err == nil || err.Error() != "store failed" {
 		t.Fatalf("storage error = %v", err)
 	}
 
 	service = newTestService(&fakeStorage{}, "id-1")
 	service.newID = func() (string, error) { return "", errors.New("id failed") }
-	if _, err := service.SaveImage(context.Background(), strings.NewReader("data"), FileMeta{ContentType: "image/png"}); err == nil || err.Error() != "id failed" {
+	if _, err := service.SaveImage(context.Background(), bytes.NewReader(content), FileMeta{ContentType: "image/png", Size: int64(len(content))}); err == nil || err.Error() != "id failed" {
 		t.Fatalf("id error = %v", err)
 	}
 }
@@ -88,6 +94,15 @@ func newTestService(storage Storage, id string) *Service {
 	}
 	service.newID = func() (string, error) { return id, nil }
 	return service
+}
+
+func validPNGBytes(t *testing.T) []byte {
+	t.Helper()
+	data, err := base64.StdEncoding.DecodeString("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII=")
+	if err != nil {
+		t.Fatalf("decode png fixture: %v", err)
+	}
+	return data
 }
 
 type fakeStorage struct {

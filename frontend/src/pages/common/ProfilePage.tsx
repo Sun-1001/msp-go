@@ -13,7 +13,7 @@ import { getApiErrorMessage } from '@/libs/http/apiClient';
 import { passwordChangeSchema, type PasswordChangeFormData } from '@/libs/validation/schemas';
 import { authService } from '@/modules/auth/services/authService';
 import { xidianService, type XidianBindingStatus, type XidianCaptchaChallenge } from '@/modules/xidian/services/xidianService';
-import { saveCredential, clearCredential, loadCredential } from '@/modules/xidian';
+import { clearCredential } from '@/modules/xidian';
 
 export const ProfilePage: React.FC = () => {
   const user = useAppSelector(selectCurrentUser);
@@ -33,7 +33,6 @@ export const ProfilePage: React.FC = () => {
   const [bindingSubmitting, setBindingSubmitting] = useState(false);
   const [xidianActionStatus, setXidianActionStatus] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
   const [syncingType, setSyncingType] = useState<'classtable' | 'exams' | 'scores' | null>(null);
-  const [rememberPassword, setRememberPassword] = useState(false);
   const [emailBindModalOpen, setEmailBindModalOpen] = useState(false);
   const [emailBindValue, setEmailBindValue] = useState('');
   const [emailCodeValue, setEmailCodeValue] = useState('');
@@ -104,15 +103,8 @@ export const ProfilePage: React.FC = () => {
     setBindingModalOpen(true);
     setBindingError(null);
     setSliderValue(0);
-    // 尝试加载保存的凭证
-    const saved = loadCredential();
-    if (saved) {
-      setBindingForm({ username: saved.username, password: saved.password });
-      setRememberPassword(true);
-    } else {
-      setBindingForm({ username: '', password: '' });
-      setRememberPassword(false);
-    }
+    clearCredential();
+    setBindingForm({ username: '', password: '' });
     setCaptchaLoading(true);
     try {
       const challenge = await xidianService.startBinding();
@@ -158,10 +150,6 @@ export const ProfilePage: React.FC = () => {
         is_postgraduate: response.is_postgraduate,
         last_verified_at: response.last_verified_at,
       });
-      // 绑定成功，如果勾选了记住密码则保存凭证
-      if (rememberPassword && bindingForm.username && bindingForm.password) {
-        saveCredential(bindingForm.username, bindingForm.password);
-      }
       setXidianActionStatus({ type: 'success', message: '绑定成功' });
       setBindingModalOpen(false);
       setBindingForm({ username: '', password: '' });
@@ -595,23 +583,6 @@ export const ProfilePage: React.FC = () => {
               onChange={(event) => setBindingForm((prev) => ({ ...prev, password: event.target.value }))}
               disabled={bindingSubmitting}
             />
-          </div>
-
-          <div className="flex items-center gap-2">
-            <input
-              type="checkbox"
-              id="remember-password-binding"
-              checked={rememberPassword}
-              onChange={(e) => setRememberPassword(e.target.checked)}
-              disabled={bindingSubmitting}
-              className="h-4 w-4 rounded border-surface-300 text-primary-600 focus:ring-primary-500"
-            />
-            <label
-              htmlFor="remember-password-binding"
-              className="text-sm text-surface-600 dark:text-surface-400"
-            >
-              记住密码（方便下次自动填入）
-            </label>
           </div>
 
           <div className="space-y-2">

@@ -73,7 +73,7 @@ func TestUserRepositoryIntegration(t *testing.T) {
 	if err != nil {
 		t.Fatalf("RegistrationSettings() error = %v", err)
 	}
-	if !settings.AllowStudent || !settings.AllowTeacher {
+	if !settings.AllowStudent || settings.AllowTeacher {
 		t.Fatalf("RegistrationSettings() = %#v", settings)
 	}
 

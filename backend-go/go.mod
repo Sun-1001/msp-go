@@ -2,6 +2,8 @@ module mathstudy/backend-go
 
 go 1.25
 
+toolchain go1.25.10
+
 require (
 	github.com/alicebob/miniredis/v2 v2.37.0
 	github.com/cloudwego/eino v0.8.13

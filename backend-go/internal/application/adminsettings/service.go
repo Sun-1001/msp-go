@@ -235,7 +235,7 @@ func (s *Service) RegistrationSettings(ctx context.Context) (RegistrationSetting
 	}
 	return RegistrationSettingsResponse{
 		AllowStudent: settingBool(values, allowStudentRegistration, true),
-		AllowTeacher: settingBool(values, allowTeacherRegistration, true),
+		AllowTeacher: settingBool(values, allowTeacherRegistration, false),
 	}, nil
 }
 

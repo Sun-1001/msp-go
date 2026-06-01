@@ -1,11 +1,17 @@
 package upload
 
 import (
+	"bytes"
 	"context"
 	"crypto/rand"
 	"errors"
 	"fmt"
+	"image"
+	_ "image/gif"
+	_ "image/jpeg"
+	_ "image/png"
 	"io"
+	"net/http"
 	"strings"
 )
 
@@ -67,7 +73,11 @@ func NewService(storage Storage) (*Service, error) {
 
 // SaveImage validates and stores one image file.
 func (s *Service) SaveImage(ctx context.Context, reader io.Reader, meta FileMeta) (Response, error) {
-	return s.save(ctx, reader, meta, allowedImageTypes(), MaxImageSize, "images")
+	content, contentType, extension, err := validateImageContent(reader, meta)
+	if err != nil {
+		return Response{}, err
+	}
+	return s.store(ctx, bytes.NewReader(content), contentType, int64(len(content)), MaxImageSize, extension, "images")
 }
 
 // SaveResourceFile validates and stores one video or document resource.
@@ -91,6 +101,10 @@ func (s *Service) save(ctx context.Context, reader io.Reader, meta FileMeta, all
 	if reader == nil {
 		return Response{}, errors.New("upload reader is nil")
 	}
+	return s.store(ctx, reader, contentType, meta.Size, maxSize, extension, prefix)
+}
+
+func (s *Service) store(ctx context.Context, reader io.Reader, contentType string, sizeHint int64, maxSize int64, extension string, prefix string) (Response, error) {
 	fileID, err := s.newID()
 	if err != nil {
 		return Response{}, err
@@ -99,7 +113,7 @@ func (s *Service) save(ctx context.Context, reader io.Reader, meta FileMeta, all
 	key := prefix + "/" + filename
 	limited := &maxBytesReader{reader: reader, remaining: maxSize}
 	counted := &countingReader{reader: limited}
-	stored, err := s.storage.UploadStream(ctx, counted, key, contentType, meta.Size)
+	stored, err := s.storage.UploadStream(ctx, counted, key, contentType, sizeHint)
 	if err != nil {
 		return Response{}, err
 	}
@@ -114,6 +128,45 @@ func (s *Service) save(ctx context.Context, reader io.Reader, meta FileMeta, all
 		ContentType: contentType,
 		Size:        size,
 	}, nil
+}
+
+func validateImageContent(reader io.Reader, meta FileMeta) ([]byte, string, string, error) {
+	if reader == nil {
+		return nil, "", "", errors.New("upload reader is nil")
+	}
+	if meta.Size > MaxImageSize {
+		return nil, "", "", ErrFileTooLarge
+	}
+	content, err := io.ReadAll(io.LimitReader(reader, MaxImageSize+1))
+	if err != nil {
+		return nil, "", "", err
+	}
+	if int64(len(content)) > MaxImageSize {
+		return nil, "", "", ErrFileTooLarge
+	}
+	if len(content) == 0 {
+		return nil, "", "", ErrInvalidContentType
+	}
+	contentType := strings.ToLower(strings.TrimSpace(http.DetectContentType(content)))
+	if isWebP(content) {
+		contentType = "image/webp"
+	}
+	extension, ok := allowedImageTypes()[contentType]
+	if !ok {
+		return nil, "", "", ErrInvalidContentType
+	}
+	if contentType != "image/webp" {
+		if _, _, err := image.DecodeConfig(bytes.NewReader(content)); err != nil {
+			return nil, "", "", ErrInvalidContentType
+		}
+	}
+	return content, contentType, extension, nil
+}
+
+func isWebP(content []byte) bool {
+	return len(content) >= 12 &&
+		string(content[0:4]) == "RIFF" &&
+		string(content[8:12]) == "WEBP"
 }
 
 type maxBytesReader struct {

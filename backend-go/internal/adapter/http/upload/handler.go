@@ -6,14 +6,21 @@ import (
 	"errors"
 	"io"
 	"log/slog"
+	"net"
 	"net/http"
 	"strings"
+	"sync"
+	"time"
 
 	authapp "mathstudy/backend-go/internal/application/auth"
 	uploadapp "mathstudy/backend-go/internal/application/upload"
 )
 
-const multipartMemory = 32 << 20
+const (
+	multipartMemory       = 32 << 20
+	uploadRateLimitWindow = time.Minute
+	uploadRateLimitMax    = 60
+)
 
 // Service is the upload application surface used by HTTP handlers.
 type Service interface {
@@ -31,6 +38,7 @@ type Handler struct {
 	service Service
 	auth    Authenticator
 	logger  *slog.Logger
+	limiter *uploadRateLimiter
 }
 
 // NewHandler creates an upload HTTP handler.
@@ -44,7 +52,7 @@ func NewHandler(logger *slog.Logger, service Service, auth Authenticator) (*Hand
 	if logger == nil {
 		logger = slog.Default()
 	}
-	return &Handler{service: service, auth: auth, logger: logger}, nil
+	return &Handler{service: service, auth: auth, logger: logger, limiter: newUploadRateLimiter(uploadRateLimitMax, uploadRateLimitWindow)}, nil
 }
 
 // Register attaches upload routes under prefix, for example /api/v1/upload.
@@ -60,11 +68,22 @@ type errorResponse struct {
 }
 
 func (h *Handler) image(w http.ResponseWriter, r *http.Request) {
+	principal, ok := h.requirePrincipal(w, r)
+	if !ok {
+		return
+	}
+	if !h.allowUpload(w, r, principal) {
+		return
+	}
 	h.upload(w, r, uploadapp.MaxImageSize, h.service.SaveImage, "上传图片失败")
 }
 
 func (h *Handler) resource(w http.ResponseWriter, r *http.Request) {
-	if _, ok := h.requireTeacher(w, r); !ok {
+	principal, ok := h.requireTeacher(w, r)
+	if !ok {
+		return
+	}
+	if !h.allowUpload(w, r, principal) {
 		return
 	}
 	h.upload(w, r, uploadapp.MaxResourceSize, h.service.SaveResourceFile, "上传资源文件失败")
@@ -130,6 +149,14 @@ func (h *Handler) requireTeacher(w http.ResponseWriter, r *http.Request) (authap
 	return principal, true
 }
 
+func (h *Handler) allowUpload(w http.ResponseWriter, r *http.Request, principal authapp.Principal) bool {
+	if h.limiter == nil || h.limiter.Allow(uploadRateKey(r, principal)) {
+		return true
+	}
+	writeUploadError(w, http.StatusTooManyRequests, "RATE_LIMITED", "上传过于频繁，请稍后重试")
+	return false
+}
+
 func (h *Handler) writeServiceError(w http.ResponseWriter, err error, fallback string) {
 	switch {
 	case errors.Is(err, uploadapp.ErrInvalidContentType):
@@ -150,4 +177,76 @@ func writeJSON(w http.ResponseWriter, status int, payload any) {
 
 func writeUploadError(w http.ResponseWriter, status int, code, message string) {
 	writeJSON(w, status, errorResponse{Detail: message, Code: code, Message: message})
+}
+
+func uploadRateKey(r *http.Request, principal authapp.Principal) string {
+	if strings.TrimSpace(principal.UserID) != "" {
+		return "user:" + principal.UserID
+	}
+	host, _, err := net.SplitHostPort(r.RemoteAddr)
+	if err != nil || host == "" {
+		host = r.RemoteAddr
+	}
+	if host == "" {
+		host = "unknown"
+	}
+	return "ip:" + host
+}
+
+type uploadRateLimiter struct {
+	mu     sync.Mutex
+	limit  int
+	window time.Duration
+	now    func() time.Time
+	hits   map[string][]time.Time
+}
+
+func newUploadRateLimiter(limit int, window time.Duration) *uploadRateLimiter {
+	if limit <= 0 {
+		limit = uploadRateLimitMax
+	}
+	if window <= 0 {
+		window = uploadRateLimitWindow
+	}
+	return &uploadRateLimiter{
+		limit:  limit,
+		window: window,
+		now:    func() time.Time { return time.Now().UTC() },
+		hits:   map[string][]time.Time{},
+	}
+}
+
+func (l *uploadRateLimiter) Allow(key string) bool {
+	if l == nil {
+		return true
+	}
+	l.mu.Lock()
+	defer l.mu.Unlock()
+
+	if l.limit <= 0 {
+		l.limit = uploadRateLimitMax
+	}
+	if l.window <= 0 {
+		l.window = uploadRateLimitWindow
+	}
+	if l.now == nil {
+		l.now = func() time.Time { return time.Now().UTC() }
+	}
+	if l.hits == nil {
+		l.hits = map[string][]time.Time{}
+	}
+	now := l.now()
+	cutoff := now.Add(-l.window)
+	recent := l.hits[key][:0]
+	for _, hit := range l.hits[key] {
+		if hit.After(cutoff) {
+			recent = append(recent, hit)
+		}
+	}
+	if len(recent) >= l.limit {
+		l.hits[key] = recent
+		return false
+	}
+	l.hits[key] = append(recent, now)
+	return true
 }

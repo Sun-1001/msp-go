@@ -1,10 +1,8 @@
 /**
- * 西电账号凭证安全存储工具
- * 使用 Base64 + 简单位移混淆，防止明文暴露
+ * 西电账号凭证兼容清理工具
  */
 
 const CREDENTIAL_KEY = 'xidian_cred';
-const reverseString = (value: string) => value.split('').reverse().join('');
 
 export interface XidianCredential {
   username: string;
@@ -12,30 +10,20 @@ export interface XidianCredential {
 }
 
 /**
- * 保存凭证到 localStorage
+ * 不再在浏览器持久化西电密码；调用时同步清理旧版缓存。
  */
 export function saveCredential(username: string, password: string): void {
-  const data = JSON.stringify({ u: username, p: password });
-  const encoded = reverseString(btoa(unescape(encodeURIComponent(data))));
-  localStorage.setItem(CREDENTIAL_KEY, encoded);
+  void username;
+  void password;
+  clearCredential();
 }
 
 /**
- * 从 localStorage 读取凭证
+ * 旧版本曾从 localStorage 读取可逆混淆凭证；现在始终清理并返回空值。
  */
 export function loadCredential(): XidianCredential | null {
-  const encoded = localStorage.getItem(CREDENTIAL_KEY);
-  if (!encoded) return null;
-  try {
-    const data = decodeURIComponent(escape(atob(reverseString(encoded))));
-    const { u, p } = JSON.parse(data);
-    if (typeof u === 'string' && typeof p === 'string') {
-      return { username: u, password: p };
-    }
-    return null;
-  } catch {
-    return null;
-  }
+  clearCredential();
+  return null;
 }
 
 /**
@@ -49,5 +37,6 @@ export function clearCredential(): void {
  * 检查是否有保存的凭证
  */
 export function hasCredential(): boolean {
-  return localStorage.getItem(CREDENTIAL_KEY) !== null;
+  clearCredential();
+  return false;
 }

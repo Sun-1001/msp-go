@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"path/filepath"
 	"testing"
 
 	"mathstudy/backend-go/internal/platform/config"
@@ -23,15 +24,16 @@ func (okPinger) Ping(context.Context) error {
 func testHandler(t *testing.T) http.Handler {
 	t.Helper()
 	cfg := config.Config{
-		AppVersion:       "test",
-		Environment:      "test",
-		APIV1Prefix:      "/api/v1",
-		CORSOrigins:      []string{"http://localhost:5173"},
-		CORSAllowMethods: []string{"GET", "POST", "OPTIONS"},
-		CORSAllowHeaders: []string{"Authorization", "Content-Type"},
-		RequestTimeout:   0,
-		MetricsEnabled:   true,
-		UploadsDir:       t.TempDir(),
+		AppVersion:             "test",
+		Environment:            "test",
+		APIV1Prefix:            "/api/v1",
+		CORSOrigins:            []string{"http://localhost:5173"},
+		CORSAllowMethods:       []string{"GET", "POST", "OPTIONS"},
+		CORSAllowHeaders:       []string{"Authorization", "Content-Type"},
+		RequestTimeout:         0,
+		MetricsEnabled:         true,
+		ManagementAllowedCIDRs: []string{"127.0.0.1/32"},
+		UploadsDir:             t.TempDir(),
 	}
 	handler, err := NewHandler(
 		cfg,
@@ -48,15 +50,16 @@ func testHandler(t *testing.T) http.Handler {
 func testHandlerWithRoutes(t *testing.T, registrar RouteRegistrar) http.Handler {
 	t.Helper()
 	cfg := config.Config{
-		AppVersion:       "test",
-		Environment:      "test",
-		APIV1Prefix:      "/api/v1",
-		CORSOrigins:      []string{"http://localhost:5173"},
-		CORSAllowMethods: []string{"GET", "POST", "OPTIONS"},
-		CORSAllowHeaders: []string{"Authorization", "Content-Type"},
-		RequestTimeout:   0,
-		MetricsEnabled:   true,
-		UploadsDir:       t.TempDir(),
+		AppVersion:             "test",
+		Environment:            "test",
+		APIV1Prefix:            "/api/v1",
+		CORSOrigins:            []string{"http://localhost:5173"},
+		CORSAllowMethods:       []string{"GET", "POST", "OPTIONS"},
+		CORSAllowHeaders:       []string{"Authorization", "Content-Type"},
+		RequestTimeout:         0,
+		MetricsEnabled:         true,
+		ManagementAllowedCIDRs: []string{"127.0.0.1/32"},
+		UploadsDir:             t.TempDir(),
 	}
 	handler, err := NewHandler(
 		cfg,
@@ -87,6 +90,9 @@ func TestHealthRoute(t *testing.T) {
 	}
 	if body["status"] != "healthy" || body["version"] != "test" {
 		t.Fatalf("body = %#v", body)
+	}
+	if recorder.Header().Get("Content-Security-Policy") == "" || recorder.Header().Get("Permissions-Policy") == "" {
+		t.Fatalf("security headers missing: %#v", recorder.Header())
 	}
 }
 
@@ -145,6 +151,7 @@ func TestMetricsRoute(t *testing.T) {
 	handler := testHandler(t)
 	recorder := httptest.NewRecorder()
 	request := httptest.NewRequest(http.MethodGet, "/metrics", nil)
+	request.RemoteAddr = "127.0.0.1:1234"
 
 	handler.ServeHTTP(recorder, request)
 
@@ -153,5 +160,72 @@ func TestMetricsRoute(t *testing.T) {
 	}
 	if recorder.Header().Get("Content-Type") != metrics.ContentType {
 		t.Fatalf("Content-Type = %q", recorder.Header().Get("Content-Type"))
+	}
+}
+
+func TestManagementRoutesRejectPublicRemote(t *testing.T) {
+	handler := testHandler(t)
+	for _, target := range []string{"/health/detailed", "/metrics"} {
+		t.Run(target, func(t *testing.T) {
+			recorder := httptest.NewRecorder()
+			request := httptest.NewRequest(http.MethodGet, target, nil)
+			request.RemoteAddr = "203.0.113.10:4567"
+
+			handler.ServeHTTP(recorder, request)
+
+			if recorder.Code != http.StatusForbidden {
+				t.Fatalf("status = %d, body = %s", recorder.Code, recorder.Body.String())
+			}
+		})
+	}
+}
+
+func TestUploadsHandlerServesFilesWithoutDirectoryListings(t *testing.T) {
+	uploadsDir := t.TempDir()
+	imagesDir := filepath.Join(uploadsDir, "images")
+	if err := os.MkdirAll(imagesDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll() error = %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(imagesDir, "file.txt"), []byte("image-data"), 0o644); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+	cfg := config.Config{
+		AppVersion:             "test",
+		Environment:            "test",
+		APIV1Prefix:            "/api/v1",
+		CORSOrigins:            []string{"http://localhost:5173"},
+		CORSAllowMethods:       []string{"GET", "POST", "OPTIONS"},
+		CORSAllowHeaders:       []string{"Authorization", "Content-Type"},
+		RequestTimeout:         0,
+		MetricsEnabled:         true,
+		ManagementAllowedCIDRs: []string{"127.0.0.1/32"},
+		UploadsDir:             uploadsDir,
+	}
+	handler, err := NewHandler(
+		cfg,
+		slog.New(slog.NewTextHandler(os.Stdout, nil)),
+		health.NewChecker("test", okPinger{}, okPinger{}),
+		metrics.NewStore("test", "test"),
+	)
+	if err != nil {
+		t.Fatalf("NewHandler() error = %v", err)
+	}
+
+	for _, target := range []string{"/uploads/", "/uploads/images/"} {
+		t.Run(target, func(t *testing.T) {
+			recorder := httptest.NewRecorder()
+			request := httptest.NewRequest(http.MethodGet, target, nil)
+			handler.ServeHTTP(recorder, request)
+			if recorder.Code != http.StatusNotFound {
+				t.Fatalf("status = %d, body = %s", recorder.Code, recorder.Body.String())
+			}
+		})
+	}
+
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodGet, "/uploads/images/file.txt", nil)
+	handler.ServeHTTP(recorder, request)
+	if recorder.Code != http.StatusOK || recorder.Body.String() != "image-data" {
+		t.Fatalf("file response = status %d body %q", recorder.Code, recorder.Body.String())
 	}
 }
