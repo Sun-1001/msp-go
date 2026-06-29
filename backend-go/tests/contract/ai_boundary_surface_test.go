@@ -14,32 +14,10 @@ func TestRemainingAIBoundariesStayExplicit(t *testing.T) {
 		required []string
 	}{
 		{
-			file: "backend-go/internal/adapter/http/adminaiconfig/handler.go",
-			required: []string{
-				"P6 AI work is TODO",
-				"http.StatusNotImplemented",
-				"AI_CONFIG_TODO",
-			},
-		},
-		{
-			file: "backend-go/internal/application/question/service.go",
-			required: []string{
-				"ParseQuestions returns a deterministic shape-compatible parse fallback",
-				"LLM extraction remains a P6 TODO",
-			},
-		},
-		{
-			file: "backend-go/internal/application/portrait/service.go",
-			required: []string{
-				"LLM portrait quality remains a P6 TODO",
-				"buildPortraitContent",
-			},
-		},
-		{
 			file: "backend-go/internal/application/exercise/service.go",
 			required: []string{
 				"OCR 判题能力将在 AI 迁移阶段恢复",
-				"NormalizedAnswerChecker is a deterministic local checker used before P6 AI parity",
+				"NormalizedAnswerChecker is a deterministic local checker used when the Math Solver agent is unavailable",
 			},
 		},
 	}
@@ -49,7 +27,7 @@ func TestRemainingAIBoundariesStayExplicit(t *testing.T) {
 			source := readFile(t, filepath.Join(root, expectation.file))
 			for _, required := range expectation.required {
 				if !strings.Contains(source, required) {
-					t.Fatalf("%s must keep explicit AI TODO boundary marker %q", expectation.file, required)
+					t.Fatalf("%s must keep explicit remaining AI boundary marker %q", expectation.file, required)
 				}
 			}
 		})
@@ -68,6 +46,40 @@ func TestSessionChatWiresEinoAgentRuntime(t *testing.T) {
 				"adk.NewChatModelAgent",
 				"einoopenai.NewChatModel",
 				"tutorInstruction",
+				"portraitInstruction",
+				"diagnosticianInstruction",
+				"mathSolverInstruction",
+				"questionParserInstruction",
+				"NewConfigurablePortraitGenerator",
+				"NewConfigurableDiagnostician",
+				"NewConfigurableMathSolver",
+				"NewConfigurableQuestionParser",
+			},
+		},
+		{
+			file: "backend-go/internal/application/question/service.go",
+			required: []string{
+				"type Parser interface",
+				"WithParser",
+				"deterministic fallback",
+			},
+		},
+		{
+			file: "backend-go/internal/application/portrait/service.go",
+			required: []string{
+				"type Generator interface",
+				"WithGenerator",
+				"buildPortraitContent",
+			},
+		},
+		{
+			file: "backend-go/internal/application/exercise/service.go",
+			required: []string{
+				"type MathSolver interface",
+				"SolverAnswerChecker",
+				"type Diagnostician interface",
+				"WithDiagnostician",
+				"NormalizedAnswerChecker is a deterministic local checker used when the Math Solver agent is unavailable",
 			},
 		},
 		{
@@ -81,8 +93,34 @@ func TestSessionChatWiresEinoAgentRuntime(t *testing.T) {
 		{
 			file: "backend-go/cmd/api/main.go",
 			required: []string{
-				"einoagent.NewTutorAgent",
+				"adminaiconfigapp.NewService",
+				"adapterpostgres.NewAdminAIConfigRepository",
+				"einoagent.NewConfigurableTutorAgent",
+				"einoagent.NewConfigurablePortraitGenerator",
+				"einoagent.NewConfigurableDiagnostician",
+				"einoagent.NewConfigurableMathSolver",
+				"einoagent.NewConfigurableQuestionParser",
 				"sessionapp.WithChatAgent",
+				"portraitapp.WithGenerator",
+				"exerciseapp.WithDiagnostician",
+				"exerciseapp.SolverAnswerChecker",
+				"questionapp.WithParser",
+			},
+		},
+		{
+			file: "backend-go/internal/adapter/http/adminaiconfig/handler.go",
+			required: []string{
+				"CreateProviderWithModels",
+				"UpdateAgentConfig",
+				"FetchModelsByCredentials",
+			},
+		},
+		{
+			file: "backend-go/internal/application/adminaiconfig/service.go",
+			required: []string{
+				"type RuntimeConfig struct",
+				"RuntimeConfig(ctx context.Context, agentType string)",
+				"FetchModelsByCredentials",
 			},
 		},
 	}

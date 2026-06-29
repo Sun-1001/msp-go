@@ -75,8 +75,29 @@ func TestProcessChatFallsBackWhenAgentIsNotConfigured(t *testing.T) {
 	if result.Agent != "tutor" || result.Content == "" {
 		t.Fatalf("result = %#v", result)
 	}
-	if !strings.Contains(result.Content, "Eino 智能体尚未启用") {
+	if !strings.Contains(result.Content, "智能导师尚未配置") {
 		t.Fatalf("fallback content = %q", result.Content)
+	}
+}
+
+func TestProcessChatFallsBackWhenAgentFails(t *testing.T) {
+	now := time.Date(2026, time.April, 26, 9, 0, 0, 0, time.UTC)
+	repo := &fakeSessionRepo{
+		session:    LearningSession{ID: "session-1", StudentID: "student-1", IsActive: true},
+		hasSession: true,
+	}
+	service := newTestService(repo, now, "user-msg", "ai-msg", "task-1")
+	service.agent = fakeChatAgent{err: errors.New("model unavailable")}
+
+	result, err := service.ProcessChat(context.Background(), "session-1", "student-1", "你好", nil)
+	if err != nil {
+		t.Fatalf("ProcessChat() error = %v", err)
+	}
+	if result.Agent != "tutor" || !strings.Contains(result.Content, "智能导师暂时不可用") {
+		t.Fatalf("result = %#v", result)
+	}
+	if len(repo.insertedMessages) != 2 || repo.insertedMessages[1].Role != "assistant" {
+		t.Fatalf("messages = %#v", repo.insertedMessages)
 	}
 }
 

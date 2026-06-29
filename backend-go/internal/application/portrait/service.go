@@ -59,18 +59,44 @@ type ClearResponse struct {
 	Message string `json:"message"`
 }
 
+// GeneratorInput carries normalized profile data into an optional LLM portrait generator.
+type GeneratorInput struct {
+	Profile         Profile
+	FallbackContent string
+}
+
+// Generator creates a narrative portrait from profile data.
+type Generator interface {
+	GeneratePortrait(context.Context, GeneratorInput) (string, error)
+}
+
 // Service implements student portrait read and maintenance use cases.
 type Service struct {
-	repo Repository
-	now  func() time.Time
+	repo      Repository
+	generator Generator
+	now       func() time.Time
+}
+
+// Option customizes the portrait service.
+type Option func(*Service)
+
+// WithGenerator enables configurable LLM portrait generation with template fallback.
+func WithGenerator(generator Generator) Option {
+	return func(service *Service) {
+		service.generator = generator
+	}
 }
 
 // NewService creates a portrait service.
-func NewService(repo Repository) (*Service, error) {
+func NewService(repo Repository, options ...Option) (*Service, error) {
 	if repo == nil {
 		return nil, errors.New("portrait repository is nil")
 	}
-	return &Service{repo: repo, now: time.Now}, nil
+	service := &Service{repo: repo, now: time.Now}
+	for _, option := range options {
+		option(service)
+	}
+	return service, nil
 }
 
 // GetPortrait returns the current student's portrait, creating an empty profile when needed.
@@ -82,7 +108,7 @@ func (s *Service) GetPortrait(ctx context.Context, userID string) (PortraitRespo
 	return toPortraitResponse(profile), nil
 }
 
-// GeneratePortrait builds and stores a profile-based portrait report; LLM portrait quality remains a P6 TODO.
+// GeneratePortrait builds and stores a profile-based portrait report.
 func (s *Service) GeneratePortrait(ctx context.Context, userID string) (GenerateResponse, error) {
 	profile, err := s.ensureProfile(ctx, userID)
 	if err != nil {
@@ -90,7 +116,8 @@ func (s *Service) GeneratePortrait(ctx context.Context, userID string) (Generate
 	}
 
 	generatedAt := s.now()
-	content := buildPortraitContent(profile)
+	fallbackContent := buildPortraitContent(profile)
+	content := s.generatePortraitContent(ctx, profile, fallbackContent)
 	saved, ok, err := s.repo.SavePortrait(ctx, userID, content, generatedAt)
 	if err != nil {
 		return GenerateResponse{}, err
@@ -103,6 +130,24 @@ func (s *Service) GeneratePortrait(ctx context.Context, userID string) (Generate
 		PortraitGeneratedAt: formatTime(generatedAt),
 		PortraitVersion:     saved.PortraitVersion,
 	}, nil
+}
+
+func (s *Service) generatePortraitContent(ctx context.Context, profile Profile, fallbackContent string) string {
+	if s.generator == nil {
+		return fallbackContent
+	}
+	content, err := s.generator.GeneratePortrait(ctx, GeneratorInput{
+		Profile:         profile,
+		FallbackContent: fallbackContent,
+	})
+	if err != nil {
+		return fallbackContent
+	}
+	content = strings.TrimSpace(content)
+	if content == "" {
+		return fallbackContent
+	}
+	return content
 }
 
 // ClearPortrait removes generated portrait content for the current student.

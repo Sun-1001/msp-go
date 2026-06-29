@@ -1,7 +1,7 @@
 # 后端 Python 到 Go 重构迁移文档
 
-**Document status**: P4 in progress; P5 done; P6 AI/Agent in progress (Eino agent framework integration started); P7 in progress; P8 static contract handoff done; P9 Python backend removed by user confirmation
-**Last updated**: 2026-06-01
+**Document status**: P4 in progress; P5 done; P6 AI/Agent in progress (Eino Tutor/Portrait/Diagnostician/Math Solver/Question Parser Agent and admin LLM/Agent config loop wired; OCR and broader math tools pending); P7 in progress; P8 static contract handoff done; P9 Python backend removed by user confirmation
+**Last updated**: 2026-06-29
 **适用范围**：原 `backend/` Python FastAPI 后端整体迁移到 Go 后端；`backend/` 已从当前工作区删除
 **重构原则**：接口兼容、数据连续、分阶段验收、每阶段完成必须更新本文档
 
@@ -45,7 +45,7 @@
 - Go 后端承接所有非 AI `/api/v1` 业务接口、健康检查、监控指标和文件访问入口。
 - Python 后端不再承载线上业务流量。
 - 数据库迁移、缓存、对象存储、鉴权和审计能力在 Go 后端中具备等价实现。
-- AI/Agent、LLM、OCR 和数学求解质量能力不沿旧 Python 实现迁移；相关 API 仅保留明确的 TODO/占位接口，待独立新架构设计后再实现。
+- AI/Agent、LLM、OCR 和数学求解质量能力不沿旧 Python 实现迁移；P6 已先接入 Go/Eino 会话导师 Agent、画像 Agent、错因诊断 Agent、数学等价判定 Agent、题目解析 Agent 和后台 LLM/Agent 配置闭环，OCR 和更完整的通用数学求解仍需继续实现。
 - 旧 Python 服务已按用户确认从当前工作区删除。
 
 ### 2.2 非目标
@@ -54,7 +54,7 @@
 - 不在未冻结 API 契约前改变前端请求路径和响应结构。
 - 不在缺少数据备份和回滚方案时修改生产数据库结构。
 - 不把临时兼容代码视为最终架构。
-- 不在本轮迁移旧 Python AI/Agent/OCR/LLM 工作流；相关接口只保留可识别的 TODO/占位响应。
+- 不在本轮迁移旧 Python AI/Agent/OCR/LLM 工作流；已落地的 Eino Tutor/Portrait/Diagnostician/Math Solver/Question Parser Agent 仅代表新架构首批能力，不能视为完整 AI 工作流完成。
 
 ---
 
@@ -218,7 +218,7 @@ backend-go/
 | P3 鉴权与用户域 | DONE | 迁移认证、用户、密码、权限基础能力 | `/auth`、用户上下文、管理员初始化 | 12.4 |
 | P4 核心学习域 | IN_PROGRESS | 迁移会话、练习、错题、进度、画像 | `/session`、`/exercise`、`/mistakes`、`/progress`、`/portrait` | 12.5 |
 | P5 内容与教学管理域 | DONE | 迁移题库、资源、班级、教师统计、知识点 | `/questions`、`/resources`、`/classes`、`/teacher`、`/admin/knowledge` | 12.6 |
-| P6 AI and Agent capabilities | IN_PROGRESS | Integrate the new Eino-based AI/Agent architecture and remove explicit TODO/placeholders incrementally | Eino Tutor Agent, LLM config, Agent config, question parsing, diagnosis and portrait agents | 12.7 |
+| P6 AI and Agent capabilities | IN_PROGRESS | Integrate the new Eino-based AI/Agent architecture and remove explicit TODO/placeholders incrementally | Eino Tutor/Portrait/Diagnostician/Math Solver/Question Parser Agent and admin LLM/Agent config loop wired; OCR and broader math tools pending | 12.7 |
 | P7 集成与运维域 | IN_PROGRESS | 迁移西电集成、上传、系统设置、安全日志、监控和管理员辅助能力 | `/xidian`、`/upload`、`/admin/settings`、`/admin/security-logs`、`/admin/inbox`、`/admin/stats`、`/metrics` | 12.8 |
 | P8 静态契约验证与用户验收交接 | DONE | 保留 Go 静态契约守卫，运行时双跑和业务验收由用户自行执行 | Contract tests、用户验收交接记录 | 12.9 |
 | P9 流量切换与 Python 下线 | DONE | 切换默认生产入口并删除旧 Python 后端目录 | 部署配置、下线记录、删除清单 | 12.10 |
@@ -330,22 +330,32 @@ backend-go/
 
 目标：
 
-- 本轮非 AI 迁移不承接旧 Python LLM provider、模型、Agent 配置管理实现。
-- 本轮仅保留 Go 侧接口边界和明确 TODO/占位响应，避免静默回落 Python。
-- 后续如恢复 AI/Agent 能力，必须先建立 Go 侧或独立服务的全新 AI 调用抽象，隐藏 provider 差异。
-- 后续如恢复数学求解、答案等价判断、诊断、教学反馈能力，必须明确 LangGraph/SymPy 的替代、重写或临时桥接方案。
+- 不承接旧 Python LLM provider、模型、Agent 配置管理实现，也不回退到 legacy LangGraph/LiteLLM/SymPy/OCR 工作流。
+- 已落地 Go/Eino 会话 Tutor Agent：`/session/{id}/chat` 优先读取持久化 `tutor` Agent 配置调用 Eino ADK Tutor Agent；没有后台配置时再使用 `EINO_ENABLED=true`、`EINO_API_KEY`、`EINO_MODEL` 兼容配置；未配置或调用失败时保持明确降级回复。
+- 已落地 Go/Eino 画像 Portrait Agent：`/portrait/generate` 优先读取持久化 `portrait` Agent 配置调用 Eino ADK Portrait Agent；没有后台配置、模型不可用或生成空内容时保留模板画像降级。
+- 已落地 Go/Eino 数学等价判定 Math Solver Agent：`/exercise/submit` 对文本答案优先读取持久化 `math_solver` Agent 配置生成结构化答案比较；没有后台配置、模型不可用、JSON 格式无效或置信度不合规时保留本地规范化比较降级。
+- 已落地 Go/Eino 错因诊断 Diagnostician Agent：`/exercise/submit` 对错误答案优先读取持久化 `diagnostician` Agent 配置生成结构化 C/P/L/S-Type 诊断；没有后台配置、模型不可用、JSON 格式无效或生成空内容时保留本地基础诊断降级。
+- 已落地 Go/Eino 题目解析 Question Parser Agent：`/questions/ai-parse` 优先读取持久化 `question_parser` Agent 配置抽取题目候选；没有后台配置、模型不可用、JSON 格式无效或必填字段缺失时保留确定性形状兼容解析降级。
+- `/admin/ai-config/*` 已实现管理员鉴权后的 provider/model/Agent 配置闭环，支持 provider/model CRUD、provider test、模型拉取、provider 模型列表替换和 Agent 配置 CRUD；前端 AI 模型设置页已具备后端闭环。
+- OCR 和更完整的通用数学求解能力仍需继续用 Go 侧或明确批准的独立服务实现。
 
 原则：
 
-- 可以在迁移期保留 Python 服务作为对照或双跑参考。
-- 最终线上业务能力必须由 Go 后端或明确批准的非 Python 独立服务承载。
+- 旧 Python 服务已从当前工作区删除，禁止把 legacy Python 作为运行时回退。
+- 最终线上业务能力必须由 Go 后端或明确批准的独立服务承载。
 - 所有临时桥接都必须记录退出条件。
+- 每一个 AI slice 都必须同步更新接口边界、验收证据和剩余风险。
 
 验收标准：
 
-- Agent 配置接口等价。
-- 数学求解和答案判定测试通过。
-- LLM 调用失败、超时、限流、降级路径覆盖。
+- Eino Tutor Agent 配置校验、会话历史拼接、附件上下文和未配置降级路径测试通过。
+- Eino Portrait Agent 配置选择、画像 prompt 构造、模板降级路径和保存路径测试通过。
+- Eino Math Solver Agent 配置选择、答案比较 prompt 构造、结构化 JSON 解析、置信度校验和本地比较降级路径测试通过。
+- Eino Diagnostician Agent 配置选择、诊断 prompt 构造、结构化 JSON 解析、taxonomy 校验和本地降级路径测试通过。
+- Eino Question Parser Agent 配置选择、题目解析 prompt 构造、结构化 JSON 解析、必填字段校验和确定性解析降级路径测试通过。
+- LLM provider/model CRUD、provider test/fetch、Agent 配置 CRUD 与前端 AI 模型设置页联通。
+- Agent 配置可被运行时选择使用，而不是仅依赖 `EINO_*` 单组环境变量。
+- OCR、通用数学求解和教学反馈 Agent 的正常路径、失败路径、超时、限流、降级路径测试通过。
 
 ### P7 集成与运维域
 
@@ -403,17 +413,17 @@ backend-go/
 | P1 | `/auth` | DONE | Go P3 已承接登录、注册、刷新、登出、当前用户、修改密码、注册状态、忘记密码公开申请/状态查询 |
 | P1 | `/admin/users` | DONE | Go P3 追加承接管理员用户统计、列表、创建、更新、状态切换、删除、CSV 导入导出 |
 | P1 | `/admin/settings` | DONE | Go P7 已承接注册开关、通用信息、可导出表、数据库 JSON 导入导出和数据库监控 |
-| P2 | `/session` | DONE | Go P4 已承接会话创建、历史、列表、结束、模式、删除、批删、任务取消和 SSE 形状兼容降级；Agent 流式质量等价留到 P6 |
-| P2 | `/exercise` | DONE | Go P4 已承接下一题、提交答案、题目详情、题目解析；AI OCR/LLM 诊断质量等价留到 P6 |
+| P2 | `/session` | DONE | Go P4 已承接会话创建、历史、列表、结束、模式、删除、批删、任务取消和 SSE 响应；P6 已接入可配置的 Eino Tutor Agent 第一片能力，token 级流式和资源推荐仍待后续 slice |
+| P2 | `/exercise` | DONE | Go P4 已承接下一题、提交答案、题目详情、题目解析；P6 已接入可配置 Eino Math Solver 和 Diagnostician Agent，本地比较/诊断保留为降级；OCR 留到 P6 后续 |
 | P2 | `/mistakes` | DONE | Go P4 已承接列表、统计、详情、标记掌握、删除和复习推荐 |
 | P2 | `/progress` | DONE | Go P4 首轮已承接 overview、mastery、statistics、path、knowledge-graph、class-ranking、chapters |
-| P2 | `/portrait` | DONE | Go P4 已承接读取、清除和模板画像生成；LLM 画像质量等价留到 P6 AI 能力收敛 |
-| P3 | `/questions` | DONE | Go P5 已承接题目 CRUD、列表/分组/统计、批量发布/删除/复制、批量导入；`/ai-parse` 先提供非 LLM 形状兼容占位，质量等价留到 P6 |
+| P2 | `/portrait` | DONE | Go P4 已承接读取、清除和模板画像生成；P6 已接入可配置的 Eino Portrait Agent，模型不可用时保留模板画像降级 |
+| P3 | `/questions` | DONE | Go P5 已承接题目 CRUD、列表/分组/统计、批量发布/删除/复制、批量导入；P6 已接入可配置 Eino Question Parser Agent，确定性解析保留为降级；`/generate-isomorphic` 已有本地 solver 校验模板，通用求解仍留到 P6 |
 | P3 | `/resources` | DONE | Go P5 已承接资源列表、详情、创建、更新、软删除、统计、收藏列表和收藏切换；资源文件上传已由 P7 `/upload` 承接 |
 | P3 | `/classes` | DONE | Go P5 已承接教师创建/列表/详情/移除学生/解散班级，以及学生查询、加入、退出、当前班级 |
 | P3 | `/teacher` | DONE | Go P5 已承接教师工作台统计、学生管理统计、教师数据分析、班级分析和教师视角学生详情 |
 | P3 | `/admin/knowledge` | DONE | Go P5 已承接知识节点/关系 CRUD、分页筛选、章节、简要节点列表和统计 |
-| P4 | `/admin/ai-config` | TODO | AI 配置；Go 已注册管理员鉴权的 501 `AI_CONFIG_TODO` 占位接口，完整 LLM provider/model/Agent 配置需纳入全新 AI/Agent 架构设计后再实现 |
+| P4 | `/admin/ai-config` | DONE | AI 配置；Go 已承接 provider/model/Agent 配置、provider test/fetch、模型列表替换和运行时 Tutor/Portrait/Diagnostician/Math Solver/Question Parser 配置选择；后续 OCR 与通用求解仍留在 P6 |
 | P5 | `/xidian` | DONE | Go P7 已承接绑定状态、验证码挑战、绑定完成、解绑、课表/考试/成绩同步和快照读取；外部门户 live 验证留到有西电凭证的集成环境 |
 | P5 | `/upload` | DONE | Go P7 已承接图片上传、教师资源文件上传、本地 `/uploads` 文件落盘、S3 兼容对象存储和七牛云对象存储适配；2026-06-01 起图片上传要求登录、增加用户/IP 速率限制、按真实图片内容校验，本地 `/uploads` 禁止目录索引 |
 | P5 | `/admin/security-logs` | DONE | Go P7 已承接列表筛选/分页/日期分组、统计、删除、JSON/CSV 导出、归档、每日报告、清理和容量查询 |
@@ -490,12 +500,13 @@ pytest
 |------|------|------|----------|----------|
 | R1 | API 文档与实际 FastAPI 路由存在差异 | 前端兼容失败 | OPEN | P0 导出实际 OpenAPI 并冻结真实契约 |
 | R2 | SQLAlchemy 模型语义迁移到 Go 后丢失隐含默认值 | 数据不一致 | OPEN | Repository 测试覆盖默认值、枚举、级联行为 |
-| R3 | LangGraph/SymPy 能力在 Go 中无直接等价实现 | AI 功能延期 | ACCEPTED | 本轮明确排除旧 Python AI/Agent/OCR/LLM 工作流；P6 单独 ADR，任何临时双跑或桥接必须定义退出条件 |
+| R3 | LangGraph/SymPy 能力在 Go 中无直接等价实现 | AI 功能延期 | ACCEPTED | 本轮明确排除旧 Python AI/Agent/OCR/LLM 工作流；P6 改走 Eino 新架构，当前 Tutor/Portrait/Diagnostician/Math Solver/Question Parser Agent 首片已落地，OCR 和通用求解仍需后续 slice |
 | R4 | JWT/Cookie 兼容不完整 | 用户登录失效 | MITIGATED | P3 已实现 Python 兼容 JWT claims、HMAC 算法校验、refresh token HttpOnly Cookie 行为和轮换测试；后续 P8 继续做 Python/Go 双跑契约验证 |
 | R5 | Alembic 历史与 Go 迁移工具并存 | 迁移历史混乱 | MITIGATED | P2 已生成 Go 单步初始 schema；后续生产迁移由 Go runner 负责；legacy Alembic 源码已随 `backend/` 清理，需从 git 历史查看 |
 | R6 | 上传文件路径或对象存储 key 改变 | 历史资源不可访问 | MITIGATED | P7 `/upload` 已保持 `images/`、`videos/`、`documents/` key 规则和本地 `/uploads/{key}` 访问路径，并补充本地/S3/七牛适配测试；P8 继续做历史文件访问回归 |
 | R7 | 缺少 git 元数据时无法做变更边界检查 | 并行任务冲突风险增加 | OPEN | 修改前后记录文件清单，避免触碰无关文件 |
-| R8 | 默认入口已切到 Go，但 TODO 或未知 `/api/v1/*` 接口会收到占位响应 | AI 配置或非基线接口不可用 | MITIGATED | 非 AI Python v1 路由已按清单迁移；`/admin/ai-config` 已注册管理员鉴权 501 `AI_CONFIG_TODO` 占位；未迁移接口禁止静默回落 Python |
+| R8 | 默认入口已切到 Go，但 TODO 或未知 `/api/v1/*` 接口会收到占位响应 | AI 配置或非基线接口不可用 | MITIGATED | 非 AI Python v1 路由已按清单迁移；`/admin/ai-config` 已承接 provider/model/Agent 配置；`/session/{id}/chat` 和 `/portrait/generate` 可读取持久化 Agent 配置或 `EINO_*` 兼容配置调用 Eino Agent；未迁移接口禁止静默回落 Python |
+| R10 | 前端 AI 模型设置页功能完整度高于 Go 后端能力 | 管理员以为可配置 LLM/Agent，但请求返回 501 | MITIGATED | P6 已实现 provider/model/Agent 配置 CRUD、provider test/fetch、凭据 Fernet 加密存储和 Tutor/Portrait/Diagnostician/Math Solver/Question Parser 运行时配置注入；剩余风险转为 OCR 与通用求解未完成 |
 | R9 | 当前机器未配置可连接 PostgreSQL 测试库且 Docker CLI 不可用 | P2 数据库迁移/Repository 集成验收不能在本机闭环 | CLOSED | 已使用本地 PostgreSQL `math_platform` 执行清库、Go 迁移、重复迁移和迁移集成测试；Docker CLI 仍不可用但不阻塞 P2 |
 
 ---
@@ -507,7 +518,7 @@ pytest
 | ADR-001 | 2026-04-18 | Go HTTP router 选择 `net/http` `ServeMux` | DONE | P1 使用标准库，避免框架迁移期额外抽象 |
 | ADR-002 | 2026-04-18 | Go 数据访问方式选择 `pgx/v5` + `go-redis/v9` | DONE | P1 先建立连接和健康检查；Repository 在 P2 补齐 |
 | ADR-003 | 2026-04-18 | 从 Python Alembic head 生成 Go 单步初始 schema，后续由 Go forward migration runner 承接 | DONE | `0001_initial_schema.up.sql` 由临时库执行 Alembic 至 `0019_performance_indexes_phase3` 后 `pg_dump` 生成；包含表、枚举、索引、外键和种子数据；`go_schema_migrations` 记录 Go 迁移状态 |
-| ADR-004 | 2026-05-08 | AI/Agent uses a new Eino architecture instead of bridging legacy Python LangGraph/LiteLLM workflows | IN_PROGRESS | /goal is set to complete Eino agent framework integration and remove TODOs; first slice wires Session Tutor Agent, next slices cover admin config, question parsing, diagnosis, portrait, OCR and math tools |
+| ADR-004 | 2026-05-08 | AI/Agent uses a new Eino architecture instead of bridging legacy Python LangGraph/LiteLLM workflows | IN_PROGRESS | First slices wire Session Tutor Agent, Portrait Agent, Diagnostician Agent, Math Solver Agent, Question Parser Agent, admin provider/model/Agent config, encrypted provider keys, provider test/fetch and runtime selection; LLM/Agent is not complete because OCR and broader math tools remain pending |
 | ADR-005 | 2026-04-18 | 默认启动和 Nginx 分流先切到 Go | DONE | Python 代码保留为迁移参考，不再由默认启动、compose、Nginx split routing 承流 |
 | ADR-006 | 2026-04-18 | P3 JWT 兼容层使用标准库 HMAC 实现，不引入额外 JWT 框架 | DONE | Go 侧显式验证 `alg`、`iss`、`aud`、`exp`、`iat`、`jti` 和 `type`，生成与 Python PyJWT 兼容的 HS256/HS384/HS512 token；密码哈希使用 `bcrypt` 保持兼容 |
 
@@ -587,10 +598,10 @@ pytest
 - Start date: 2026-05-08 (Go 501 placeholders were added on 2026-05-06; Eino framework integration started on 2026-05-08 under /goal)
 - Completion date: TODO
 - Owner: Codex
-- Verification commands: gofmt targeted Go files; go test ./internal/platform/config ./internal/application/session ./internal/adapter/llm/einoagent ./tests/contract -count=1; go test ./tests/contract -run TestRemainingAIBoundariesStayExplicit -count=1; go test ./tests/contract -run TestSessionChatWiresEinoAgentRuntime -count=1; go test ./tests/contract -run TestGoBackendDoesNotWireLegacyAIWorkflowStacks -count=1; go vet ./internal/platform/config ./internal/application/session ./internal/adapter/llm/einoagent; go mod tidy; go test ./cmd/api ./internal/... -count=1
-- Verification results: /goal is set to complete Eino agent framework integration and remove TODOs. Added EINO_* runtime config, Eino ADK Tutor Agent adapter, Session ChatAgent abstraction, and /session/{id}/chat Eino-first path. Config, session, Eino adapter, AI boundary contracts, cmd/api, and all internal/... tests passed. go vet passed for touched packages. Full go test ./tests/contract -count=1 remains blocked by the pre-existing backend/ directory through TestLegacyPythonBackendDirectoryIsAbsent, not by this Eino change.
-- Deliverables: backend-go/internal/adapter/http/adminaiconfig/; backend-go/internal/adapter/llm/einoagent/; backend-go/tests/contract/ai_boundary_surface_test.go; backend-go/internal/application/question/service.go; backend-go/internal/application/session/service.go; backend-go/internal/application/portrait/service.go; backend-go/internal/application/exercise/service.go; backend-go/internal/platform/config/config.go; backend-go/cmd/api/main.go; .env.example
-- Residual risks: LLM provider/model CRUD, provider test/fetch, Agent config CRUD, math solving, OCR, answer equivalence, diagnosis and teaching feedback still need follow-up Eino slices. The Go backend must not silently fall back to legacy Python.
+- Verification commands: gofmt targeted Go files; GOCACHE=E:\code\msp-go\.gocache go test ./internal/application/exercise ./internal/adapter/llm/einoagent ./cmd/api ./tests/contract -count=1; GOCACHE=E:\code\msp-go\.gocache go test ./internal/application/portrait ./internal/adapter/llm/einoagent ./cmd/api -count=1; GOCACHE=E:\code\msp-go\.gocache go test ./internal/application/adminaiconfig ./internal/adapter/http/adminaiconfig ./internal/adapter/llm/einoagent ./internal/application/session ./internal/application/portrait ./internal/adapter/postgres ./cmd/api ./tests/contract -count=1; GOCACHE=E:\code\msp-go\.gocache go test ./... -count=1; GOCACHE=E:\code\msp-go\.gocache go vet ./...; pnpm.cmd run build in frontend; earlier slice also ran go test ./internal/platform/config ./internal/application/session ./internal/adapter/llm/einoagent ./tests/contract -count=1; go mod tidy; go test ./cmd/api ./internal/... -count=1
+- Verification results: Added EINO_* runtime config, Eino ADK Tutor Agent adapter, Session ChatAgent abstraction, /session/{id}/chat Eino-first path, provider/model/Agent config service, PostgreSQL adapter, admin HTTP routes, provider test/fetch, Fernet-protected provider API keys, Tutor runtime selection from persisted `tutor` Agent config, Portrait runtime selection from persisted `portrait` Agent config with template fallback, Diagnostician runtime selection from persisted `diagnostician` Agent config with local diagnosis fallback, Math Solver runtime selection from persisted `math_solver` Agent config with local answer-check fallback, and Question Parser runtime selection from persisted `question_parser` Agent config with deterministic parse fallback. Config, session, portrait, exercise, question, Eino adapter, admin AI config application/HTTP/Postgres, AI boundary contracts, cmd/api, targeted contract tests, full Go test suite, go vet, and frontend build passed. Current 2026-06-29 implementation confirms LLM/Agent management is no longer a 501 placeholder, while OCR and broader math tools remain incomplete.
+- Deliverables: backend-go/internal/application/adminaiconfig/; backend-go/internal/adapter/http/adminaiconfig/; backend-go/internal/adapter/postgres/admin_ai_config_repository.go; backend-go/internal/adapter/llm/einoagent/; backend-go/tests/contract/ai_boundary_surface_test.go; backend-go/tests/contract/route_surface_test.go; backend-go/internal/application/question/service.go; backend-go/internal/application/session/service.go; backend-go/internal/application/portrait/service.go; backend-go/internal/application/exercise/service.go; backend-go/internal/platform/config/config.go; backend-go/cmd/api/main.go; .env.example
+- Residual risks: token-level streaming, broader math solving, OCR and teaching feedback still need follow-up Eino slices; provider test/fetch uses OpenAI-compatible `/v1` endpoints and may need provider-specific adapters for non-compatible vendors. The Go backend must not silently fall back to legacy Python.
 - Design precondition: AI workflows are rebuilt on Eino rather than ported from legacy Python; endpoint boundaries and acceptance evidence must be updated with every slice.
 
 ### 12.8 P7 集成与运维域
@@ -611,7 +622,7 @@ pytest
 - 完成日期：2026-05-07
 - 负责人：Codex
 - 验证命令：`gofmt -w backend-go/tests/contract/response_shape_surface_test.go`、`gofmt -w backend-go/tests/contract/request_shape_surface_test.go`、`gofmt -w backend-go/tests/contract/error_body_surface_test.go`、`gofmt -w backend-go/internal/application/mistake/service.go backend-go/internal/application/mistake/service_test.go backend-go/internal/adapter/http/mistake/handler.go backend-go/internal/adapter/http/mistake/handler_test.go backend-go/tests/contract/response_shape_surface_test.go`、`go test ./internal/application/mistake ./internal/adapter/http/mistake ./tests/contract -count=1`、`go test ./tests/contract -count=1`、`go test ./... -count=1`、`go vet ./...`、`git diff --check -- ...`、`npm install`、`npm run build`
-- 验证结果：新增 route-surface contract test，静态解析 legacy FastAPI `@router.*` 装饰器和 Go `mux.HandleFunc` 注册，逐模块比较非 AI `/api/v1` 路由；`/admin/ai-config` 作为 AI 范围跳过等价实现检查，但要求 Go 存在精确路径和子路径 TODO placeholder。追加 success-status、explicit error-status、error-body、frontend route audit、response-shape 和 request-shape contract tests；覆盖 Go 路由注册、前端 API 调用、稳定错误字段、非 AI 顶层请求/响应字段和 AI TODO 边界。2026-05-07 用户确认运行时双跑和比对由用户自行测试，P8 不再阻塞 Python 后端删除。
+- 验证结果：新增 route-surface contract test，静态解析 legacy FastAPI `@router.*` 装饰器和 Go `mux.HandleFunc` 注册，逐模块比较非 AI `/api/v1` 路由；当时 `/admin/ai-config` 作为 AI 范围跳过等价实现检查，并要求 Go 存在精确路径和子路径 TODO placeholder（2026-06-29 已替换为真实配置路由）。追加 success-status、explicit error-status、error-body、frontend route audit、response-shape 和 request-shape contract tests；覆盖 Go 路由注册、前端 API 调用、稳定错误字段、非 AI 顶层请求/响应字段和 AI TODO 边界。2026-05-07 用户确认运行时双跑和比对由用户自行测试，P8 不再阻塞 Python 后端删除。
 - 交付物链接：`backend-go/tests/contract/route_surface_test.go`、`backend-go/tests/contract/error_body_surface_test.go`、`backend-go/tests/contract/frontend_route_surface_test.go`、`docs/backend-go-migration-completion-audit.md`、`backend-go/internal/application/mistake/service.go`、`backend-go/internal/application/mistake/service_test.go`、`backend-go/internal/adapter/http/mistake/handler.go`、`backend-go/internal/adapter/http/mistake/handler_test.go`、`backend-go/internal/adapter/http/question/handler.go`、`backend-go/internal/adapter/http/knowledge/handler.go`
 - 遗留风险：当前 P8 保留 Go 路由注册、前端 API 覆盖、错误响应字段和 AI TODO 边界等静态守卫。2026-05-07 用户明确确认“不用双跑，不用比对，用户自行测试”，因此真实运行时 smoke、Docker/Compose 实机验证、业务流程回归、性能基线、动态响应细节和外部服务 live 集成不再阻塞 Python 下线，由用户验收承担。前端显式分类清单中的邮箱验证、作业、旧题库导入导出模板和 browser remote log endpoint 不是 legacy Python v1 可迁移接口，仍需产品侧决定删除、隐藏、补新 Go 功能或保持降级。
 
@@ -720,8 +731,8 @@ pytest
 
 - P7 `/upload` 首轮完成：新增 Go upload application service、HTTP handler 和 storage adapter，承接公开图片上传、教师/管理员资源文件上传、本地 `/uploads` 文件落盘、S3 兼容对象存储和七牛云对象存储适配；保持 Python 的 MIME 白名单、10MB 图片限制、500MB 资源文件限制、`images/`、`videos/`、`documents/` key 规则和响应字段；本轮 `go test ./internal/application/upload ./internal/adapter/http/upload ./internal/adapter/storage ./internal/platform/config -count=1`、`go test ./... -count=1` 和 `go vet ./...` 通过。
 - P7 `/xidian` 首轮完成：新增 Go xidian application service、PostgreSQL repository、HTTP handler、Fernet 兼容加密和 IDS/Ehall/Yjspt integration client，承接绑定状态、验证码挑战、绑定完成、解绑、课表/考试/成绩同步和快照读取；保留 Python 的快照降级、`CAPTCHA_REQUIRED`、`NO_SNAPSHOT` 等错误语义；本轮 `go test ./internal/application/xidian ./internal/adapter/http/xidian ./internal/adapter/postgres ./internal/integration/xidian ./internal/platform/secret ./internal/platform/config -count=1`、`go test ./... -count=1` 和 `go vet ./...` 通过；西电门户 live 同步仍需在有真实凭证和网络的集成环境验证。
-- P6 范围调整与 `/admin/ai-config` 占位完成：本轮非 AI 迁移明确不移植旧 Python AI/Agent/OCR/LLM 工作流；新增 Go admin AI config placeholder handler 并接入 `cmd/api`，保留 `/api/v1/admin/ai-config/*` 管理员鉴权接口边界，管理员访问返回 501 `AI_CONFIG_TODO`；本轮 `go test ./internal/adapter/http/adminaiconfig -count=1`、`go test ./... -count=1` 和 `go vet ./...` 通过。
-- P8 双跑与契约验证开始：新增 `backend-go/tests/contract/route_surface_test.go`，静态比较 legacy FastAPI v1 route surface 与 Go `ServeMux` route surface；非 AI 路由表面等价通过，`/admin/ai-config` 要求 Go 保留 TODO placeholder；本轮 `go test ./tests/contract -count=1`、`go test ./... -count=1` 和 `go vet ./...` 通过；P8 仍需请求/响应字段、状态码、数据状态变化、性能和真实双跑验证。
+- P6 范围调整与 `/admin/ai-config` 占位完成：本轮非 AI 迁移明确不移植旧 Python AI/Agent/OCR/LLM 工作流；当时新增 Go admin AI config placeholder handler 并接入 `cmd/api`，保留 `/api/v1/admin/ai-config/*` 管理员鉴权接口边界，管理员访问返回 501 `AI_CONFIG_TODO`；本轮 `go test ./internal/adapter/http/adminaiconfig -count=1`、`go test ./... -count=1` 和 `go vet ./...` 通过。2026-06-29 该占位已被 provider/model/Agent 配置闭环替换。
+- P8 双跑与契约验证开始：新增 `backend-go/tests/contract/route_surface_test.go`，静态比较 legacy FastAPI v1 route surface 与 Go `ServeMux` route surface；非 AI 路由表面等价通过，当时 `/admin/ai-config` 要求 Go 保留 TODO placeholder（2026-06-29 已更新为真实路由存在性检查）；本轮 `go test ./tests/contract -count=1`、`go test ./... -count=1` 和 `go vet ./...` 通过；P8 仍需请求/响应字段、状态码、数据状态变化、性能和真实双跑验证。
 - P8 前端 API 覆盖审计追加：新增 `backend-go/tests/contract/frontend_route_surface_test.go`，静态提取前端 `apiClient`、`axios`、`fetch`、`createSSEConnection` 和默认 remote log endpoint，要求所有前端 API 调用被 Go 路由覆盖或显式分类；当前分类清单记录邮箱验证、作业管理、旧题库导入导出模板和 browser remote log endpoint 为 legacy Python v1 不存在的前端侧遗留/未实现路径；本轮 `go test ./tests/contract -count=1`、`go test ./... -count=1` 和 `go vet ./...` 通过。
 - P8 成功状态码契约追加：新增 `backend-go/tests/contract/status_surface_test.go`，静态比较 legacy FastAPI decorator 成功状态码和 Go handler 成功状态码，覆盖非 AI 路由的 200/201/204 等成功响应状态；本轮 `go test ./tests/contract -count=1`、`go test ./... -count=1` 和 `go vet ./...` 通过，后续仍需错误状态/错误码、响应字段、数据状态变化和真实双跑验证。
 - P8 显式错误状态码契约追加：新增 `backend-go/tests/contract/error_status_surface_test.go`，静态比较 legacy route body 中显式 `HTTPException(status_code=...)` 与 Go handler/helper 暴露的错误状态；修复 Go `/questions/{id}` 详情/更新/删除对 `ErrBadRequest` 的 400 映射，以及 `/admin/knowledge/nodes/{id}` 删除对 `ErrBadRequest` 的 400 映射；本轮 `go test ./tests/contract -count=1`、`go test ./internal/adapter/http/question ./internal/adapter/http/knowledge -count=1`、`go test ./... -count=1` 和 `go vet ./...` 通过，后续仍需错误码/错误响应字段、响应字段、数据状态变化和真实双跑验证。
@@ -769,3 +780,27 @@ pytest
 - 验证结果：Go 全量测试和 vet 通过；`go version` 返回 `go1.25.10 windows/amd64`；`govulncheck` 报告代码路径 0 个漏洞；前端 157 个 Vitest 测试通过；生产构建通过，保留既有 Vite large chunk 警告；npm full/prod audit 均为 0 漏洞。
 - 交付物链接：`backend-go/internal/adapter/http/upload/`、`backend-go/internal/application/upload/`、`backend-go/internal/platform/httpserver/`、`backend-go/internal/platform/middleware/middleware.go`、`backend-go/internal/platform/config/config.go`、`backend-go/migrations/0001_initial_schema.up.sql`、`frontend/src/modules/xidian/`、`frontend/src/pages/common/ProfilePage.tsx`、`frontend/nginx.conf`、`frontend/package.json`、`frontend/package-lock.json`、`backend-go/go.mod`、`backend-go/Dockerfile`。
 - 遗留风险：上传速率限制为进程内本地限制，横向扩容时仍建议接 Redis/网关级限流；`/metrics` 和 `/health/detailed` 的实际生产可达性还需按部署网络与 `MANAGEMENT_ALLOWED_CIDRS` 做 smoke；HSTS 仍应在最终 HTTPS 入口启用并验证。
+
+### 2026-06-28
+
+- P6 AI/Agent 文档审计完成：复核 `backend-go/internal/adapter/llm/einoagent/`、`backend-go/internal/application/session/`、`backend-go/internal/adapter/http/adminaiconfig/`、`backend-go/internal/application/question/`、`backend-go/internal/application/exercise/`、`backend-go/internal/application/portrait/`、`frontend/src/modules/ai-config/` 和 `frontend/src/pages/admin/AIModelSettingsPage.tsx`。结论：`/session/{id}/chat` 已具备 `EINO_*` 环境变量驱动的 Eino Tutor Agent 第一片实现，但整体 LLM/Agent 功能尚未完善。
+- 当时确认的未完成项：`/admin/ai-config/*` 后端仍为 501 `AI_CONFIG_TODO`，前端渠道/模型/Agent 配置页尚未后端闭环；Tutor Agent 尚未从持久化 Agent 配置中选择模型；题目 LLM 解析、诊断 Agent、画像 Agent、OCR、数学等价判定、通用数学求解和 token 级流式输出仍需后续 P6 slice。2026-06-29 已完成其中的 admin AI config、Tutor 持久化配置闭环、Portrait 运行时配置闭环、Diagnostician 运行时配置闭环、Math Solver 等价判定闭环与 Question Parser 题目解析闭环。
+- 文档更新：README 和本文档已从“AI 全部 TODO”修正为“Eino Tutor Agent 已接入但 LLM/Agent 管理和 AI 质量能力未完善”，并新增 R10 风险记录前端 AI 配置页与 Go 后端能力不一致。
+- 验证命令：`go test ./internal/platform/config ./internal/application/session ./internal/adapter/llm/einoagent ./tests/contract -count=1`。
+- 验证结果：上述定向 Go 测试通过，覆盖 Eino 配置校验、Session ChatAgent 抽象、Eino adapter 消息转换和 AI 边界契约。
+- 交付物链接：`README.md`、`docs/backend-python-to-go-refactor.md`。
+- 遗留风险：本次仅做审计和文档更新，未实现新的 AI 后端能力；P6 仍需按上方未完成项继续拆分交付。
+
+### 2026-06-29
+
+- P6 admin LLM/Agent 配置闭环完成：新增 `backend-go/internal/application/adminaiconfig/`、`backend-go/internal/adapter/postgres/admin_ai_config_repository.go`，并将 `backend-go/internal/adapter/http/adminaiconfig/` 从 501 placeholder 替换为真实 provider/model/Agent 配置路由。支持 provider/model CRUD、provider test、OpenAI-compatible 模型拉取、provider 模型列表替换、Agent 配置 CRUD 和管理员鉴权错误映射。
+- Tutor 运行时选择完成：`backend-go/internal/adapter/llm/einoagent/` 新增可配置 Tutor Agent，`backend-go/cmd/api/main.go` 接入 `adminaiconfig.Service`，`/session/{id}/chat` 优先读取持久化 `tutor` Agent 配置，未配置时兼容 `EINO_*` 环境变量；模型调用失败时保存用户消息并返回明确降级回复。
+- Portrait 运行时选择完成：`backend-go/internal/application/portrait/` 新增可选 `Generator` 抽象，`backend-go/internal/adapter/llm/einoagent/` 新增可配置 Portrait Agent，`/portrait/generate` 优先读取持久化 `portrait` Agent 配置，未配置、模型不可用或生成空内容时回退到模板画像并继续保存。
+- Diagnostician 运行时选择完成：`backend-go/internal/application/exercise/` 新增可选 `Diagnostician` 抽象，`backend-go/internal/adapter/llm/einoagent/` 新增可配置 Diagnostician Agent，`/exercise/submit` 对错误答案优先读取持久化 `diagnostician` Agent 配置，模型不可用、JSON 格式无效或 taxonomy 不匹配时回退到本地 C/P/L/S-Type 基础诊断。
+- Math Solver 运行时选择完成：`backend-go/internal/application/exercise/` 新增 `MathSolver`/`SolverAnswerChecker` 抽象，`backend-go/internal/adapter/llm/einoagent/` 新增可配置 Math Solver Agent，`/exercise/submit` 对文本答案优先读取持久化 `math_solver` Agent 配置做结构化等价判定，模型不可用、JSON 格式无效或置信度不合规时回退本地规范化比较。
+- Question Parser 运行时选择完成：`backend-go/internal/application/question/` 新增可选 `Parser` 抽象，`backend-go/internal/adapter/llm/einoagent/` 新增可配置 Question Parser Agent，`/questions/ai-parse` 优先读取持久化 `question_parser` Agent 配置抽取题目候选，模型不可用、JSON 格式无效或必填字段缺失时回退确定性形状兼容解析。
+- 契约更新：`backend-go/tests/contract/route_surface_test.go` 不再要求 `/admin/ai-config` 保留 TODO 占位，`backend-go/tests/contract/ai_boundary_surface_test.go` 改为守住 admin AI config 真路由、Tutor/Portrait/Diagnostician/Math Solver/Question Parser 可配置运行时，同时继续禁止 legacy Python AI workflow 栈。
+- 验证命令：`gofmt -w ...`；`GOCACHE=E:\code\msp-go\.gocache go test ./internal/application/exercise ./internal/adapter/llm/einoagent ./cmd/api ./tests/contract -count=1`；`GOCACHE=E:\code\msp-go\.gocache go test ./internal/application/portrait ./internal/adapter/llm/einoagent ./cmd/api -count=1`；`GOCACHE=E:\code\msp-go\.gocache go test ./internal/application/adminaiconfig ./internal/adapter/http/adminaiconfig ./internal/adapter/llm/einoagent ./internal/application/session ./internal/application/portrait ./internal/adapter/postgres ./cmd/api ./tests/contract -count=1`；`GOCACHE=E:\code\msp-go\.gocache go test ./... -count=1`；`GOCACHE=E:\code\msp-go\.gocache go vet ./...`；`pnpm.cmd run build`（frontend）。
+- 验证结果：上述定向 Go 测试、全量 Go 测试、go vet 和前端构建通过，覆盖 admin AI config 应用层校验、HTTP 路由、Eino Tutor/Portrait/Diagnostician/Math Solver/Question Parser 配置选择、画像/诊断/判题/题目解析 prompt 构造、结构化诊断/判题/题目解析 JSON 校验、Session 降级、Exercise 判题与诊断降级、Question 解析降级、Postgres adapter 编译和 AI/route 契约。
+- 交付物链接：`backend-go/internal/application/adminaiconfig/`、`backend-go/internal/adapter/http/adminaiconfig/`、`backend-go/internal/adapter/postgres/admin_ai_config_repository.go`、`backend-go/internal/adapter/llm/einoagent/agent.go`、`backend-go/internal/application/session/service.go`、`backend-go/internal/application/portrait/service.go`、`backend-go/internal/application/exercise/service.go`、`backend-go/internal/application/question/service.go`、`backend-go/cmd/api/main.go`、`backend-go/tests/contract/ai_boundary_surface_test.go`、`backend-go/tests/contract/route_surface_test.go`、`README.md`。
+- 遗留风险：provider test/fetch 当前按 OpenAI-compatible `/v1` 端点实现，非兼容 provider 需要后续适配；token 级流式、OCR 和更完整的通用数学求解仍未完成。

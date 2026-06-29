@@ -258,6 +258,7 @@ export const AgentTypes = {
   TUTOR: 'tutor',
   DIAGNOSTICIAN: 'diagnostician',
   PORTRAIT: 'portrait',
+  QUESTION_PARSER: 'question_parser',
 } as const;
 
 export type AgentType = (typeof AgentTypes)[keyof typeof AgentTypes];
@@ -270,6 +271,7 @@ export const AgentTypeDisplayNames: Record<AgentType, string> = {
   [AgentTypes.TUTOR]: '导师智能体',
   [AgentTypes.DIAGNOSTICIAN]: '诊断智能体',
   [AgentTypes.PORTRAIT]: '学生画像',
+  [AgentTypes.QUESTION_PARSER]: '题目解析智能体',
 };
 
 /**

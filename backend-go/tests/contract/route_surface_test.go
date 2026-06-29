@@ -17,7 +17,6 @@ type route struct {
 type routeModule struct {
 	Name          string
 	GoHandlerFile string
-	AIPlaceholder bool
 }
 
 var routeModules = []routeModule{
@@ -39,7 +38,7 @@ var routeModules = []routeModule{
 	{Name: "/admin/security-logs", GoHandlerFile: "backend-go/internal/adapter/http/securitylog/handler.go"},
 	{Name: "/admin/knowledge", GoHandlerFile: "backend-go/internal/adapter/http/knowledge/handler.go"},
 	{Name: "/admin/inbox", GoHandlerFile: "backend-go/internal/adapter/http/admininbox/handler.go"},
-	{Name: "/admin/ai-config", GoHandlerFile: "backend-go/internal/adapter/http/adminaiconfig/handler.go", AIPlaceholder: true},
+	{Name: "/admin/ai-config", GoHandlerFile: "backend-go/internal/adapter/http/adminaiconfig/handler.go"},
 }
 
 var (
@@ -54,11 +53,6 @@ func TestGoRouteModulesAreRegistered(t *testing.T) {
 	for _, module := range routeModules {
 		t.Run(module.Name, func(t *testing.T) {
 			goRoutes := extractGoRoutes(t, filepath.Join(root, module.GoHandlerFile))
-
-			if module.AIPlaceholder {
-				assertAIPlaceholder(t, goRoutes)
-				return
-			}
 
 			if len(goRoutes) == 0 {
 				t.Fatalf("Go handler %s registered no routes", module.GoHandlerFile)
@@ -133,14 +127,6 @@ func matchingParen(source string, openIndex int) int {
 		}
 	}
 	return -1
-}
-
-func assertAIPlaceholder(t *testing.T, routes []route) {
-	t.Helper()
-	routeSet := routeKeys(routes)
-	if !routeSet["* "] || !routeSet["* /"] {
-		t.Fatalf("AI config must preserve exact and subtree TODO placeholders, got %v", sortedKeys(routeSet))
-	}
 }
 
 func routeKeys(routes []route) map[string]bool {

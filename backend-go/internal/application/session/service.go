@@ -328,12 +328,15 @@ func (s *Service) generateAssistant(ctx context.Context, input ChatAgentInput) (
 	if s.agent == nil {
 		return ChatAgentOutput{
 			Agent:   "tutor",
-			Content: "Eino 智能体尚未启用；你的消息已保存。请在后端配置 EINO_ENABLED、EINO_API_KEY 和 EINO_MODEL 后恢复智能导师回复。",
+			Content: "智能导师尚未配置；你的消息已保存。请管理员在 AI 模型设置中配置导师智能体，或在后端配置 EINO_ENABLED、EINO_API_KEY 和 EINO_MODEL 后恢复回复。",
 		}, nil
 	}
 	output, err := s.agent.Generate(ctx, input)
 	if err != nil {
-		return ChatAgentOutput{}, err
+		return ChatAgentOutput{
+			Agent:   "tutor",
+			Content: "智能导师暂时不可用；你的消息已保存。请稍后重试，或联系管理员检查导师智能体模型配置。",
+		}, nil
 	}
 	if output.Agent == "" {
 		output.Agent = "tutor"

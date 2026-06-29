@@ -106,6 +106,47 @@ func TestParseQuestionsBuildsShapeCompatibleFallback(t *testing.T) {
 	}
 }
 
+func TestParseQuestionsUsesConfiguredParser(t *testing.T) {
+	parser := &fakeParser{response: AIParseResponse{Questions: []AIParseQuestionItem{{
+		Title:         "导数计算",
+		Body:          "求 $x^2$ 的导数",
+		Type:          "short_answer",
+		Difficulty:    1.5,
+		Answer:        "2x",
+		AnswerType:    "expression",
+		Hints:         []string{"使用幂函数求导"},
+		SolutionSteps: []string{"应用公式"},
+		Tags:          []string{" 导数 "},
+	}}}}
+	service := newTestService(&fakeQuestionRepo{}, time.Now(), WithParser(parser))
+
+	response, err := service.ParseQuestions(context.Background(), []string{"导数题"})
+	if err != nil {
+		t.Fatalf("ParseQuestions() error = %v", err)
+	}
+	if !parser.called || len(parser.input.RawTexts) != 1 || parser.input.Fallback.Questions[0].Title != "导数题" {
+		t.Fatalf("parser called=%v input=%#v", parser.called, parser.input)
+	}
+	if len(response.Questions) != 1 || response.Questions[0].Title != "导数计算" || response.Questions[0].Difficulty != 1 {
+		t.Fatalf("response = %#v", response)
+	}
+	if len(response.Questions[0].Tags) != 1 || response.Questions[0].Tags[0] != "导数" {
+		t.Fatalf("tags = %#v", response.Questions[0].Tags)
+	}
+}
+
+func TestParseQuestionsFallsBackWhenParserFails(t *testing.T) {
+	service := newTestService(&fakeQuestionRepo{}, time.Now(), WithParser(&fakeParser{err: errors.New("model unavailable")}))
+
+	response, err := service.ParseQuestions(context.Background(), []string{"# 极限题\n求极限"})
+	if err != nil {
+		t.Fatalf("ParseQuestions() error = %v", err)
+	}
+	if len(response.Questions) != 1 || response.Questions[0].Title != "极限题" || response.Questions[0].Answer != "" {
+		t.Fatalf("response = %#v", response)
+	}
+}
+
 func TestGenerateIsomorphicProblemBuildsValidatedIntegralVariant(t *testing.T) {
 	service := newTestService(&fakeQuestionRepo{}, time.Now())
 	difficulty := 0.75
@@ -137,13 +178,29 @@ func TestNewServiceRejectsNilRepository(t *testing.T) {
 	}
 }
 
-func newTestService(repo Repository, now time.Time) *Service {
-	service, err := NewService(repo)
+func newTestService(repo Repository, now time.Time, options ...Option) *Service {
+	service, err := NewService(repo, options...)
 	if err != nil {
 		panic(err)
 	}
 	service.now = func() time.Time { return now }
 	return service
+}
+
+type fakeParser struct {
+	response AIParseResponse
+	input    ParserInput
+	called   bool
+	err      error
+}
+
+func (p *fakeParser) ParseQuestions(_ context.Context, input ParserInput) (AIParseResponse, error) {
+	p.called = true
+	p.input = input
+	if p.err != nil {
+		return AIParseResponse{}, p.err
+	}
+	return p.response, nil
 }
 
 type fakeQuestionRepo struct {

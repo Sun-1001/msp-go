@@ -2,6 +2,7 @@ package portrait
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 	"time"
@@ -76,6 +77,54 @@ func TestGeneratePortraitBuildsReportAndStoresVersion(t *testing.T) {
 	}
 }
 
+func TestGeneratePortraitUsesConfiguredGenerator(t *testing.T) {
+	now := time.Date(2026, time.June, 29, 9, 0, 0, 0, time.UTC)
+	repo := &fakePortraitRepo{
+		hasProfile: true,
+		profile: Profile{
+			StudentID:      "student-1",
+			TotalExercises: 6,
+			CorrectCount:   4,
+		},
+	}
+	generator := &fakeGenerator{content: "# LLM 画像\n\n建议保持练习节奏。"}
+	service := newTestService(repo, now, WithGenerator(generator))
+
+	response, err := service.GeneratePortrait(context.Background(), "student-1")
+	if err != nil {
+		t.Fatalf("GeneratePortrait() error = %v", err)
+	}
+	if !generator.called || generator.input.Profile.StudentID != "student-1" {
+		t.Fatalf("generator called=%v input=%#v", generator.called, generator.input)
+	}
+	if !strings.Contains(generator.input.FallbackContent, "学习概况") {
+		t.Fatalf("fallback content = %q", generator.input.FallbackContent)
+	}
+	if repo.savedContent != generator.content || response.PortraitContent != generator.content {
+		t.Fatalf("saved=%q response=%#v", repo.savedContent, response)
+	}
+}
+
+func TestGeneratePortraitFallsBackWhenGeneratorFails(t *testing.T) {
+	now := time.Date(2026, time.June, 29, 9, 30, 0, 0, time.UTC)
+	repo := &fakePortraitRepo{
+		hasProfile: true,
+		profile: Profile{
+			StudentID:      "student-1",
+			TotalExercises: 2,
+			CorrectCount:   1,
+		},
+	}
+	service := newTestService(repo, now, WithGenerator(&fakeGenerator{err: errors.New("model unavailable")}))
+
+	if _, err := service.GeneratePortrait(context.Background(), "student-1"); err != nil {
+		t.Fatalf("GeneratePortrait() error = %v", err)
+	}
+	if !strings.Contains(repo.savedContent, "学习概况") || !strings.Contains(repo.savedContent, "改进建议") {
+		t.Fatalf("saved content = %q", repo.savedContent)
+	}
+}
+
 func TestClearPortraitEnsuresProfileAndReturnsPythonMessage(t *testing.T) {
 	now := time.Date(2026, time.April, 25, 12, 0, 0, 0, time.UTC)
 	repo := &fakePortraitRepo{
@@ -102,13 +151,29 @@ func TestNewServiceRejectsMissingRepository(t *testing.T) {
 	}
 }
 
-func newTestService(repo Repository, now time.Time) *Service {
-	service, err := NewService(repo)
+func newTestService(repo Repository, now time.Time, options ...Option) *Service {
+	service, err := NewService(repo, options...)
 	if err != nil {
 		panic(err)
 	}
 	service.now = func() time.Time { return now }
 	return service
+}
+
+type fakeGenerator struct {
+	content string
+	input   GeneratorInput
+	called  bool
+	err     error
+}
+
+func (g *fakeGenerator) GeneratePortrait(_ context.Context, input GeneratorInput) (string, error) {
+	g.called = true
+	g.input = input
+	if g.err != nil {
+		return "", g.err
+	}
+	return g.content, nil
 }
 
 type fakePortraitRepo struct {

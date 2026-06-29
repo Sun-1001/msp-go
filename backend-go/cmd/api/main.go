@@ -35,6 +35,7 @@ import (
 	einoagent "mathstudy/backend-go/internal/adapter/llm/einoagent"
 	adapterpostgres "mathstudy/backend-go/internal/adapter/postgres"
 	storageadapter "mathstudy/backend-go/internal/adapter/storage"
+	adminaiconfigapp "mathstudy/backend-go/internal/application/adminaiconfig"
 	admininboxapp "mathstudy/backend-go/internal/application/admininbox"
 	adminsettingsapp "mathstudy/backend-go/internal/application/adminsettings"
 	adminstatsapp "mathstudy/backend-go/internal/application/adminstats"
@@ -151,12 +152,51 @@ func main() {
 		logger.Error("configure progress handler", "error", err)
 		os.Exit(1)
 	}
+	fernetKey := cfg.FernetSecretKey
+	if fernetKey == "" {
+		logger.Warn("FERNET_SECRET_KEY is not configured; using an ephemeral key for local secret encryption")
+		fernetKey, err = secret.GenerateFernetKey()
+		if err != nil {
+			logger.Error("generate ephemeral fernet key", "error", err)
+			os.Exit(1)
+		}
+	}
+	appCipher, err := secret.NewFernet(fernetKey)
+	if err != nil {
+		logger.Error("configure fernet cipher", "error", err)
+		os.Exit(1)
+	}
+	adminAIConfigRepo, err := adapterpostgres.NewAdminAIConfigRepository(dbPool)
+	if err != nil {
+		logger.Error("configure admin AI config repository", "error", err)
+		os.Exit(1)
+	}
+	adminAIConfigService, err := adminaiconfigapp.NewService(adminAIConfigRepo, appCipher)
+	if err != nil {
+		logger.Error("configure admin AI config service", "error", err)
+		os.Exit(1)
+	}
+	adminAIConfigHandler, err := adminaiconfighthttp.NewHandler(logger, adminAIConfigService, authService)
+	if err != nil {
+		logger.Error("configure admin AI config handler", "error", err)
+		os.Exit(1)
+	}
 	portraitRepo, err := adapterpostgres.NewPortraitRepository(dbPool)
 	if err != nil {
 		logger.Error("configure portrait repository", "error", err)
 		os.Exit(1)
 	}
-	portraitService, err := portraitapp.NewService(portraitRepo)
+	portraitGenerator := einoagent.NewConfigurablePortraitGenerator(adminAIConfigService, einoagent.Config{
+		Enabled:       cfg.EinoEnabled,
+		BaseURL:       cfg.EinoBaseURL,
+		APIKey:        cfg.EinoAPIKey,
+		Model:         cfg.EinoModel,
+		Timeout:       cfg.EinoTimeout,
+		Temperature:   cfg.EinoTemperature,
+		MaxTokens:     cfg.EinoMaxTokens,
+		MaxIterations: cfg.EinoMaxIterations,
+	})
+	portraitService, err := portraitapp.NewService(portraitRepo, portraitapp.WithGenerator(portraitGenerator))
 	if err != nil {
 		logger.Error("configure portrait service", "error", err)
 		os.Exit(1)
@@ -186,7 +226,27 @@ func main() {
 		logger.Error("configure exercise repository", "error", err)
 		os.Exit(1)
 	}
-	exerciseService, err := exerciseapp.NewService(exerciseRepo, nil)
+	mathSolver := einoagent.NewConfigurableMathSolver(adminAIConfigService, einoagent.Config{
+		Enabled:       cfg.EinoEnabled,
+		BaseURL:       cfg.EinoBaseURL,
+		APIKey:        cfg.EinoAPIKey,
+		Model:         cfg.EinoModel,
+		Timeout:       cfg.EinoTimeout,
+		Temperature:   cfg.EinoTemperature,
+		MaxTokens:     cfg.EinoMaxTokens,
+		MaxIterations: cfg.EinoMaxIterations,
+	})
+	diagnostician := einoagent.NewConfigurableDiagnostician(adminAIConfigService, einoagent.Config{
+		Enabled:       cfg.EinoEnabled,
+		BaseURL:       cfg.EinoBaseURL,
+		APIKey:        cfg.EinoAPIKey,
+		Model:         cfg.EinoModel,
+		Timeout:       cfg.EinoTimeout,
+		Temperature:   cfg.EinoTemperature,
+		MaxTokens:     cfg.EinoMaxTokens,
+		MaxIterations: cfg.EinoMaxIterations,
+	})
+	exerciseService, err := exerciseapp.NewService(exerciseRepo, exerciseapp.SolverAnswerChecker{Solver: mathSolver}, exerciseapp.WithDiagnostician(diagnostician))
 	if err != nil {
 		logger.Error("configure exercise service", "error", err)
 		os.Exit(1)
@@ -201,24 +261,16 @@ func main() {
 		logger.Error("configure session repository", "error", err)
 		os.Exit(1)
 	}
-	var tutorAgent sessionapp.ChatAgent
-	if cfg.EinoEnabled {
-		tutorAgent, err = einoagent.NewTutorAgent(ctx, einoagent.Config{
-			Enabled:       cfg.EinoEnabled,
-			BaseURL:       cfg.EinoBaseURL,
-			APIKey:        cfg.EinoAPIKey,
-			Model:         cfg.EinoModel,
-			Timeout:       cfg.EinoTimeout,
-			Temperature:   cfg.EinoTemperature,
-			MaxTokens:     cfg.EinoMaxTokens,
-			MaxIterations: cfg.EinoMaxIterations,
-		})
-		if err != nil {
-			logger.Error("configure Eino tutor agent", "error", err)
-			os.Exit(1)
-		}
-		logger.Info("Eino tutor agent enabled", "model", cfg.EinoModel)
-	}
+	tutorAgent := einoagent.NewConfigurableTutorAgent(adminAIConfigService, einoagent.Config{
+		Enabled:       cfg.EinoEnabled,
+		BaseURL:       cfg.EinoBaseURL,
+		APIKey:        cfg.EinoAPIKey,
+		Model:         cfg.EinoModel,
+		Timeout:       cfg.EinoTimeout,
+		Temperature:   cfg.EinoTemperature,
+		MaxTokens:     cfg.EinoMaxTokens,
+		MaxIterations: cfg.EinoMaxIterations,
+	})
 	sessionService, err := sessionapp.NewService(sessionRepo, sessionapp.WithChatAgent(tutorAgent))
 	if err != nil {
 		logger.Error("configure session service", "error", err)
@@ -249,7 +301,17 @@ func main() {
 		logger.Error("configure question repository", "error", err)
 		os.Exit(1)
 	}
-	questionService, err := questionapp.NewService(questionRepo)
+	questionParser := einoagent.NewConfigurableQuestionParser(adminAIConfigService, einoagent.Config{
+		Enabled:       cfg.EinoEnabled,
+		BaseURL:       cfg.EinoBaseURL,
+		APIKey:        cfg.EinoAPIKey,
+		Model:         cfg.EinoModel,
+		Timeout:       cfg.EinoTimeout,
+		Temperature:   cfg.EinoTemperature,
+		MaxTokens:     cfg.EinoMaxTokens,
+		MaxIterations: cfg.EinoMaxIterations,
+	})
+	questionService, err := questionapp.NewService(questionRepo, questionapp.WithParser(questionParser))
 	if err != nil {
 		logger.Error("configure question service", "error", err)
 		os.Exit(1)
@@ -322,11 +384,6 @@ func main() {
 	adminInboxHandler, err := admininboxhttp.NewHandler(logger, adminInboxService, authService)
 	if err != nil {
 		logger.Error("configure admin inbox handler", "error", err)
-		os.Exit(1)
-	}
-	adminAIConfigHandler, err := adminaiconfighthttp.NewHandler(logger, authService)
-	if err != nil {
-		logger.Error("configure admin AI config placeholder", "error", err)
 		os.Exit(1)
 	}
 	adminStatsRepo, err := adapterpostgres.NewAdminStatsRepository(dbPool)
@@ -413,21 +470,7 @@ func main() {
 		logger.Error("configure xidian portal client", "error", err)
 		os.Exit(1)
 	}
-	fernetKey := cfg.FernetSecretKey
-	if fernetKey == "" {
-		logger.Warn("FERNET_SECRET_KEY is not configured; using an ephemeral key for Xidian password encryption")
-		fernetKey, err = secret.GenerateFernetKey()
-		if err != nil {
-			logger.Error("generate ephemeral fernet key", "error", err)
-			os.Exit(1)
-		}
-	}
-	xidianCipher, err := secret.NewFernet(fernetKey)
-	if err != nil {
-		logger.Error("configure xidian fernet cipher", "error", err)
-		os.Exit(1)
-	}
-	xidianService, err := xidianapp.NewService(xidianRepo, xidianPortalClient, xidianCipher, xidianapp.NewMemoryChallengeStore(), xidianapp.Config{
+	xidianService, err := xidianapp.NewService(xidianRepo, xidianPortalClient, appCipher, xidianapp.NewMemoryChallengeStore(), xidianapp.Config{
 		ChallengeTTL:            cfg.XidianChallengeTTL,
 		SnapshotFallbackEnabled: cfg.XidianSnapshotFallbackEnabled,
 		CaptchaWidth:            cfg.XidianCaptchaWidth,

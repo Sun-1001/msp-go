@@ -147,6 +147,17 @@ type AIParseResponse struct {
 	Questions []AIParseQuestionItem `json:"questions"`
 }
 
+// ParserInput carries raw text and deterministic fallback into an optional LLM parser.
+type ParserInput struct {
+	RawTexts []string
+	Fallback AIParseResponse
+}
+
+// Parser extracts structured question candidates from raw text.
+type Parser interface {
+	ParseQuestions(context.Context, ParserInput) (AIParseResponse, error)
+}
+
 // GenerateRequest stores deterministic isomorphic problem generation inputs.
 type GenerateRequest struct {
 	Template   string
@@ -183,16 +194,31 @@ type GenerationValidation struct {
 
 // Service implements teacher question bank use cases.
 type Service struct {
-	repo Repository
-	now  func() time.Time
+	repo   Repository
+	parser Parser
+	now    func() time.Time
+}
+
+// Option customizes the question service.
+type Option func(*Service)
+
+// WithParser enables LLM-backed question parsing with deterministic fallback.
+func WithParser(parser Parser) Option {
+	return func(service *Service) {
+		service.parser = parser
+	}
 }
 
 // NewService creates a question service.
-func NewService(repo Repository) (*Service, error) {
+func NewService(repo Repository, options ...Option) (*Service, error) {
 	if repo == nil {
 		return nil, errors.New("question repository is nil")
 	}
-	return &Service{repo: repo, now: func() time.Time { return time.Now().UTC() }}, nil
+	service := &Service{repo: repo, now: func() time.Time { return time.Now().UTC() }}
+	for _, option := range options {
+		option(service)
+	}
+	return service, nil
 }
 
 // ListQuestions returns a filtered teacher-owned question page.
@@ -333,17 +359,19 @@ func (s *Service) BatchImport(ctx context.Context, ownerID string, questions []Q
 	return s.repo.BatchImport(ctx, ownerID, normalized, s.now())
 }
 
-// ParseQuestions returns a deterministic shape-compatible parse fallback; LLM extraction remains a P6 TODO.
-func (s *Service) ParseQuestions(_ context.Context, rawTexts []string) (AIParseResponse, error) {
+// ParseQuestions extracts question candidates with an optional LLM parser and deterministic fallback.
+func (s *Service) ParseQuestions(ctx context.Context, rawTexts []string) (AIParseResponse, error) {
 	if len(rawTexts) == 0 || len(rawTexts) > 10 {
 		return AIParseResponse{}, ErrBadRequest
 	}
+	normalizedTexts := make([]string, 0, len(rawTexts))
 	items := make([]AIParseQuestionItem, 0, len(rawTexts))
 	for _, text := range rawTexts {
 		if len(text) > 3000 {
 			return AIParseResponse{}, ErrBadRequest
 		}
 		trimmed := strings.TrimSpace(text)
+		normalizedTexts = append(normalizedTexts, trimmed)
 		items = append(items, AIParseQuestionItem{
 			Title:         firstNonEmptyLine(trimmed),
 			Body:          trimmed,
@@ -356,7 +384,23 @@ func (s *Service) ParseQuestions(_ context.Context, rawTexts []string) (AIParseR
 			Tags:          []string{},
 		})
 	}
-	return AIParseResponse{Questions: items}, nil
+	fallback := AIParseResponse{Questions: items}
+	if s.parser == nil {
+		return fallback, nil
+	}
+	parsed, err := s.parser.ParseQuestions(ctx, ParserInput{RawTexts: normalizedTexts, Fallback: fallback})
+	if err != nil || len(parsed.Questions) == 0 {
+		return fallback, nil
+	}
+	normalized := AIParseResponse{Questions: make([]AIParseQuestionItem, 0, len(parsed.Questions))}
+	for _, item := range parsed.Questions {
+		item = normalizeAIParseQuestionItem(item)
+		if item.Title == "" || item.Body == "" {
+			return fallback, nil
+		}
+		normalized.Questions = append(normalized.Questions, item)
+	}
+	return normalized, nil
 }
 
 // GenerateIsomorphicProblem creates a validated high-math variant from a small local template set.
@@ -513,6 +557,25 @@ func normalizeQuestionUpdate(update QuestionUpdate) QuestionUpdate {
 		update.Options = &values
 	}
 	return update
+}
+
+func normalizeAIParseQuestionItem(item AIParseQuestionItem) AIParseQuestionItem {
+	item.Title = strings.TrimSpace(item.Title)
+	item.Body = strings.TrimSpace(item.Body)
+	item.Type = normalizeQuestionType(item.Type)
+	item.AnswerType = normalizeAnswerType(item.AnswerType)
+	if item.Difficulty < 0 {
+		item.Difficulty = 0
+	}
+	if item.Difficulty > 1 {
+		item.Difficulty = 1
+	}
+	item.Answer = strings.TrimSpace(item.Answer)
+	item.Options = normalizeStringSlice(item.Options)
+	item.Hints = normalizeStringSlice(item.Hints)
+	item.SolutionSteps = normalizeStringSlice(item.SolutionSteps)
+	item.Tags = normalizeStringSlice(item.Tags)
+	return item
 }
 
 func normalizeQuestionType(value string) string {

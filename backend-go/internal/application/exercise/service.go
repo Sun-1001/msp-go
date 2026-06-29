@@ -225,28 +225,79 @@ type AnswerCheckResult struct {
 	Confidence float64
 }
 
+// MathSolver compares answers with an optional AI/math runtime.
+type MathSolver interface {
+	CheckAnswer(context.Context, AnswerCheckInput) (AnswerCheckResult, error)
+}
+
+// AnswerCheckInput carries answer comparison context into an optional solver.
+type AnswerCheckInput struct {
+	StudentAnswer string
+	CorrectAnswer string
+	AnswerType    string
+	Fallback      AnswerCheckResult
+}
+
+// SolverAnswerChecker tries a configured solver before falling back to local comparison.
+type SolverAnswerChecker struct {
+	Solver   MathSolver
+	Fallback AnswerChecker
+}
+
+// DiagnosisInput carries answer context into an optional AI diagnostician.
+type DiagnosisInput struct {
+	Exercise      Exercise
+	StudentID     string
+	StudentAnswer string
+	AnswerSteps   []string
+	CorrectAnswer string
+	Check         AnswerCheckResult
+	ImageOnly     bool
+	Fallback      DiagnosisDetail
+}
+
+// Diagnostician generates structured diagnosis for incorrect attempts.
+type Diagnostician interface {
+	Diagnose(context.Context, DiagnosisInput) (DiagnosisDetail, error)
+}
+
 // Service implements adaptive exercise use cases.
 type Service struct {
-	repo    Repository
-	checker AnswerChecker
-	now     func() time.Time
-	newID   func() (string, error)
+	repo          Repository
+	checker       AnswerChecker
+	diagnostician Diagnostician
+	now           func() time.Time
+	newID         func() (string, error)
+}
+
+// Option customizes the exercise service.
+type Option func(*Service)
+
+// WithDiagnostician enables AI-backed diagnosis with deterministic fallback.
+func WithDiagnostician(diagnostician Diagnostician) Option {
+	return func(service *Service) {
+		service.diagnostician = diagnostician
+	}
 }
 
 // NewService creates an exercise service.
-func NewService(repo Repository, checker AnswerChecker) (*Service, error) {
+func NewService(repo Repository, checker AnswerChecker, options ...Option) (*Service, error) {
 	if repo == nil {
 		return nil, errors.New("exercise repository is nil")
 	}
 	if checker == nil {
 		checker = NormalizedAnswerChecker{}
 	}
-	return &Service{
+	service := &Service{
 		repo:    repo,
 		checker: checker,
 		now:     time.Now,
 		newID:   NewUUID,
-	}, nil
+	}
+	for _, option := range options {
+		option(service)
+	}
+	return service, nil
 }
 
 // GetNextExercise returns the current pending exercise or selects a new one.
@@ -395,7 +446,16 @@ func (s *Service) SubmitAnswer(ctx context.Context, userID string, request Submi
 		var diagnosis *DiagnosisDetail
 		var errorType *string
 		if !check.IsCorrect {
-			diagnosis = basicDiagnosis(check.Reason, imageOnly, exercise.ConceptIDs)
+			diagnosis = s.buildDiagnosis(txCtx, DiagnosisInput{
+				Exercise:      exercise,
+				StudentID:     userID,
+				StudentAnswer: studentAnswer,
+				AnswerSteps:   request.AnswerSteps,
+				CorrectAnswer: correctAnswer,
+				Check:         check,
+				ImageOnly:     imageOnly,
+				Fallback:      *basicDiagnosis(check.Reason, imageOnly, exercise.ConceptIDs),
+			})
 			errorType = diagnosis.ErrorType
 			reportID, err := s.newID()
 			if err != nil {
@@ -452,6 +512,20 @@ func (s *Service) SubmitAnswer(ctx context.Context, userID string, request Submi
 		return SubmitResponse{}, err
 	}
 	return response, nil
+}
+
+func (s *Service) buildDiagnosis(ctx context.Context, input DiagnosisInput) *DiagnosisDetail {
+	fallback := normalizeDiagnosis(input.Fallback, input.Exercise.ConceptIDs)
+	if s.diagnostician == nil {
+		return &fallback
+	}
+	input.Fallback = fallback
+	diagnosis, err := s.diagnostician.Diagnose(ctx, input)
+	if err != nil {
+		return &fallback
+	}
+	diagnosis = normalizeDiagnosis(diagnosis, input.Exercise.ConceptIDs)
+	return &diagnosis
 }
 
 // GetExercise returns exercise details when the student can access the teacher's content.
@@ -634,7 +708,7 @@ func (s *Service) updateTracking(ctx context.Context, repo Repository, userID st
 	return masteryUpdate, nil
 }
 
-// NormalizedAnswerChecker is a deterministic local checker used before P6 AI parity.
+// NormalizedAnswerChecker is a deterministic local checker used when the Math Solver agent is unavailable.
 type NormalizedAnswerChecker struct{}
 
 // CheckAnswer compares normalized strings.
@@ -643,6 +717,38 @@ func (NormalizedAnswerChecker) CheckAnswer(_ context.Context, studentAnswer stri
 		return AnswerCheckResult{IsCorrect: true, Reason: "答案与标准答案一致", Confidence: 1}, nil
 	}
 	return AnswerCheckResult{IsCorrect: false, Reason: "答案与标准答案不一致", Confidence: 0.3}, nil
+}
+
+// CheckAnswer compares answers with a solver and falls back to deterministic local comparison.
+func (c SolverAnswerChecker) CheckAnswer(ctx context.Context, studentAnswer string, correctAnswer string, answerType string) (AnswerCheckResult, error) {
+	fallbackChecker := c.Fallback
+	if fallbackChecker == nil {
+		fallbackChecker = NormalizedAnswerChecker{}
+	}
+	fallback, err := fallbackChecker.CheckAnswer(ctx, studentAnswer, correctAnswer, answerType)
+	if err != nil {
+		return AnswerCheckResult{}, err
+	}
+	if c.Solver == nil {
+		return fallback, nil
+	}
+	result, err := c.Solver.CheckAnswer(ctx, AnswerCheckInput{
+		StudentAnswer: studentAnswer,
+		CorrectAnswer: correctAnswer,
+		AnswerType:    answerType,
+		Fallback:      fallback,
+	})
+	if err != nil {
+		return fallback, nil
+	}
+	result.Reason = strings.TrimSpace(result.Reason)
+	if result.Reason == "" {
+		return fallback, nil
+	}
+	if result.Confidence < 0 || result.Confidence > 1 {
+		return fallback, nil
+	}
+	return result, nil
 }
 
 func chooseTarget(query NextQuery, mastery map[string]float64) (string, float64) {
@@ -773,6 +879,56 @@ func basicDiagnosis(reason string, imageOnly bool, concepts []string) *Diagnosis
 		Severity:         taxonomy.Severity,
 		Suggestion:       nonEmptyString(taxonomy.Suggestion, suggestion),
 		RelatedConcepts:  copyStrings(concepts),
+	}
+}
+
+func normalizeDiagnosis(diagnosis DiagnosisDetail, concepts []string) DiagnosisDetail {
+	if diagnosis.ErrorType != nil {
+		value := strings.ToLower(strings.TrimSpace(*diagnosis.ErrorType))
+		if value == "" {
+			diagnosis.ErrorType = nil
+		} else {
+			diagnosis.ErrorType = &value
+		}
+	}
+	diagnosis.ErrorSubtype = strings.TrimSpace(diagnosis.ErrorSubtype)
+	if diagnosis.ErrorSubtype == "" {
+		diagnosis.ErrorSubtype = "answer_mismatch"
+	}
+	diagnosis.TaxonomyCode = strings.TrimSpace(diagnosis.TaxonomyCode)
+	if diagnosis.TaxonomyCode == "" && diagnosis.ErrorType != nil {
+		diagnosis.TaxonomyCode = taxonomyCodeForErrorType(*diagnosis.ErrorType)
+	}
+	diagnosis.ErrorDescription = strings.TrimSpace(diagnosis.ErrorDescription)
+	if diagnosis.ErrorDescription == "" {
+		diagnosis.ErrorDescription = "答案不正确"
+	}
+	diagnosis.Severity = strings.ToLower(strings.TrimSpace(diagnosis.Severity))
+	switch diagnosis.Severity {
+	case "low", "medium", "high":
+	default:
+		diagnosis.Severity = "medium"
+	}
+	diagnosis.Suggestion = strings.TrimSpace(diagnosis.Suggestion)
+	if diagnosis.Suggestion == "" {
+		diagnosis.Suggestion = "请按步骤复算，并标出最早与标准解不一致的位置。"
+	}
+	diagnosis.RelatedConcepts = uniqueNonEmpty(append(diagnosis.RelatedConcepts, concepts...))
+	return diagnosis
+}
+
+func taxonomyCodeForErrorType(errorType string) string {
+	switch strings.ToLower(strings.TrimSpace(errorType)) {
+	case "conceptual":
+		return "C-Type"
+	case "procedural":
+		return "P-Type"
+	case "logical":
+		return "L-Type"
+	case "symbolic":
+		return "S-Type"
+	default:
+		return ""
 	}
 }
 
