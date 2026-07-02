@@ -2,10 +2,10 @@ package httpserver
 
 import (
 	"log/slog"
+	"mime"
 	"net"
 	"net/http"
 	"os"
-	"path"
 	"path/filepath"
 	"strings"
 
@@ -13,6 +13,7 @@ import (
 	"mathstudy/backend-go/internal/platform/health"
 	"mathstudy/backend-go/internal/platform/metrics"
 	"mathstudy/backend-go/internal/platform/middleware"
+	"mathstudy/backend-go/internal/platform/uploadpath"
 )
 
 // RouteRegistrar attaches migrated business routes to the shared mux.
@@ -122,8 +123,8 @@ func uploadsFileHandler(root string) http.Handler {
 			writeError(w, http.StatusMethodNotAllowed, "METHOD_NOT_ALLOWED", "method not allowed")
 			return
 		}
-		cleanPath := strings.TrimPrefix(path.Clean("/"+r.URL.Path), "/")
-		if cleanPath == "" || strings.HasSuffix(r.URL.Path, "/") {
+		cleanPath, ok := uploadpath.CleanServablePath(r.URL.Path)
+		if !ok {
 			writeError(w, http.StatusNotFound, "NOT_FOUND", "uploaded file not found")
 			return
 		}
@@ -137,6 +138,9 @@ func uploadsFileHandler(root string) http.Handler {
 		if err != nil || stat.IsDir() {
 			writeError(w, http.StatusNotFound, "NOT_FOUND", "uploaded file not found")
 			return
+		}
+		if uploadpath.IsDocumentKey(cleanPath) {
+			w.Header().Set("Content-Disposition", mime.FormatMediaType("attachment", map[string]string{"filename": stat.Name()}))
 		}
 		http.ServeContent(w, r, stat.Name(), stat.ModTime(), file)
 	})

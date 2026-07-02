@@ -161,6 +161,17 @@ func TestLoadAcceptsProductionStrongAuthConfig(t *testing.T) {
 	}
 }
 
+func TestLoadRejectsProductionWildcardCORS(t *testing.T) {
+	t.Setenv("ENVIRONMENT", "production")
+	t.Setenv("JWT_SECRET_KEY", strings.Repeat("s", 32))
+	t.Setenv("ADMIN_PASSWORD", "Admin123!")
+	t.Setenv("CORS_ORIGINS", "*")
+
+	if _, err := Load(); err == nil {
+		t.Fatal("Load() error = nil, want production CORS wildcard error")
+	}
+}
+
 func TestLoadDevelopmentAllowsLocalRefreshSessionFallback(t *testing.T) {
 	t.Setenv("ENVIRONMENT", "development")
 

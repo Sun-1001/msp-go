@@ -24,6 +24,7 @@ uploads/
 *.tmp
 *.temp
 .cache/
+.gocache/
 
 # Python 缓存（根目录级别）
 __pycache__/

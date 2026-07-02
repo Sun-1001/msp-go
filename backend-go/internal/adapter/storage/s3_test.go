@@ -87,3 +87,25 @@ func TestS3StorageRejectsMissingConfig(t *testing.T) {
 		t.Fatal("NewS3Storage(empty) error = nil, want error")
 	}
 }
+
+func TestS3StorageRejectsAmbiguousEndpointURLs(t *testing.T) {
+	cases := []S3Config{
+		{EndpointURL: "ftp://s3.example.com"},
+		{EndpointURL: "https://user:pass@s3.example.com"},
+		{EndpointURL: "https://s3.example.com?target=internal"},
+		{EndpointURL: "https://s3.example.com#fragment"},
+		{EndpointURL: "https://s3.example.com", PublicURLBase: "https://user:pass@cdn.example.com/base"},
+		{EndpointURL: "https://s3.example.com", PublicURLBase: "https://cdn.example.com/base?token=static"},
+	}
+	for _, cfg := range cases {
+		t.Run(cfg.EndpointURL+"|"+cfg.PublicURLBase, func(t *testing.T) {
+			cfg.AccessKey = "access"
+			cfg.SecretKey = "secret"
+			cfg.BucketName = "bucket"
+			cfg.Region = "us-east-1"
+			if _, err := NewS3Storage(cfg, http.DefaultClient); err == nil {
+				t.Fatal("NewS3Storage() error = nil, want invalid URL error")
+			}
+		})
+	}
+}

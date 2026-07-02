@@ -29,7 +29,7 @@ func NewUploadStorage(cfg config.Config, logger *slog.Logger) (uploadapp.Storage
 			PublicURLBase: cfg.S3PublicURLBase,
 			PrivateBucket: cfg.S3PrivateBucket,
 			URLExpire:     cfg.S3URLExpire,
-		}, http.DefaultClient)
+		}, nil)
 	case "qiniu":
 		return NewQiniuStorage(QiniuConfig{
 			AccessKey:     cfg.QiniuAccessKey,
@@ -39,7 +39,7 @@ func NewUploadStorage(cfg config.Config, logger *slog.Logger) (uploadapp.Storage
 			PrivateBucket: cfg.QiniuPrivateBucket,
 			URLExpire:     cfg.QiniuURLExpire,
 			UploadURL:     cfg.QiniuUploadURL,
-		}, http.DefaultClient)
+		}, nil)
 	default:
 		logger.Error("unsupported upload storage backend", "backend", cfg.StorageBackend)
 		return nil, errors.New("unsupported upload storage backend")

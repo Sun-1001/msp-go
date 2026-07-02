@@ -275,6 +275,9 @@ func Load() (Config, error) {
 	if err := validateProductionAuthConfig(cfg); err != nil {
 		return Config{}, err
 	}
+	if err := validateCORSConfig(cfg); err != nil {
+		return Config{}, err
+	}
 	if cfg.LoginMaxAttempts <= 0 {
 		return Config{}, errors.New("LOGIN_MAX_ATTEMPTS must be greater than 0")
 	}
@@ -511,6 +514,18 @@ func validateProductionAuthConfig(cfg Config) error {
 	}
 	if !strongConfigPassword(adminPassword) {
 		return errors.New("ADMIN_PASSWORD must be 8-72 bytes and include uppercase, lowercase, digit, and special characters outside development")
+	}
+	return nil
+}
+
+func validateCORSConfig(cfg Config) error {
+	if !isStrictEnvironment(cfg.Environment) {
+		return nil
+	}
+	for _, origin := range cfg.CORSOrigins {
+		if strings.TrimSpace(origin) == "*" {
+			return errors.New("CORS_ORIGINS must not contain * outside development")
+		}
 	}
 	return nil
 }

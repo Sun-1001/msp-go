@@ -12,7 +12,6 @@ import (
 	"mime/multipart"
 	"net/http"
 	"net/textproto"
-	"net/url"
 	"path"
 	"sort"
 	"strconv"
@@ -20,6 +19,7 @@ import (
 	"time"
 
 	uploadapp "mathstudy/backend-go/internal/application/upload"
+	"mathstudy/backend-go/internal/platform/outbound"
 )
 
 // QiniuConfig contains Qiniu Kodo object storage settings.
@@ -64,12 +64,19 @@ func NewQiniuStorage(cfg QiniuConfig, client *http.Client) (*QiniuStorage, error
 		sort.Strings(missing)
 		return nil, fmt.Errorf("Qiniu storage config missing: %s", strings.Join(missing, ", "))
 	}
-	if _, err := url.ParseRequestURI(cfg.UploadURL); err != nil {
+	domain, err := normalizeStorageBaseURL("QINIU_DOMAIN", cfg.Domain)
+	if err != nil {
 		return nil, err
 	}
+	cfg.Domain = domain.String()
+	uploadURL, err := outbound.NormalizePublicHTTPSBaseURL(cfg.UploadURL)
+	if err != nil {
+		return nil, fmt.Errorf("QINIU_UPLOAD_URL %w", err)
+	}
+	cfg.UploadURL = uploadURL
 	return &QiniuStorage{
 		cfg:    cfg,
-		client: defaultTimeout(client),
+		client: qiniuHTTPClient(client),
 		now:    func() time.Time { return time.Now().UTC() },
 	}, nil
 }
@@ -193,4 +200,11 @@ func qiniuBase64(data []byte) string {
 func escapeMultipartFilename(value string) string {
 	replacer := strings.NewReplacer("\\", "\\\\", `"`, "\\\"")
 	return replacer.Replace(value)
+}
+
+func qiniuHTTPClient(client *http.Client) *http.Client {
+	if client != nil {
+		return defaultTimeout(client)
+	}
+	return outbound.NewPublicHTTPSClient(5 * time.Minute)
 }

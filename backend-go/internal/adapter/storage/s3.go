@@ -5,7 +5,6 @@ import (
 	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/hex"
-	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -62,12 +61,17 @@ func NewS3Storage(cfg S3Config, client *http.Client) (*S3Storage, error) {
 		sort.Strings(missing)
 		return nil, fmt.Errorf("S3 storage config missing: %s", strings.Join(missing, ", "))
 	}
-	endpoint, err := url.Parse(strings.TrimRight(cfg.EndpointURL, "/"))
+	endpoint, err := normalizeStorageBaseURL("S3_ENDPOINT_URL", cfg.EndpointURL)
 	if err != nil {
 		return nil, err
 	}
-	if endpoint.Scheme == "" || endpoint.Host == "" {
-		return nil, errors.New("S3_ENDPOINT_URL must include scheme and host")
+	cfg.EndpointURL = endpoint.String()
+	if strings.TrimSpace(cfg.PublicURLBase) != "" {
+		publicBase, err := normalizeStorageBaseURL("S3_PUBLIC_URL_BASE", cfg.PublicURLBase)
+		if err != nil {
+			return nil, err
+		}
+		cfg.PublicURLBase = publicBase.String()
 	}
 	return &S3Storage{
 		cfg:      cfg,
@@ -75,6 +79,26 @@ func NewS3Storage(cfg S3Config, client *http.Client) (*S3Storage, error) {
 		client:   defaultTimeout(client),
 		now:      func() time.Time { return time.Now().UTC() },
 	}, nil
+}
+
+func normalizeStorageBaseURL(name string, value string) (*url.URL, error) {
+	parsed, err := url.Parse(strings.TrimRight(strings.TrimSpace(value), "/"))
+	if err != nil {
+		return nil, err
+	}
+	if parsed.Scheme == "" || parsed.Host == "" {
+		return nil, fmt.Errorf("%s must include scheme and host", name)
+	}
+	if parsed.Scheme != "http" && parsed.Scheme != "https" {
+		return nil, fmt.Errorf("%s must use http or https", name)
+	}
+	if parsed.User != nil {
+		return nil, fmt.Errorf("%s must not include username or password", name)
+	}
+	if parsed.RawQuery != "" || parsed.Fragment != "" {
+		return nil, fmt.Errorf("%s must not include query or fragment", name)
+	}
+	return parsed, nil
 }
 
 // UploadStream uploads a single object and returns its public or presigned URL.

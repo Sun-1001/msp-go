@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"mathstudy/backend-go/internal/platform/config"
@@ -189,6 +190,23 @@ func TestUploadsHandlerServesFilesWithoutDirectoryListings(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(imagesDir, "file.txt"), []byte("image-data"), 0o644); err != nil {
 		t.Fatalf("WriteFile() error = %v", err)
 	}
+	documentsDir := filepath.Join(uploadsDir, "documents")
+	if err := os.MkdirAll(documentsDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll(documents) error = %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(documentsDir, "file.pdf"), []byte("%PDF-1.7\nbody"), 0o644); err != nil {
+		t.Fatalf("WriteFile(document) error = %v", err)
+	}
+	videosDir := filepath.Join(uploadsDir, "videos")
+	if err := os.MkdirAll(videosDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll(videos) error = %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(videosDir, "clip.mp4"), []byte("video-data"), 0o644); err != nil {
+		t.Fatalf("WriteFile(video) error = %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(uploadsDir, "secret.txt"), []byte("secret-data"), 0o644); err != nil {
+		t.Fatalf("WriteFile(secret) error = %v", err)
+	}
 	cfg := config.Config{
 		AppVersion:             "test",
 		Environment:            "test",
@@ -227,5 +245,33 @@ func TestUploadsHandlerServesFilesWithoutDirectoryListings(t *testing.T) {
 	handler.ServeHTTP(recorder, request)
 	if recorder.Code != http.StatusOK || recorder.Body.String() != "image-data" {
 		t.Fatalf("file response = status %d body %q", recorder.Code, recorder.Body.String())
+	}
+	if disposition := recorder.Header().Get("Content-Disposition"); disposition != "" {
+		t.Fatalf("image Content-Disposition = %q, want empty", disposition)
+	}
+
+	recorder = httptest.NewRecorder()
+	request = httptest.NewRequest(http.MethodGet, "/uploads/documents/file.pdf", nil)
+	handler.ServeHTTP(recorder, request)
+	if recorder.Code != http.StatusOK || recorder.Body.String() != "%PDF-1.7\nbody" {
+		t.Fatalf("document response = status %d body %q", recorder.Code, recorder.Body.String())
+	}
+	disposition := recorder.Header().Get("Content-Disposition")
+	if !strings.HasPrefix(disposition, "attachment;") || !strings.Contains(disposition, "filename=file.pdf") {
+		t.Fatalf("document Content-Disposition = %q", disposition)
+	}
+
+	recorder = httptest.NewRecorder()
+	request = httptest.NewRequest(http.MethodGet, "/uploads/videos/clip.mp4", nil)
+	handler.ServeHTTP(recorder, request)
+	if recorder.Code != http.StatusOK || recorder.Body.String() != "video-data" {
+		t.Fatalf("video response = status %d body %q", recorder.Code, recorder.Body.String())
+	}
+
+	recorder = httptest.NewRecorder()
+	request = httptest.NewRequest(http.MethodGet, "/uploads/secret.txt", nil)
+	handler.ServeHTTP(recorder, request)
+	if recorder.Code != http.StatusNotFound || strings.Contains(recorder.Body.String(), "secret-data") {
+		t.Fatalf("secret response = status %d body %q", recorder.Code, recorder.Body.String())
 	}
 }
