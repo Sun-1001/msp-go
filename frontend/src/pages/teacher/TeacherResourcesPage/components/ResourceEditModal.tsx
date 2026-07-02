@@ -27,6 +27,7 @@ export const ResourceEditModal = React.memo<ResourceEditModalProps>(({ resource,
     url: resource?.url || '',
     duration: resource?.duration || '',
     pages: resource?.pages || undefined,
+    storage_type: resource?.storage_type || undefined,
   });
 
   // 当 resource 变化时更新表单数据
@@ -42,6 +43,7 @@ export const ResourceEditModal = React.memo<ResourceEditModalProps>(({ resource,
         url: resource.url || '',
         duration: resource.duration || '',
         pages: resource.pages || undefined,
+        storage_type: resource.storage_type || undefined,
       });
     }
   }, [resource]);

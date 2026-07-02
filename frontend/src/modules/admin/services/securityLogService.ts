@@ -5,6 +5,7 @@
  */
 
 import { apiClient } from '@/libs/http/apiClient';
+import { downloadBlob } from '@/libs/utils/download';
 import { logger } from '@/libs/utils/logger';
 import type {
   SecurityLogListResponse,
@@ -158,16 +159,9 @@ export const securityLogService = {
 
     // 创建 Blob 并下载
     const blob = new Blob([bytes], { type: content_type });
-    const url = URL.createObjectURL(blob);
-    const link = document.createElement('a');
-    link.href = url;
-    link.download = filename;
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
-    URL.revokeObjectURL(url);
+    const safeFilename = downloadBlob(blob, filename, 'security_logs_export');
 
-    securityLogger.debug('文件下载已触发', { filename });
+    securityLogger.debug('文件下载已触发', { filename: safeFilename });
   },
 };
 

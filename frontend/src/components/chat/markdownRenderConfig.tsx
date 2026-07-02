@@ -10,6 +10,7 @@ import remarkGfm from 'remark-gfm';
 import remarkMath from 'remark-math';
 import rehypeKatex from 'rehype-katex';
 import 'katex/dist/katex.min.css';
+import { normalizeSafeExternalUrl } from '@/libs/utils/safeUrl';
 
 export const REMARK_PLUGINS = [remarkGfm, remarkMath];
 export const REHYPE_PLUGINS = [rehypeKatex];
@@ -244,16 +245,22 @@ export const MARKDOWN_COMPONENTS: Record<string, React.FC<Record<string, unknown
   ),
 
   // 链接
-  a: ({ href, children }) => (
-    <a
-      href={href as string}
-      target="_blank"
-      rel="noopener noreferrer"
-      className="text-primary-600 dark:text-primary-400 hover:underline"
-    >
-      {children as React.ReactNode}
-    </a>
-  ),
+  a: ({ href, children }) => {
+    const safeHref = normalizeSafeExternalUrl(href as string | undefined);
+    if (!safeHref) {
+      return <span>{children as React.ReactNode}</span>;
+    }
+    return (
+      <a
+        href={safeHref}
+        target="_blank"
+        rel="noopener noreferrer"
+        className="text-primary-600 dark:text-primary-400 hover:underline"
+      >
+        {children as React.ReactNode}
+      </a>
+    );
+  },
 
   // 强调
   strong: ({ children }) => (

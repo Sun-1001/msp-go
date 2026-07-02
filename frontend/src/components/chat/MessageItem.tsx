@@ -13,6 +13,7 @@ import {
   ThumbsDown,
 } from 'lucide-react';
 import { cn } from '../../libs/utils/cn';
+import { normalizeSafeImageAttachmentUrl } from '../../libs/utils/safeUrl';
 import { MarkdownContent } from './MarkdownContent';
 import { StreamingMarkdownContent } from './StreamingMarkdownContent';
 
@@ -54,12 +55,16 @@ export const MessageItem = React.memo<MessageItemProps>(
     // 渲染图片附件
     const renderAttachments = () => {
       if (!attachments || attachments.length === 0) return null;
+      const safeAttachments = attachments
+        .map((url) => normalizeSafeImageAttachmentUrl(url))
+        .filter((url): url is string => url !== null);
+      if (safeAttachments.length === 0) return null;
 
       return (
         <div className="flex flex-wrap gap-2 mb-2">
-          {attachments.map((url, index) => (
+          {safeAttachments.map((url, index) => (
             <a
-              key={index}
+              key={url}
               href={url}
               target="_blank"
               rel="noopener noreferrer"

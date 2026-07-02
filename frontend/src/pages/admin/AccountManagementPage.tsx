@@ -22,6 +22,7 @@ import {
 import { adminUserService } from '@/modules/admin/services/adminUserService';
 import { UserFormModal } from '@/modules/admin/components/UserFormModal';
 import { ImportUsersModal } from '@/modules/admin/components/ImportUsersModal';
+import { downloadBlob } from '@/libs/utils/download';
 import type {
   UserItem,
   UserListQuery,
@@ -134,13 +135,7 @@ export const AccountManagementPage: React.FC = () => {
         role: state.filters.roleFilter,
         status: state.filters.statusFilter,
       });
-      // 创建下载链接
-      const url = URL.createObjectURL(blob);
-      const link = document.createElement('a');
-      link.href = url;
-      link.download = `users_export_${new Date().toISOString().slice(0, 10)}.csv`;
-      link.click();
-      URL.revokeObjectURL(url);
+      downloadBlob(blob, `users_export_${new Date().toISOString().slice(0, 10)}.csv`);
     } catch (error) {
       console.error('导出失败:', error);
       alert('导出失败，请重试');

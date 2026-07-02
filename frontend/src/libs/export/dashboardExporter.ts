@@ -41,9 +41,15 @@ function formatDate(): string {
   return `${y}${m}${d}_${h}${min}`;
 }
 
-/** CSV 字段转义：含逗号/引号/换行的字段需要用双引号包裹 */
+function escapeFormulaCell(value: string): string {
+  const trimmed = value.trimStart();
+  if (trimmed === '') return value;
+  return ['=', '+', '-', '@'].includes(trimmed[0]) ? `'${value}` : value;
+}
+
+/** CSV 字段转义：防止公式注入，并包裹含逗号/引号/换行的字段 */
 function csvEscape(value: string | number): string {
-  const str = String(value);
+  const str = escapeFormulaCell(String(value));
   if (str.includes(',') || str.includes('"') || str.includes('\n')) {
     return `"${str.replace(/"/g, '""')}"`;
   }
@@ -52,7 +58,7 @@ function csvEscape(value: string | number): string {
 
 // ==================== CSV 导出 ====================
 
-function buildCsvContent(
+export function buildDashboardCsvContent(
   stats: DashboardStats,
   analytics: TeacherAnalyticsData,
   options: DashboardExportOptions,
@@ -179,7 +185,7 @@ export function exportDashboardReport(
   const filename = `教学概览报告_${formatDate()}`;
 
   if (options.format === 'csv') {
-    const content = buildCsvContent(stats, analytics, options);
+    const content = buildDashboardCsvContent(stats, analytics, options);
     // 添加 BOM 头确保 Excel 正确识别 UTF-8
     const bom = '\uFEFF';
     const blob = new Blob([bom + content], { type: 'text/csv;charset=utf-8' });

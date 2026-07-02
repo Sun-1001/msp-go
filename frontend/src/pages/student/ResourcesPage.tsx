@@ -24,7 +24,7 @@ import {
   fetchResourceStats,
   toggleFavorite,
 } from '@/modules/resource/store/resourceSlice';
-import { getInitialResourceSearch } from '@/libs/utils/resourceUtils';
+import { getInitialResourceSearch, openResourceUrl } from '@/libs/utils/resourceUtils';
 import type { ResourceType, Resource } from '@/modules/resource/types/resource';
 
 const typeOptions = [
@@ -116,14 +116,7 @@ export const ResourcesPage: React.FC = () => {
   };
 
   const handleOpenResource = (resource: Resource) => {
-    if (resource.url) {
-      // 确保 URL 包含协议前缀
-      let url = resource.url;
-      if (!url.startsWith('http://') && !url.startsWith('https://')) {
-        url = 'https://' + url;
-      }
-      window.open(url, '_blank');
-    }
+    openResourceUrl(resource.url);
   };
 
   const displayStats = stats || {

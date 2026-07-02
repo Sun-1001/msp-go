@@ -4,6 +4,7 @@ import { Card, CardContent } from '../../../../components/ui/Card';
 import { Button } from '../../../../components/ui/Button';
 import { Video, FileText, Star, Eye, Edit, Trash2, ExternalLink, Check } from 'lucide-react';
 import { cn } from '../../../../libs/utils/cn';
+import { openResourceUrl } from '@/libs/utils/resourceUtils';
 
 const typeConfig = {
   video: {
@@ -41,13 +42,7 @@ export const ResourceListView = React.memo<ResourceListViewProps>(
     onDeleteResource,
   }) => {
     const handleOpenResource = useCallback((resource: Resource) => {
-      if (resource.url) {
-        let url = resource.url;
-        if (!url.startsWith('http://') && !url.startsWith('https://')) {
-          url = 'https://' + url;
-        }
-        window.open(url, '_blank');
-      }
+      openResourceUrl(resource.url);
     }, []);
 
     return (

@@ -11,6 +11,7 @@ import {
   FileText,
 } from 'lucide-react';
 import { adminUserService } from '@/modules/admin/services/adminUserService';
+import { downloadBlob } from '@/libs/utils/download';
 import type { UserImportResponse, UserImportResult } from '@/modules/admin/types/adminUsers';
 
 interface ImportUsersModalProps {
@@ -47,12 +48,7 @@ export const ImportUsersModal: React.FC<ImportUsersModalProps> = ({
   const handleDownloadTemplate = () => {
     const csvContent = '用户名,邮箱,密码,角色,显示名称\nzhangsan,zhangsan@example.com,123456,student,张三\nlisi,lisi@example.com,123456,teacher,李四';
     const blob = new Blob(['\ufeff' + csvContent], { type: 'text/csv;charset=utf-8' });
-    const url = URL.createObjectURL(blob);
-    const link = document.createElement('a');
-    link.href = url;
-    link.download = 'users_import_template.csv';
-    link.click();
-    URL.revokeObjectURL(url);
+    downloadBlob(blob, 'users_import_template.csv');
   };
 
   const handleImport = async () => {

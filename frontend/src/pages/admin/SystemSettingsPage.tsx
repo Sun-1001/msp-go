@@ -31,6 +31,7 @@ import {
   type DatabaseMonitorResponse,
 } from '@/modules/admin/services/systemSettingService';
 import { getApiErrorMessage } from '../../libs/http/apiClient';
+import { downloadBlob } from '@/libs/utils/download';
 
 export const SystemSettingsPage: React.FC = () => {
   return (
@@ -555,12 +556,7 @@ const DatabaseBackupCard: React.FC = () => {
         byteArray[i] = byteChars.charCodeAt(i);
       }
       const blob = new Blob([byteArray], { type: 'application/json' });
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = result.filename;
-      a.click();
-      URL.revokeObjectURL(url);
+      downloadBlob(blob, result.filename, 'database_export.json');
       setSuccess(`导出成功，共 ${result.total_records} 条记录`);
       setTimeout(() => setSuccess(''), 5000);
     } catch (err) {

@@ -5,6 +5,9 @@
  */
 
 import type { ResourceType } from '@/modules/resource/types/resource';
+import { normalizeSafeHttpUrl } from '@/libs/utils/safeUrl';
+
+const LOCAL_RESOURCE_PATH_PATTERN = /^\/uploads\/(?:documents|videos)\/[A-Za-z0-9._~!$&'()*+,;=:@/-]+$/;
 
 /**
  * 从 URL 提取标题
@@ -161,30 +164,53 @@ export function parseLinksFromText(text: string): string[] {
   const seen = new Set<string>();
 
   for (const line of lines) {
-    // 尝试解析为 URL
-    try {
-      const url = new URL(line);
-      const normalized = url.href;
-      if (!seen.has(normalized)) {
-        seen.add(normalized);
-        validUrls.push(normalized);
-      }
-    } catch {
-      // 尝试添加 https:// 前缀
-      try {
-        const url = new URL('https://' + line);
-        const normalized = url.href;
-        if (!seen.has(normalized)) {
-          seen.add(normalized);
-          validUrls.push(normalized);
-        }
-      } catch {
-        // 无效 URL，跳过
-      }
+    const normalized = normalizeSafeHttpUrl(line);
+    if (normalized && !seen.has(normalized)) {
+      seen.add(normalized);
+      validUrls.push(normalized);
     }
   }
 
   return validUrls;
+}
+
+/**
+ * 规范化可打开的资源 URL，拒绝危险协议和异常本地路径
+ */
+export function normalizeOpenableResourceUrl(rawUrl: string | null | undefined): string | null {
+  const value = rawUrl?.trim();
+  if (!value || /[\u0000-\u001f\u007f\s\\]/.test(value)) {
+    return null;
+  }
+  if (value.startsWith('/')) {
+    if (!LOCAL_RESOURCE_PATH_PATTERN.test(value)) {
+      return null;
+    }
+    if (value.split('/').some((part) => part === '..' || part === '.')) {
+      return null;
+    }
+    try {
+      return new URL(value, window.location.origin).href;
+    } catch {
+      return null;
+    }
+  }
+  if (value.startsWith('//')) {
+    return null;
+  }
+  return normalizeSafeHttpUrl(value);
+}
+
+/**
+ * 安全打开资源链接
+ */
+export function openResourceUrl(rawUrl: string | null | undefined): boolean {
+  const url = normalizeOpenableResourceUrl(rawUrl);
+  if (!url) {
+    return false;
+  }
+  window.open(url, '_blank', 'noopener,noreferrer');
+  return true;
 }
 
 /**

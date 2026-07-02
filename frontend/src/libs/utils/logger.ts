@@ -26,6 +26,141 @@ interface LogConfig {
   remoteEndpoint?: string;
 }
 
+const remoteLogEndpoint = normalizeRemoteLogEndpoint(import.meta.env.VITE_LOG_REMOTE_ENDPOINT);
+const REDACTED = '[REDACTED]';
+const CIRCULAR_REFERENCE = '[Circular]';
+const MAX_SANITIZE_DEPTH = 8;
+
+const sensitiveKeyPatterns = [
+  /password/i,
+  /passphrase/i,
+  /token/i,
+  /secret/i,
+  /api[_-]?key/i,
+  /authorization/i,
+  /cookie/i,
+  /credential/i,
+  /session/i,
+  /csrf/i,
+];
+
+const sensitiveQueryPattern =
+  /([?&](?:access[_-]?token|refresh[_-]?token|token|api[_-]?key|secret|password|authorization|cookie|csrf)[^=]*=)([^&#\s]+)/gi;
+const sensitiveAssignmentPattern =
+  /\b((?:access[_-]?token|refresh[_-]?token|token|api[_-]?key|secret|password|cookie|csrf)\s*[:=]\s*)(["']?)[^"',;&\s]+/gi;
+const bearerPattern = /\b(Bearer\s+)[A-Za-z0-9._~+/=-]{8,}/gi;
+const jwtPattern = /\b[A-Za-z0-9_-]{16,}\.[A-Za-z0-9_-]{16,}\.[A-Za-z0-9_-]{8,}\b/g;
+
+function isSensitiveKey(key: string): boolean {
+  return sensitiveKeyPatterns.some((pattern) => pattern.test(key));
+}
+
+function sanitizeString(value: string): string {
+  return value
+    .replace(bearerPattern, `$1${REDACTED}`)
+    .replace(jwtPattern, REDACTED)
+    .replace(sensitiveQueryPattern, `$1${REDACTED}`)
+    .replace(sensitiveAssignmentPattern, `$1$2${REDACTED}`);
+}
+
+export function normalizeRemoteLogEndpoint(value: unknown): string | undefined {
+  if (typeof value !== 'string') {
+    return undefined;
+  }
+  const endpoint = value.trim();
+  if (!endpoint) {
+    return undefined;
+  }
+  if (!endpoint.startsWith('/api/') || endpoint.startsWith('//')) {
+    return undefined;
+  }
+  if (endpoint.includes('\\') || /[\u0000-\u001F\u007F\s]/.test(endpoint)) {
+    return undefined;
+  }
+  try {
+    const parsed = new URL(endpoint, window.location.origin);
+    if (parsed.origin !== window.location.origin) {
+      return undefined;
+    }
+    return parsed.pathname + parsed.search;
+  } catch {
+    return undefined;
+  }
+}
+
+export function sanitizeLogData(
+  data: unknown,
+  options: { includeStack?: boolean } = {}
+): unknown {
+  return sanitizeLogDataInternal(data, {
+    includeStack: options.includeStack ?? false,
+    seen: new WeakSet<object>(),
+    depth: 0,
+  });
+}
+
+function sanitizeLogDataInternal(
+  data: unknown,
+  context: { includeStack: boolean; seen: WeakSet<object>; depth: number }
+): unknown {
+  if (data === null || data === undefined) {
+    return data;
+  }
+
+  if (typeof data === 'string') {
+    return sanitizeString(data);
+  }
+
+  if (typeof data === 'number' || typeof data === 'boolean') {
+    return data;
+  }
+
+  if (typeof data === 'bigint') {
+    return data.toString();
+  }
+
+  if (typeof data === 'symbol' || typeof data === 'function') {
+    return `[${typeof data}]`;
+  }
+
+  if (context.depth > MAX_SANITIZE_DEPTH) {
+    return '[MaxDepth]';
+  }
+
+  if (data instanceof Error) {
+    return {
+      name: sanitizeString(data.name),
+      message: sanitizeString(data.message),
+      stack: context.includeStack && data.stack ? sanitizeString(data.stack) : undefined,
+    };
+  }
+
+  if (typeof data === 'object') {
+    if (context.seen.has(data)) {
+      return CIRCULAR_REFERENCE;
+    }
+
+    context.seen.add(data);
+
+    if (Array.isArray(data)) {
+      return data.map((item) =>
+        sanitizeLogDataInternal(item, { ...context, depth: context.depth + 1 })
+      );
+    }
+
+    const sanitized: Record<string, unknown> = {};
+    for (const [key, value] of Object.entries(data)) {
+      sanitized[key] = isSensitiveKey(key)
+        ? REDACTED
+        : sanitizeLogDataInternal(value, { ...context, depth: context.depth + 1 });
+    }
+
+    return sanitized;
+  }
+
+  return data;
+}
+
 class Logger {
   private config: LogConfig;
   private isDevelopment: boolean;
@@ -35,8 +170,8 @@ class Logger {
     this.config = {
       level: this.isDevelopment ? LogLevel.DEBUG : LogLevel.WARN,
       enableConsole: true,
-      enableRemote: !this.isDevelopment,
-      remoteEndpoint: '/api/v1/logs',
+      enableRemote: !this.isDevelopment && !!remoteLogEndpoint,
+      remoteEndpoint: remoteLogEndpoint,
     };
   }
 
@@ -187,48 +322,7 @@ class Logger {
    * 清理敏感数据
    */
   private sanitizeData(data: unknown): unknown {
-    if (!data) {
-      return data;
-    }
-
-    // 如果是字符串，直接返回
-    if (typeof data === 'string') {
-      return data;
-    }
-
-    // 如果是 Error 对象，提取关键信息
-    if (data instanceof Error) {
-      return {
-        name: data.name,
-        message: data.message,
-        stack: this.isDevelopment ? data.stack : undefined,
-      };
-    }
-
-    // 如果是对象，递归清理
-    if (typeof data === 'object' && data !== null) {
-      const sanitized: Record<string, unknown> = {};
-      const sensitiveKeys = ['password', 'token', 'secret', 'apiKey', 'authorization', 'cookie'];
-
-      for (const [key, value] of Object.entries(data)) {
-        // 检查是否是敏感字段
-        const isSensitive = sensitiveKeys.some(
-          (sensitiveKey) => key.toLowerCase().includes(sensitiveKey.toLowerCase())
-        );
-
-        if (isSensitive) {
-          sanitized[key] = '[REDACTED]';
-        } else if (typeof value === 'object' && value !== null) {
-          sanitized[key] = this.sanitizeData(value);
-        } else {
-          sanitized[key] = value;
-        }
-      }
-
-      return sanitized;
-    }
-
-    return data;
+    return sanitizeLogData(data, { includeStack: this.isDevelopment });
   }
 
   /**
