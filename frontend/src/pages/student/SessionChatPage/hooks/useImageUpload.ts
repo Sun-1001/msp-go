@@ -6,6 +6,7 @@ export const useImageUpload = () => {
   const [previewUrls, setPreviewUrls] = useState<string[]>([]);
   const [isUploading, setIsUploading] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const previewUrlsRef = useRef<string[]>([]);
 
   // 处理图片选择
   const handleImageSelect = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
@@ -27,7 +28,11 @@ export const useImageUpload = () => {
     }
 
     setSelectedImages((prev) => [...prev, ...newFiles]);
-    setPreviewUrls((prev) => [...prev, ...newUrls]);
+    setPreviewUrls((prev) => {
+      const next = [...prev, ...newUrls];
+      previewUrlsRef.current = next;
+      return next;
+    });
 
     // 重置 input 以允许重复选择同一文件
     if (fileInputRef.current) {
@@ -41,23 +46,27 @@ export const useImageUpload = () => {
     setPreviewUrls((prev) => {
       const url = prev[index];
       if (url) URL.revokeObjectURL(url);
-      return prev.filter((_, i) => i !== index);
+      const next = prev.filter((_, i) => i !== index);
+      previewUrlsRef.current = next;
+      return next;
     });
   }, []);
 
   // 清空图片
   const clearImages = useCallback(() => {
-    previewUrls.forEach((url) => URL.revokeObjectURL(url));
+    previewUrlsRef.current.forEach((url) => URL.revokeObjectURL(url));
+    previewUrlsRef.current = [];
     setSelectedImages([]);
     setPreviewUrls([]);
-  }, [previewUrls]);
+  }, []);
 
   // 清理预览 URL
   useEffect(() => {
     return () => {
-      previewUrls.forEach((url) => URL.revokeObjectURL(url));
+      previewUrlsRef.current.forEach((url) => URL.revokeObjectURL(url));
+      previewUrlsRef.current = [];
     };
-  }, [previewUrls]);
+  }, []);
 
   return {
     selectedImages,

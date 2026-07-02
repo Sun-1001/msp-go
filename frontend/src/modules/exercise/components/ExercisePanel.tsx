@@ -68,26 +68,42 @@ export const ExercisePanel: React.FC<ExercisePanelProps> = ({
   const [imagePreview, setImagePreview] = useState<string | null>(null);
   const [isUploading, setIsUploading] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const imagePreviewRef = useRef<string | null>(null);
 
   useEffect(() => {
     loadNextQuestion();
   }, [loadNextQuestion]);
+
+  useEffect(() => {
+    return () => {
+      if (imagePreviewRef.current) {
+        URL.revokeObjectURL(imagePreviewRef.current);
+      }
+    };
+  }, []);
+
+  const replaceImagePreview = useCallback((url: string | null) => {
+    if (imagePreviewRef.current) {
+      URL.revokeObjectURL(imagePreviewRef.current);
+    }
+    imagePreviewRef.current = url;
+    setImagePreview(url);
+  }, []);
 
   // 图片选择
   const handleImageSelect = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
     setImageFile(file);
-    setImagePreview(URL.createObjectURL(file));
-  }, []);
+    replaceImagePreview(URL.createObjectURL(file));
+  }, [replaceImagePreview]);
 
   // 移除图片
   const handleRemoveImage = useCallback(() => {
-    if (imagePreview) URL.revokeObjectURL(imagePreview);
+    replaceImagePreview(null);
     setImageFile(null);
-    setImagePreview(null);
     if (fileInputRef.current) fileInputRef.current.value = '';
-  }, [imagePreview]);
+  }, [replaceImagePreview]);
   // 提交答案
   const handleSubmit = useCallback(async () => {
     let imageUrl: string | undefined;
