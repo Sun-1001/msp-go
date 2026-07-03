@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"sort"
 	"strings"
 	"testing"
@@ -63,11 +64,47 @@ func TestGoRouteModulesAreRegistered(t *testing.T) {
 
 func repoRoot(t *testing.T) string {
 	t.Helper()
+	candidates := []string{}
+	for _, name := range []string{"MSP_REPO_ROOT", "REPO_ROOT", "PROJECT_ROOT"} {
+		if value := strings.TrimSpace(os.Getenv(name)); value != "" {
+			candidates = append(candidates, value)
+		}
+	}
 	wd, err := os.Getwd()
 	if err != nil {
 		t.Fatalf("get working directory: %v", err)
 	}
-	return filepath.Clean(filepath.Join(wd, "..", "..", ".."))
+	candidates = append(candidates, wd)
+	if _, filename, _, ok := runtime.Caller(0); ok {
+		candidates = append(candidates, filepath.Dir(filename))
+	}
+	for _, candidate := range candidates {
+		if root, ok := findRepoRoot(candidate); ok {
+			return root
+		}
+	}
+	t.Fatalf("find repository root from candidates: %s", strings.Join(candidates, ", "))
+	return ""
+}
+
+func findRepoRoot(start string) (string, bool) {
+	dir := filepath.Clean(start)
+	for {
+		if fileExists(filepath.Join(dir, "backend-go", "go.mod")) &&
+			fileExists(filepath.Join(dir, "frontend", "package.json")) {
+			return dir, true
+		}
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			return "", false
+		}
+		dir = parent
+	}
+}
+
+func fileExists(path string) bool {
+	_, err := os.Stat(path)
+	return err == nil
 }
 
 func extractGoRoutes(t *testing.T, filename string) []route {

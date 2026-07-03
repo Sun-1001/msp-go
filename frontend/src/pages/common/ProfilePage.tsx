@@ -2,8 +2,8 @@ import React, { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
-import { useAppDispatch, useAppSelector } from '@/store';
-import { selectCurrentUser, fetchCurrentUser } from '@/modules/auth/store/authSlice';
+import { useAppSelector } from '@/store';
+import { selectCurrentUser } from '@/modules/auth/store/authSlice';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/Card';
 import { Button } from '@/components/ui/Button';
 import { Input } from '@/components/ui/Input';
@@ -14,6 +14,8 @@ import { passwordChangeSchema, type PasswordChangeFormData } from '@/libs/valida
 import { authService } from '@/modules/auth/services/authService';
 import { xidianService, type XidianBindingStatus, type XidianCaptchaChallenge } from '@/modules/xidian/services/xidianService';
 import { clearCredential } from '@/modules/xidian';
+
+const EMAIL_VERIFICATION_UNAVAILABLE = '邮箱绑定与验证功能暂未接入';
 
 export const ProfilePage: React.FC = () => {
   const user = useAppSelector(selectCurrentUser);
@@ -35,13 +37,9 @@ export const ProfilePage: React.FC = () => {
   const [syncingType, setSyncingType] = useState<'classtable' | 'exams' | 'scores' | null>(null);
   const [emailBindModalOpen, setEmailBindModalOpen] = useState(false);
   const [emailBindValue, setEmailBindValue] = useState('');
-  const [emailCodeValue, setEmailCodeValue] = useState('');
-  const [emailCodeSent, setEmailCodeSent] = useState(false);
   const [emailBindSubmitting, setEmailBindSubmitting] = useState(false);
   const [emailBindError, setEmailBindError] = useState<string | null>(null);
   const [emailActionStatus, setEmailActionStatus] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
-
-  const dispatch = useAppDispatch();
 
   const {
     register,
@@ -204,8 +202,6 @@ export const ProfilePage: React.FC = () => {
   const handleOpenEmailBind = () => {
     setEmailBindModalOpen(true);
     setEmailBindValue(isEmailBound ? '' : (user?.email || ''));
-    setEmailCodeValue('');
-    setEmailCodeSent(false);
     setEmailBindError(null);
     setEmailActionStatus(null);
   };
@@ -223,36 +219,12 @@ export const ProfilePage: React.FC = () => {
     setEmailBindSubmitting(true);
     setEmailBindError(null);
     try {
-      const res = await authService.bindEmail(email);
-      setEmailCodeSent(true);
-      setEmailActionStatus({ type: 'success', message: res.message });
+      await authService.bindEmail(email);
     } catch (err: unknown) {
-      setEmailBindError(getApiErrorMessage(err, '发送失败，请重试'));
-    } finally {
-      setEmailBindSubmitting(false);
-    }
-  };
-
-  const handleVerifyEmailCode = async () => {
-    const email = emailBindValue.trim();
-    const code = emailCodeValue.trim();
-    if (!email || !code) {
-      setEmailBindError('请输入邮箱和验证码');
-      return;
-    }
-    if (code.length !== 6 || !/^\d+$/.test(code)) {
-      setEmailBindError('请输入 6 位数字验证码');
-      return;
-    }
-    setEmailBindSubmitting(true);
-    setEmailBindError(null);
-    try {
-      await authService.verifyEmailByCode(email, code);
-      setEmailActionStatus({ type: 'success', message: '邮箱验证成功' });
-      setEmailBindModalOpen(false);
-      dispatch(fetchCurrentUser());
-    } catch (err: unknown) {
-      setEmailBindError(getApiErrorMessage(err, '验证失败，请重试'));
+      setEmailActionStatus({
+        type: 'error',
+        message: getApiErrorMessage(err, EMAIL_VERIFICATION_UNAVAILABLE),
+      });
     } finally {
       setEmailBindSubmitting(false);
     }
@@ -361,8 +333,6 @@ export const ProfilePage: React.FC = () => {
                       size="sm"
                       onClick={() => {
                         setEmailBindValue(user?.email || '');
-                        setEmailCodeValue('');
-                        setEmailCodeSent(false);
                         setEmailBindError(null);
                         setEmailActionStatus(null);
                         setEmailBindModalOpen(true);
@@ -375,8 +345,6 @@ export const ProfilePage: React.FC = () => {
                       size="sm"
                       onClick={() => {
                         setEmailBindValue('');
-                        setEmailCodeValue('');
-                        setEmailCodeSent(false);
                         setEmailBindError(null);
                         setEmailActionStatus(null);
                         setEmailBindModalOpen(true);
@@ -665,21 +633,9 @@ export const ProfilePage: React.FC = () => {
               placeholder={isEmailBound ? '请输入新的邮箱地址' : '请输入要绑定的邮箱地址'}
               value={emailBindValue}
               onChange={(e) => setEmailBindValue(e.target.value)}
-              disabled={emailBindSubmitting || emailCodeSent}
+              disabled={emailBindSubmitting}
             />
           </div>
-          {emailCodeSent && (
-            <div className="space-y-2">
-              <label className="text-sm font-medium text-surface-700 dark:text-surface-300">验证码</label>
-              <Input
-                placeholder="请输入 6 位验证码"
-                value={emailCodeValue}
-                onChange={(e) => setEmailCodeValue(e.target.value.replace(/\D/g, ''))}
-                maxLength={6}
-                disabled={emailBindSubmitting}
-              />
-            </div>
-          )}
           {emailBindError && (
             <div className="flex items-center gap-2 rounded-lg bg-red-50 p-3 text-red-700 dark:bg-red-900/20 dark:text-red-400">
               <XCircle className="h-4 w-4 shrink-0" />
@@ -706,15 +662,9 @@ export const ProfilePage: React.FC = () => {
             <Button variant="outline" onClick={() => setEmailBindModalOpen(false)} disabled={emailBindSubmitting}>
               取消
             </Button>
-            {emailCodeSent ? (
-              <Button onClick={handleVerifyEmailCode} disabled={emailBindSubmitting}>
-                {emailBindSubmitting ? '验证中...' : '确认验证'}
-              </Button>
-            ) : (
-              <Button onClick={handleSendEmailCode} disabled={emailBindSubmitting}>
-                {emailBindSubmitting ? '发送中...' : '发送验证码'}
-              </Button>
-            )}
+            <Button onClick={handleSendEmailCode} disabled={emailBindSubmitting}>
+              {emailBindSubmitting ? '处理中...' : '确认'}
+            </Button>
           </div>
         </div>
       </Modal>

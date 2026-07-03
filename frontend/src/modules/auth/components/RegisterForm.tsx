@@ -15,7 +15,6 @@ import {
   RoleSelector,
   type RoleOption,
 } from '@/libs/form';
-import { Button } from '@/components/ui/Button';
 import { systemSettingService, type RegistrationSettings } from '@/modules/admin/services/systemSettingService';
 import { authService } from '@/modules/auth/services/authService';
 import { getApiErrorMessage } from '@/libs/http/apiClient';
@@ -58,9 +57,6 @@ export const RegisterForm: React.FC<RegisterFormProps> = ({ onSwitchToLogin }) =
   const [isLoadingStatus, setIsLoadingStatus] = useState(true);
   const [registerSuccess, setRegisterSuccess] = useState(false);
   const [registeredEmail, setRegisteredEmail] = useState('');
-  const [verifyCode, setVerifyCode] = useState('');
-  const [verifySubmitting, setVerifySubmitting] = useState(false);
-  const [verifyError, setVerifyError] = useState<string | null>(null);
 
   // 加载注册状态
   useEffect(() => {
@@ -146,8 +142,6 @@ export const RegisterForm: React.FC<RegisterFormProps> = ({ onSwitchToLogin }) =
       });
 
       setRegisteredEmail(data.email);
-      setVerifyCode('');
-      setVerifyError(null);
       setRegisterSuccess(true);
     } catch (err) {
       const message = getApiErrorMessage(err, '注册失败，请稍后重试');
@@ -174,35 +168,14 @@ export const RegisterForm: React.FC<RegisterFormProps> = ({ onSwitchToLogin }) =
     );
   }
 
-  const handleVerifyCode = async () => {
-    if (!registeredEmail || !verifyCode.trim()) {
-      setVerifyError('请输入验证码');
-      return;
-    }
-    if (verifyCode.length !== 6 || !/^\d+$/.test(verifyCode)) {
-      setVerifyError('请输入 6 位数字验证码');
-      return;
-    }
-    setVerifySubmitting(true);
-    setVerifyError(null);
-    try {
-      await authService.verifyEmailByCode(registeredEmail, verifyCode);
-      onSwitchToLogin?.();
-    } catch (err) {
-      setVerifyError(getApiErrorMessage(err, '验证失败，请重试'));
-    } finally {
-      setVerifySubmitting(false);
-    }
-  };
-
-  // 注册成功，等待验证
+  // 注册成功
   if (registerSuccess) {
     return (
       <div className="w-full space-y-6">
         <FormHeader
           icon={UserPlus}
-          title="验证邮箱"
-          subtitle="验证码已发送到您的邮箱"
+          title="注册成功"
+          subtitle="账号已创建，可以直接登录"
         />
         <div className="flex flex-col py-6 space-y-4">
           <div className="p-4 rounded-full bg-emerald-50 dark:bg-emerald-900/30 w-fit mx-auto">
@@ -213,43 +186,13 @@ export const RegisterForm: React.FC<RegisterFormProps> = ({ onSwitchToLogin }) =
               账号创建成功
             </h3>
             <p className="text-sm text-surface-500 dark:text-surface-400">
-              验证码已发送至 {registeredEmail}，请输入验证码完成验证
+              邮箱 {registeredEmail} 已保存，邮箱验证功能暂未接入。
             </p>
-          </div>
-          <div className="space-y-2 max-w-xs mx-auto">
-            <input
-              type="text"
-              inputMode="numeric"
-              maxLength={6}
-              placeholder="请输入 6 位验证码"
-              value={verifyCode}
-              onChange={(e) => setVerifyCode(e.target.value.replace(/\D/g, ''))}
-              className="w-full px-4 py-2 border border-surface-300 dark:border-surface-600 rounded-lg bg-white dark:bg-surface-800 text-surface-900 dark:text-surface-100 text-center text-lg tracking-widest"
-              disabled={verifySubmitting}
-            />
-            {verifyError && (
-              <p className="text-sm text-red-500 text-center">{verifyError}</p>
-            )}
-            <Button
-              type="button"
-              onClick={handleVerifyCode}
-              disabled={verifySubmitting}
-              className="w-full"
-            >
-              {verifySubmitting ? (
-                <>
-                  <Loader2 className="w-4 h-4 mr-2 animate-spin" />
-                  验证中...
-                </>
-              ) : (
-                '确认验证'
-              )}
-            </Button>
           </div>
         </div>
         <FormDivider />
         <FormFooterLink
-          text="已有账号？"
+          text="下一步"
           linkText="立即登录"
           onClick={onSwitchToLogin}
         />
@@ -318,17 +261,17 @@ export const RegisterForm: React.FC<RegisterFormProps> = ({ onSwitchToLogin }) =
 
         <div className="space-y-2">
           <FormField
-            label="绑定邮箱（需验证）"
+            label="邮箱"
             icon={Mail}
             type="email"
-            placeholder="请输入要绑定的邮箱地址"
+            placeholder="请输入邮箱地址"
             autoComplete="email"
             disabled={isSubmitting || !isCurrentRoleAllowed}
             error={errors.email?.message}
             {...register('email')}
           />
           <p className="text-xs text-surface-500 dark:text-surface-400 -mt-1">
-            注册后将向该邮箱发送验证码，输入验证码完成验证即绑定成功
+            用于账号联系与后续找回；邮箱验证功能暂未接入
           </p>
         </div>
 

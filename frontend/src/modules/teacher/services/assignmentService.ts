@@ -1,14 +1,9 @@
 /**
- * 作业管理 API 服务
+ * 作业管理服务
  *
- * 对接后端 /teacher/assignments API
+ * Go 后端尚未提供作业管理路由；这里保持页面可渲染的空状态，
+ * 避免前端持续请求不存在的 /teacher/assignments API。
  */
-
-import { apiClient } from '@/libs/http/apiClient';
-import { logger } from '@/libs/utils/logger';
-
-const assignmentLogger = logger.createContextLogger('Assignment');
-const BASE_PATH = '/teacher/assignments';
 
 // ========== 类型定义 ==========
 
@@ -39,49 +34,6 @@ export interface AssignmentStats {
   pending: number;
 }
 
-// ========== 后端原始响应 ==========
-
-interface AssignmentRaw {
-  id: string;
-  title: string;
-  description: string;
-  status: string;
-  due_date: string | null;
-  created_at: string;
-  total_students: number;
-  submitted: number;
-  graded: number;
-  questions: number;
-  average_score: number | null;
-}
-
-interface AssignmentListResponseRaw {
-  items: AssignmentRaw[];
-  total: number;
-  page: number;
-  page_size: number;
-}
-
-// ========== 映射函数 ==========
-
-function mapAssignment(raw: AssignmentRaw): Assignment {
-  return {
-    id: raw.id,
-    title: raw.title,
-    description: raw.description,
-    status: raw.status as Assignment['status'],
-    dueDate: raw.due_date,
-    createdAt: raw.created_at,
-    totalStudents: raw.total_students,
-    submitted: raw.submitted,
-    graded: raw.graded,
-    questions: raw.questions,
-    averageScore: raw.average_score,
-  };
-}
-
-// ========== API 方法 ==========
-
 export const assignmentService = {
   /**
    * 获取作业列表
@@ -91,37 +43,18 @@ export const assignmentService = {
     pageSize?: number;
     status?: string;
   } = {}): Promise<AssignmentListResponse> {
-    try {
-      const response = await apiClient.get<AssignmentListResponseRaw>(BASE_PATH, {
-        params: {
-          page: params.page || 1,
-          page_size: params.pageSize || 20,
-          status: params.status,
-        },
-      });
-      const raw = response.data;
-      return {
-        items: raw.items.map(mapAssignment),
-        total: raw.total,
-        page: raw.page,
-        pageSize: raw.page_size,
-      };
-    } catch (error) {
-      assignmentLogger.error('获取作业列表失败', error);
-      throw error;
-    }
+    return {
+      items: [],
+      total: 0,
+      page: params.page || 1,
+      pageSize: params.pageSize || 20,
+    };
   },
 
   /**
    * 获取作业统计
    */
   async getStats(): Promise<AssignmentStats> {
-    try {
-      const response = await apiClient.get<AssignmentStats>(`${BASE_PATH}/stats`);
-      return response.data;
-    } catch (error) {
-      assignmentLogger.error('获取作业统计失败', error);
-      throw error;
-    }
+    return { total: 0, active: 0, pending: 0 };
   },
 };

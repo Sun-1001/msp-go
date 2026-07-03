@@ -74,16 +74,7 @@ func TestFrontendAPICallsAreCoveredByGoOrExplicitlyClassified(t *testing.T) {
 }
 
 func frontendRouteExceptions() map[string]string {
-	return map[string]string{
-		"POST /auth/bind-email":           "frontend profile email binding flow; no current Go route or schema support exists",
-		"GET /auth/verify-email":          "dormant frontend verification page; not registered in app routes and no current Go route exists",
-		"POST /auth/verify-email-by-code": "frontend registration/profile verification flow; no current Go route or schema support exists",
-		"POST /questions/import":          "deprecated frontend helper; current UI uses /questions/batch/import",
-		"GET /questions/export":           "deprecated frontend helper; current UI exports client-side data",
-		"GET /questions/template":         "deprecated frontend helper; no active UI call path was found",
-		"GET /teacher/assignments":        "frontend-only assignments page; code already treats missing API as not implemented",
-		"GET /teacher/assignments/stats":  "frontend-only assignments page; code already treats missing API as not implemented",
-	}
+	return map[string]string{}
 }
 
 func collectFrontendEndpoints(t *testing.T, root string) []frontendEndpoint {
@@ -100,15 +91,19 @@ func collectFrontendEndpoints(t *testing.T, root string) []frontendEndpoint {
 		if !strings.HasSuffix(path, ".ts") && !strings.HasSuffix(path, ".tsx") {
 			return nil
 		}
-		content, err := os.ReadFile(path)
-		if err != nil {
-			return err
-		}
 		rel, err := filepath.Rel(root, path)
 		if err != nil {
 			return err
 		}
-		for _, endpoint := range extractFrontendEndpointsFromSource(string(content), filepath.ToSlash(rel)) {
+		rel = filepath.ToSlash(rel)
+		if isFrontendTestSource(rel) {
+			return nil
+		}
+		content, err := os.ReadFile(path)
+		if err != nil {
+			return err
+		}
+		for _, endpoint := range extractFrontendEndpointsFromSource(string(content), rel) {
 			key := endpoint.Method + " " + endpoint.Path
 			if _, exists := endpointsByKey[key]; !exists {
 				endpointsByKey[key] = endpoint
@@ -130,6 +125,15 @@ func collectFrontendEndpoints(t *testing.T, root string) []frontendEndpoint {
 		return left < right
 	})
 	return endpoints
+}
+
+func isFrontendTestSource(path string) bool {
+	base := filepath.Base(path)
+	return strings.Contains(path, "/__tests__/") ||
+		strings.HasSuffix(base, ".test.ts") ||
+		strings.HasSuffix(base, ".test.tsx") ||
+		strings.HasSuffix(base, ".spec.ts") ||
+		strings.HasSuffix(base, ".spec.tsx")
 }
 
 func extractFrontendEndpointsFromSource(source string, filename string) []frontendEndpoint {

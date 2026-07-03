@@ -64,6 +64,8 @@ export interface UserInfo {
   role: 'student' | 'teacher' | 'admin';
 }
 
+const EMAIL_VERIFICATION_UNAVAILABLE = '邮箱绑定与验证功能暂未接入';
+
 export const authService = {
   async login(credentials: LoginCredentials): Promise<AuthResponse> {
     const response = await apiClient.post<LoginApiResponse>('/auth/login', {
@@ -112,18 +114,8 @@ export const authService = {
   },
 
   async bindEmail(email: string): Promise<{ message: string }> {
-    const response = await apiClient.post<{ message: string }>('/auth/bind-email', {
-      email: email.trim(),
-    });
-    return response.data;
-  },
-
-  async verifyEmailByCode(email: string, code: string): Promise<{ success: boolean; message: string }> {
-    const response = await apiClient.post<{ success: boolean; message: string }>(
-      '/auth/verify-email-by-code',
-      { email: email.trim(), code: code.trim() }
-    );
-    return response.data;
+    void email;
+    throw new Error(EMAIL_VERIFICATION_UNAVAILABLE);
   },
 };
 
