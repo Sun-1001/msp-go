@@ -8,6 +8,8 @@ import { logger } from '../utils/logger';
 import { authTokenStorage } from '../auth/tokenStorage';
 
 const sseLogger = logger.createContextLogger('SSE');
+const MAX_SSE_BUFFER_CHARS = 1024 * 1024;
+const MAX_SSE_EVENT_DATA_CHARS = 1024 * 1024;
 
 /**
  * SSE 事件处理器
@@ -125,6 +127,7 @@ export function createSSEConnection(
         // 解析 SSE 事件 - 统一处理 \r\n 和 \n 换行符
         const lines = buffer.split('\n');
         buffer = lines.pop() || ''; // 保留不完整的行
+        assertWithinLimit(buffer, MAX_SSE_BUFFER_CHARS, 'SSE buffer exceeded size limit');
 
         for (const rawLine of lines) {
           // 移除行末的 \r（处理 Windows 风格换行符 \r\n）
@@ -133,7 +136,7 @@ export function createSSEConnection(
           if (line.startsWith('event:')) {
             currentEvent = line.slice(6).trim();
           } else if (line.startsWith('data:')) {
-            currentData = line.slice(5).trim();
+            currentData = appendEventDataLine(currentData, line.slice(5).trim());
           } else if (line === '' && currentData) {
             // 空行表示事件结束
             processEvent(currentEvent, currentData, handlers, (id) => {
@@ -166,6 +169,47 @@ export function createSSEConnection(
   };
 }
 
+function assertWithinLimit(value: string, maxLength: number, message: string): void {
+  if (value.length > maxLength) {
+    throw new Error(message);
+  }
+}
+
+function appendEventDataLine(currentData: string, lineData: string): string {
+  const nextData = currentData ? `${currentData}\n${lineData}` : lineData;
+  assertWithinLimit(nextData, MAX_SSE_EVENT_DATA_CHARS, 'SSE event exceeded size limit');
+  return nextData;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+function stringValue(value: unknown, fallback = ''): string {
+  return typeof value === 'string' ? value : fallback;
+}
+
+function nullableStringValue(value: unknown): string | null {
+  return typeof value === 'string' ? value : null;
+}
+
+function isStreamChunkType(value: string): boolean {
+  return value === 'chunk' || value === 'stream';
+}
+
+function handleMessageEvent(parsed: Record<string, unknown>, handlers: SSEHandlers): void {
+  const type = stringValue(parsed.type);
+  if (isStreamChunkType(type)) {
+    handlers.onChunk?.(
+      stringValue(parsed.content),
+      nullableStringValue(parsed.agent),
+      stringValue(parsed.message_id)
+    );
+  } else if (type === 'done') {
+    handlers.onDone?.(stringValue(parsed.message_id), nullableStringValue(parsed.agent));
+  }
+}
+
 /**
  * 处理 SSE 事件
  */
@@ -176,58 +220,57 @@ function processEvent(
   setTaskId: (id: string) => void
 ): void {
   try {
-    const parsed = JSON.parse(data);
+    const parsed: unknown = JSON.parse(data);
+    if (!isRecord(parsed)) {
+      sseLogger.warn('Ignored invalid SSE event payload', {
+        event,
+        dataLength: data.length,
+      });
+      return;
+    }
 
-    switch (event || parsed.type) {
+    switch (event || stringValue(parsed.type)) {
       case 'task_info':
-        if (parsed.task_id) {
+        if (typeof parsed.task_id === 'string' && parsed.task_id) {
           setTaskId(parsed.task_id);
           handlers.onTaskInfo?.(parsed.task_id);
         }
         break;
 
       case 'message':
-        if (parsed.type === 'chunk' || parsed.type === 'stream') {
-          handlers.onChunk?.(
-            parsed.content || '',
-            parsed.agent || null,
-            parsed.message_id || ''
-          );
-        } else if (parsed.type === 'done') {
-          handlers.onDone?.(parsed.message_id || '', parsed.agent || null);
-        }
+        handleMessageEvent(parsed, handlers);
         break;
 
       case 'error':
         handlers.onError?.({
-          code: parsed.code || 'UNKNOWN_ERROR',
-          message: parsed.message || '未知错误',
+          code: stringValue(parsed.code, 'UNKNOWN_ERROR'),
+          message: stringValue(parsed.message, '未知错误'),
         });
         break;
 
       case 'cancelled':
-        handlers.onCancelled?.(parsed.message_id || parsed.task_id || '');
+        handlers.onCancelled?.(
+          stringValue(parsed.message_id) || stringValue(parsed.task_id)
+        );
         break;
 
       default:
         // 处理没有 event 字段的消息
-        if (parsed.type === 'chunk' || parsed.type === 'stream') {
-          handlers.onChunk?.(
-            parsed.content || '',
-            parsed.agent || null,
-            parsed.message_id || ''
-          );
-        } else if (parsed.type === 'done') {
-          handlers.onDone?.(parsed.message_id || '', parsed.agent || null);
+        if (isStreamChunkType(stringValue(parsed.type)) || parsed.type === 'done') {
+          handleMessageEvent(parsed, handlers);
         } else if (parsed.type === 'error') {
           handlers.onError?.({
-            code: parsed.code || 'UNKNOWN_ERROR',
-            message: parsed.message || '未知错误',
+            code: stringValue(parsed.code, 'UNKNOWN_ERROR'),
+            message: stringValue(parsed.message, '未知错误'),
           });
         }
     }
   } catch (e) {
-    sseLogger.warn('Failed to parse SSE event', { event, data, error: e });
+    sseLogger.warn('Failed to parse SSE event', {
+      event,
+      dataLength: data.length,
+      error: e,
+    });
   }
 }
 
@@ -239,9 +282,15 @@ function processEvent(
  */
 export async function cancelTask(taskId: string): Promise<boolean> {
   try {
-    const token = authTokenStorage.get();
+    const normalizedTaskId = taskId.trim();
+    if (!normalizedTaskId) {
+      return false;
+    }
 
-    const response = await fetch(`/api/v1/session/task/${taskId}/cancel`, {
+    const token = authTokenStorage.get();
+    const encodedTaskId = encodeURIComponent(normalizedTaskId);
+
+    const response = await fetch(`/api/v1/session/task/${encodedTaskId}/cancel`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',

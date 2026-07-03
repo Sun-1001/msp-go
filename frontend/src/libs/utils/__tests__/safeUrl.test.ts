@@ -3,6 +3,7 @@ import {
   normalizeSafeExternalUrl,
   normalizeSafeHttpUrl,
   normalizeSafeImageAttachmentUrl,
+  normalizeSafeMailtoUrl,
 } from '@/libs/utils/safeUrl';
 
 describe('safe URL utilities', () => {
@@ -61,6 +62,25 @@ describe('safe URL utilities', () => {
 
     for (const value of cases) {
       expect(normalizeSafeImageAttachmentUrl(value)).toBeNull();
+    }
+  });
+
+  it('normalizes plain email addresses into safe mailto URLs', () => {
+    expect(normalizeSafeMailtoUrl(' teacher.name+math@example.edu ')).toBe(
+      'mailto:teacher.name+math@example.edu'
+    );
+
+    const cases = [
+      'mailto:teacher@example.edu',
+      'teacher@example.edu?subject=hello',
+      'teacher@example.edu&body=token',
+      'teacher@example.edu\nbcc:other@example.edu',
+      'teacher@localhost',
+      'https://example.edu',
+    ];
+
+    for (const value of cases) {
+      expect(normalizeSafeMailtoUrl(value)).toBeNull();
     }
   });
 });

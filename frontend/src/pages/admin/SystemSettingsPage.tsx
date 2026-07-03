@@ -31,7 +31,7 @@ import {
   type DatabaseMonitorResponse,
 } from '@/modules/admin/services/systemSettingService';
 import { getApiErrorMessage } from '../../libs/http/apiClient';
-import { downloadBlob } from '@/libs/utils/download';
+import { base64ToBlob, downloadBlob } from '@/libs/utils/download';
 
 export const SystemSettingsPage: React.FC = () => {
   return (
@@ -549,13 +549,7 @@ const DatabaseBackupCard: React.FC = () => {
     setIsExporting(true);
     try {
       const result = await systemSettingService.exportData([...selectedTables]);
-      // 解码 Base64 并触发下载
-      const byteChars = atob(result.content);
-      const byteArray = new Uint8Array(byteChars.length);
-      for (let i = 0; i < byteChars.length; i++) {
-        byteArray[i] = byteChars.charCodeAt(i);
-      }
-      const blob = new Blob([byteArray], { type: 'application/json' });
+      const blob = base64ToBlob(result.content, 'application/json');
       downloadBlob(blob, result.filename, 'database_export.json');
       setSuccess(`导出成功，共 ${result.total_records} 条记录`);
       setTimeout(() => setSuccess(''), 5000);

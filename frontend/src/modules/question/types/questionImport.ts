@@ -90,6 +90,9 @@ export const MAX_IMPORT_FILE_SIZE = 10 * 1024 * 1024;
 /** 单次批量导入最大题目数 */
 export const MAX_BATCH_IMPORT_SIZE = 200;
 
+/** 单个文件本地解析后最多进入预览的题目数 */
+export const MAX_PARSED_IMPORT_QUESTIONS = 1000;
+
 /** AI 解析单次最大文本段数 */
 export const MAX_AI_PARSE_TEXTS = 10;
 

@@ -5,7 +5,7 @@
  */
 
 import { apiClient } from '@/libs/http/apiClient';
-import { downloadBlob } from '@/libs/utils/download';
+import { base64ToBlob, downloadBlob } from '@/libs/utils/download';
 import { logger } from '@/libs/utils/logger';
 import type {
   SecurityLogListResponse,
@@ -150,15 +150,7 @@ export const securityLogService = {
   downloadExportedFile(exportResponse: SecurityLogExportResponse): void {
     const { filename, content, content_type } = exportResponse;
 
-    // 解码 Base64 内容
-    const binaryString = atob(content);
-    const bytes = new Uint8Array(binaryString.length);
-    for (let i = 0; i < binaryString.length; i++) {
-      bytes[i] = binaryString.charCodeAt(i);
-    }
-
-    // 创建 Blob 并下载
-    const blob = new Blob([bytes], { type: content_type });
+    const blob = base64ToBlob(content, content_type);
     const safeFilename = downloadBlob(blob, filename, 'security_logs_export');
 
     securityLogger.debug('文件下载已触发', { filename: safeFilename });

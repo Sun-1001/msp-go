@@ -1,5 +1,7 @@
 const DEFAULT_DOWNLOAD_FILENAME = 'download';
 const RESERVED_WINDOWS_NAMES = /^(con|prn|aux|nul|com[1-9]|lpt[1-9])(?:\.|$)/i;
+const MAX_BASE64_DOWNLOAD_LENGTH = 64 * 1024 * 1024;
+const BASE64_PATTERN = /^[A-Za-z0-9+/]*={0,2}$/;
 
 export function sanitizeDownloadFilename(
   rawFilename: string | null | undefined,
@@ -52,4 +54,33 @@ export function downloadBlob(
   }
 
   return safeFilename;
+}
+
+export function base64ToBlob(
+  content: string | null | undefined,
+  contentType = 'application/octet-stream',
+): Blob {
+  const normalized = content?.replace(/\s/g, '') ?? '';
+  if (
+    !normalized ||
+    normalized.length > MAX_BASE64_DOWNLOAD_LENGTH ||
+    normalized.length % 4 === 1 ||
+    !BASE64_PATTERN.test(normalized)
+  ) {
+    throw new Error('导出文件内容异常');
+  }
+
+  let binaryString: string;
+  try {
+    binaryString = atob(normalized);
+  } catch {
+    throw new Error('导出文件内容异常');
+  }
+
+  const bytes = new Uint8Array(binaryString.length);
+  for (let i = 0; i < binaryString.length; i++) {
+    bytes[i] = binaryString.charCodeAt(i);
+  }
+
+  return new Blob([bytes], { type: contentType });
 }

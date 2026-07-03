@@ -5,7 +5,8 @@
  * 支持格式：txt, md, csv, docx
  */
 
-import mammoth from 'mammoth';
+import { parseDocxFile } from '@/libs/parsers/docxParser';
+import { parseTxtFile } from '@/libs/parsers/txtParser';
 
 /** 解析后的文档 */
 export interface ParsedDocument {
@@ -36,11 +37,35 @@ const MAX_FILE_SIZE = 20 * 1024 * 1024;
 /** 最大提取文本长度：50000 字符（避免消息过长） */
 const MAX_CONTENT_LENGTH = 50000;
 
+/** 最大展示文件名长度 */
+const MAX_FILENAME_LENGTH = 120;
+
 /**
  * 获取文件扩展名
  */
 function getFileExtension(filename: string): string {
   return filename.split('.').pop()?.toLowerCase() || '';
+}
+
+function normalizeDocumentFilename(filename: string): string {
+  const cleaned = filename
+    .replace(/[\u0000-\u001F\u007F]+/g, ' ')
+    .replace(/[\\/]+/g, '_')
+    .replace(/\s+/g, ' ')
+    .trim();
+
+  const safeName = cleaned || 'document';
+  if (safeName.length <= MAX_FILENAME_LENGTH) {
+    return safeName;
+  }
+
+  return `${safeName.slice(0, MAX_FILENAME_LENGTH - 3)}...`;
+}
+
+function sanitizeDocumentContent(content: string): string {
+  return content
+    .replace(/\r\n?/g, '\n')
+    .replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F]/g, '');
 }
 
 /**
@@ -81,7 +106,8 @@ export function validateDocumentFile(file: File): { valid: boolean; error?: stri
  * 读取文本文件（txt / md / csv）
  */
 async function parseTextFile(file: File): Promise<string> {
-  return file.text();
+  const result = await parseTxtFile(file);
+  return result.text;
 }
 
 /**
@@ -90,9 +116,8 @@ async function parseTextFile(file: File): Promise<string> {
  * 使用 mammoth.js 提取纯文本内容
  */
 async function parseDocx(file: File): Promise<string> {
-  const arrayBuffer = await file.arrayBuffer();
-  const result = await mammoth.extractRawText({ arrayBuffer });
-  return result.value;
+  const result = await parseDocxFile(file);
+  return result.text;
 }
 
 /**
@@ -126,6 +151,8 @@ export async function parseDocument(file: File): Promise<ParsedDocument> {
       break;
   }
 
+  content = sanitizeDocumentContent(content);
+
   // 截断过长的内容
   if (content.length > MAX_CONTENT_LENGTH) {
     content = content.slice(0, MAX_CONTENT_LENGTH) + '\n\n[内容已截断，原文共 ' + content.length + ' 字符]';
@@ -133,7 +160,7 @@ export async function parseDocument(file: File): Promise<ParsedDocument> {
 
   return {
     content: content.trim(),
-    filename: file.name,
+    filename: normalizeDocumentFilename(file.name),
     type: ext,
     size: file.size,
   };
@@ -162,6 +189,10 @@ export function formatDocumentAsContext(docs: ParsedDocument[]): string {
   if (docs.length === 0) return '';
 
   return docs
-    .map((doc) => `【附件：${doc.filename}】\n${doc.content}`)
+    .map((doc) => {
+      const filename = normalizeDocumentFilename(doc.filename);
+      const content = sanitizeDocumentContent(doc.content);
+      return `【附件：${filename}】\n${content}`;
+    })
     .join('\n\n---\n\n');
 }

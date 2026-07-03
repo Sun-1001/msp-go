@@ -1,4 +1,5 @@
 const LOCAL_IMAGE_PATH_PATTERN = /^\/uploads\/images\/[A-Za-z0-9._~!$&'()*+,;=:@/-]+$/;
+const EMAIL_ADDRESS_PATTERN = /^[A-Za-z0-9.!#$&'*+/=?^_`{|}~-]+@[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?(?:\.[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?)+$/;
 const EXTERNAL_URL_PROTOCOLS = new Set(['http:', 'https:', 'mailto:']);
 const HTTP_URL_PROTOCOLS = new Set(['http:', 'https:']);
 
@@ -8,6 +9,17 @@ export function normalizeSafeExternalUrl(rawUrl: string | null | undefined): str
 
 export function normalizeSafeHttpUrl(rawUrl: string | null | undefined): string | null {
   return normalizeSafeUrl(rawUrl, HTTP_URL_PROTOCOLS);
+}
+
+export function normalizeSafeMailtoUrl(rawEmail: string | null | undefined): string | null {
+  const value = rawEmail?.trim();
+  if (!value || value.length > 254 || /[\u0000-\u001f\u007f\s\\?&#,;:]/.test(value)) {
+    return null;
+  }
+  if (!EMAIL_ADDRESS_PATTERN.test(value)) {
+    return null;
+  }
+  return `mailto:${value}`;
 }
 
 function normalizeSafeUrl(rawUrl: string | null | undefined, allowedProtocols: Set<string>): string | null {

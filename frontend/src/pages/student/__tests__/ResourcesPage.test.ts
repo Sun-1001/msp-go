@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import {
+  extractTitleFromUrl,
   getInitialResourceSearch,
   normalizeOpenableResourceUrl,
   openResourceUrl,
@@ -15,6 +16,22 @@ describe('ResourcesPage URL search params', () => {
 
   it('trims empty search params', () => {
     expect(getInitialResourceSearch('?search=%20%20')).toBe('');
+  });
+
+  it('limits abnormal initial search params', () => {
+    expect(getInitialResourceSearch(`?search=${'a'.repeat(101)}`)).toBe('a'.repeat(100));
+    expect(getInitialResourceSearch(`?search=${'a'.repeat(4097)}`)).toBe('');
+  });
+});
+
+describe('resource title extraction', () => {
+  it('decodes file names and removes extensions', () => {
+    expect(extractTitleFromUrl('https://example.com/%E7%A7%AF%E5%88%86.pdf')).toBe('积分');
+  });
+
+  it('falls back to a bounded raw path segment for malformed encodings', () => {
+    expect(extractTitleFromUrl('https://example.com/%E0%A4%A.pdf')).toBe('%E0%A4%A');
+    expect(extractTitleFromUrl(`https://example.com/${'a'.repeat(150)}.pdf`)).toBe('a'.repeat(100));
   });
 });
 

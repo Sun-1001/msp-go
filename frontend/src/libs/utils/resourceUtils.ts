@@ -8,6 +8,21 @@ import type { ResourceType } from '@/modules/resource/types/resource';
 import { normalizeSafeHttpUrl } from '@/libs/utils/safeUrl';
 
 const LOCAL_RESOURCE_PATH_PATTERN = /^\/uploads\/(?:documents|videos)\/[A-Za-z0-9._~!$&'()*+,;=:@/-]+$/;
+const MAX_RESOURCE_TITLE_LENGTH = 100;
+const MAX_LOCATION_SEARCH_LENGTH = 4096;
+const MAX_INITIAL_SEARCH_LENGTH = 100;
+
+function safeDecodeUrlComponent(value: string): string {
+  try {
+    return decodeURIComponent(value);
+  } catch {
+    return value;
+  }
+}
+
+function normalizeDisplayText(value: string, maxLength: number): string {
+  return value.replace(/[\u0000-\u001f\u007f]/g, '').trim().slice(0, maxLength);
+}
 
 /**
  * 从 URL 提取标题
@@ -21,7 +36,10 @@ export function extractTitleFromUrl(url: string): string {
     if (segments.length > 0) {
       const lastSegment = segments[segments.length - 1];
       // 移除文件扩展名和查询参数
-      const title = decodeURIComponent(lastSegment.replace(/\.[^/.]+$/, ''));
+      const title = normalizeDisplayText(
+        safeDecodeUrlComponent(lastSegment.replace(/\.[^/.]+$/, '')),
+        MAX_RESOURCE_TITLE_LENGTH
+      );
       if (title && title.length > 0) {
         return title;
       }
@@ -217,7 +235,11 @@ export function openResourceUrl(rawUrl: string | null | undefined): boolean {
  * 从资源中心页面 URL 查询串读取初始搜索词
  */
 export function getInitialResourceSearch(locationSearch: string): string {
-  return new URLSearchParams(locationSearch).get('search')?.trim() || '';
+  if (locationSearch.length > MAX_LOCATION_SEARCH_LENGTH) {
+    return '';
+  }
+  const search = new URLSearchParams(locationSearch).get('search');
+  return search ? normalizeDisplayText(search, MAX_INITIAL_SEARCH_LENGTH) : '';
 }
 
 /**

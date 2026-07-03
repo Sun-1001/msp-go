@@ -1,7 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
-import { format } from 'date-fns';
 import { zhCN } from 'date-fns/locale';
 import { MainLayout } from '../../components/layout/MainLayout';
 import { ErrorBoundary } from '../../components/ErrorBoundary';
@@ -11,7 +10,16 @@ import { Input } from '../../components/ui/Input';
 import { classService } from '@/modules/classroom/services/classService';
 import type { ClassInfo } from '@/modules/classroom/types/classroom';
 import { classCodeSchema, type ClassCodeFormData } from '../../libs/validation';
+import { formatDateOrFallback } from '@/libs/utils/dateFormat';
+import { normalizeSafeImageAttachmentUrl, normalizeSafeMailtoUrl } from '@/libs/utils/safeUrl';
 import { Users, Search, LogOut, UserPlus, Calendar, UserCheck, Mail } from 'lucide-react';
+
+function formatClassDate(value: string | null | undefined): string {
+  return formatDateOrFallback(value, 'yyyy年MM月dd日', {
+    locale: zhCN,
+    fallback: '未知',
+  });
+}
 
 export const MyClassPage: React.FC = () => {
   const [currentClass, setCurrentClass] = useState<ClassInfo | null>(null);
@@ -111,6 +119,9 @@ export const MyClassPage: React.FC = () => {
     );
   }
 
+  const teacherAvatarUrl = normalizeSafeImageAttachmentUrl(currentClass?.teacher_avatar_url);
+  const teacherMailtoUrl = normalizeSafeMailtoUrl(currentClass?.teacher_email);
+
   return (
     <ErrorBoundary>
       <MainLayout>
@@ -153,9 +164,9 @@ export const MyClassPage: React.FC = () => {
                   <div className="border-t border-surface-200 dark:border-surface-700 pt-4">
                     <div className="flex items-center gap-3">
                       <div className="w-10 h-10 rounded-full bg-primary-100 dark:bg-primary-900 flex items-center justify-center text-primary-600 dark:text-primary-400 font-semibold">
-                        {currentClass.teacher_avatar_url ? (
+                        {teacherAvatarUrl ? (
                           <img
-                            src={currentClass.teacher_avatar_url}
+                            src={teacherAvatarUrl}
                             alt={currentClass.teacher_name}
                             className="w-full h-full rounded-full object-cover"
                           />
@@ -170,9 +181,9 @@ export const MyClassPage: React.FC = () => {
                         <div className="text-base font-semibold text-surface-900 dark:text-surface-100">
                           {currentClass.teacher_name}
                         </div>
-                        {currentClass.teacher_email && (
+                        {teacherMailtoUrl && (
                           <a
-                            href={`mailto:${currentClass.teacher_email}`}
+                            href={teacherMailtoUrl}
                             className="text-sm text-primary-600 dark:text-primary-400 hover:underline flex items-center gap-1 mt-1"
                           >
                             <Mail className="w-3 h-3" />
@@ -208,7 +219,7 @@ export const MyClassPage: React.FC = () => {
                             创建时间
                           </div>
                           <div className="text-sm font-medium text-surface-900 dark:text-surface-100">
-                            {format(new Date(currentClass.created_at), 'yyyy年MM月dd日', { locale: zhCN })}
+                            {formatClassDate(currentClass.created_at)}
                           </div>
                         </div>
                       </div>
@@ -221,7 +232,7 @@ export const MyClassPage: React.FC = () => {
                             加入时间
                           </div>
                           <div className="text-sm font-medium text-surface-900 dark:text-surface-100">
-                            {format(new Date(currentClass.joined_at), 'yyyy年MM月dd日', { locale: zhCN })}
+                            {formatClassDate(currentClass.joined_at)}
                           </div>
                         </div>
                       </div>

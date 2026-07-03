@@ -19,6 +19,11 @@ import {
 import { parseDocxFile } from '../../../../libs/parsers/docxParser';
 import { parseTxtFile } from '../../../../libs/parsers/txtParser';
 import { parseQuestions, aiResultToParsedQuestion } from '../../../../libs/parsers/questionParser';
+import {
+  buildAiParseTexts,
+  limitParsedQuestions,
+  selectAiParseQuestions,
+} from '../utils/importBoundaries';
 import { questionService } from '@/modules/question/services/questionService';
 import { logger } from '../../../../libs/utils/logger';
 import { ImportPreviewTable } from './ImportPreviewTable';
@@ -28,7 +33,6 @@ import {
   SUPPORTED_IMPORT_EXTENSIONS,
   MAX_IMPORT_FILE_SIZE,
   MAX_BATCH_IMPORT_SIZE,
-  MAX_AI_PARSE_TEXT_LENGTH,
 } from '@/modules/question/types/questionImport';
 
 const log = logger.createContextLogger('QuestionImportModal');
@@ -112,10 +116,11 @@ export const QuestionImportModal: React.FC<QuestionImportModalProps> = ({
         warnings.push(...result.warnings);
       }
 
-      setFileWarnings(warnings);
-
       // 解析题目
-      const questions = parseQuestions(text);
+      const limited = limitParsedQuestions(parseQuestions(text));
+      const questions = limited.questions;
+      warnings.push(...limited.warnings);
+      setFileWarnings(warnings);
 
       if (questions.length === 0) {
         setError('未能从文件中识别到任何题目，请检查文件格式或尝试使用 AI 辅助识别');
@@ -185,23 +190,30 @@ export const QuestionImportModal: React.FC<QuestionImportModalProps> = ({
   // ==================== AI 识别 ====================
 
   const handleAiParse = async (ids: string[]) => {
-    const questionsToAiParse = parsedQuestions.filter((q) => ids.includes(q.tempId));
+    const selected = selectAiParseQuestions(parsedQuestions, ids);
+    const questionsToAiParse = selected.questions;
     if (questionsToAiParse.length === 0) return;
 
-    setAiParsingIds(new Set(ids));
+    if (selected.warnings.length > 0) {
+      setFileWarnings((prev) => {
+        const next = prev.filter((warning) => !selected.warnings.includes(warning));
+        return [...next, ...selected.warnings];
+      });
+    }
+
+    const parsingIds = questionsToAiParse.map((q) => q.tempId);
+    setAiParsingIds(new Set(parsingIds));
 
     try {
-      const rawTexts = questionsToAiParse.map((q) =>
-        q.rawText.substring(0, MAX_AI_PARSE_TEXT_LENGTH),
-      );
+      const rawTexts = buildAiParseTexts(questionsToAiParse);
 
       const response = await questionService.aiParseQuestions(rawTexts);
 
       // 用 AI 结果替换对应的题目
       setParsedQuestions((prev) => {
         const updated = [...prev];
-        for (let i = 0; i < ids.length && i < response.questions.length; i++) {
-          const idx = updated.findIndex((q) => q.tempId === ids[i]);
+        for (let i = 0; i < parsingIds.length && i < response.questions.length; i++) {
+          const idx = updated.findIndex((q) => q.tempId === parsingIds[i]);
           if (idx !== -1) {
             const aiResult = aiResultToParsedQuestion(
               response.questions[i],
