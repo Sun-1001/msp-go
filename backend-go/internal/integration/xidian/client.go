@@ -2,7 +2,6 @@ package xidian
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -13,6 +12,7 @@ import (
 	"time"
 
 	xidianapp "mathstudy/backend-go/internal/application/xidian"
+	"mathstudy/backend-go/internal/platform/httpjson"
 	"mathstudy/backend-go/internal/platform/outbound"
 )
 
@@ -20,7 +20,11 @@ const (
 	ehallAppIDClasstable = "4770397878132218"
 	ehallAppIDScore      = "4768574631264620"
 	ehallAppIDExam       = "4768687067472349"
+	maxXidianHTMLBytes   = 2 << 20
+	maxXidianJSONBytes   = 5 << 20
 )
+
+var errXidianResponseTooLarge = errors.New("xidian response body too large")
 
 // Config contains Xidian portal HTTP settings.
 type Config struct {
@@ -113,11 +117,11 @@ func (c *Client) StartBinding(ctx context.Context) (xidianapp.Challenge, error) 
 	if loginResponse.StatusCode >= 400 {
 		return xidianapp.Challenge{}, xidianapp.ServiceError{Code: "LOGIN_PAGE_INVALID", Message: "无法解析登录页面", Status: 400}
 	}
-	loginHTML, err := io.ReadAll(loginResponse.Body)
+	loginHTML, err := readLimitedString(loginResponse.Body, maxXidianHTMLBytes)
 	if err != nil {
 		return xidianapp.Challenge{}, err
 	}
-	page := parseLoginPage(string(loginHTML))
+	page := parseLoginPage(loginHTML)
 	if page.PasswordSalt == "" {
 		return xidianapp.Challenge{}, xidianapp.ServiceError{Code: "LOGIN_PAGE_INVALID", Message: "无法解析登录页面", Status: 400}
 	}
@@ -128,7 +132,7 @@ func (c *Client) StartBinding(ctx context.Context) (xidianapp.Challenge, error) 
 	}
 	defer captchaResponse.Body.Close()
 	var captcha map[string]any
-	if err := json.NewDecoder(captchaResponse.Body).Decode(&captcha); err != nil {
+	if err := httpjson.DecodeLimited(captchaResponse.Body, maxXidianJSONBytes, &captcha); err != nil {
 		return xidianapp.Challenge{}, err
 	}
 	return xidianapp.Challenge{
@@ -162,7 +166,7 @@ func (c *Client) CompleteBinding(ctx context.Context, state xidianapp.ChallengeS
 	}
 	defer verifyResponse.Body.Close()
 	var verifyPayload map[string]any
-	if err := json.NewDecoder(verifyResponse.Body).Decode(&verifyPayload); err != nil {
+	if err := httpjson.DecodeLimited(verifyResponse.Body, maxXidianJSONBytes, &verifyPayload); err != nil {
 		return xidianapp.LoginResult{}, err
 	}
 	if intFromAny(verifyPayload["errorCode"], 0) != 1 {
@@ -248,11 +252,11 @@ func (c *Client) handleLoginResponse(ctx context.Context, session *session, resp
 		_, err := session.followRedirects(ctx, response.Request.URL, location, nil)
 		return err
 	case http.StatusOK:
-		body, err := io.ReadAll(response.Body)
+		body, err := readLimitedString(response.Body, maxXidianHTMLBytes)
 		if err != nil {
 			return err
 		}
-		page := parseLoginPage(string(body))
+		page := parseLoginPage(body)
 		if page.ErrorMessage != "" {
 			return xidianapp.ServiceError{Code: "PASSWORD_WRONG", Message: page.ErrorMessage, Status: 401}
 		}
@@ -277,8 +281,11 @@ func (c *Client) handleLoginResponse(ctx context.Context, session *session, resp
 		}
 		return xidianapp.ServiceError{Code: "LOGIN_FAILED", Message: "登录失败，请重试", Status: 400}
 	case http.StatusUnauthorized:
-		body, _ := io.ReadAll(response.Body)
-		page := parseLoginPage(string(body))
+		body, err := readLimitedString(response.Body, maxXidianHTMLBytes)
+		if err != nil {
+			return err
+		}
+		page := parseLoginPage(body)
 		message := page.ErrorMessage
 		if message == "" {
 			message = "用户名或密码有误"
@@ -287,6 +294,17 @@ func (c *Client) handleLoginResponse(ctx context.Context, session *session, resp
 	default:
 		return xidianapp.ServiceError{Code: "LOGIN_FAILED", Message: "登录失败，请稍后重试", Status: 400}
 	}
+}
+
+func readLimitedString(reader io.Reader, maxBytes int64) (string, error) {
+	data, err := io.ReadAll(io.LimitReader(reader, maxBytes+1))
+	if err != nil {
+		return "", err
+	}
+	if int64(len(data)) > maxBytes {
+		return "", errXidianResponseTooLarge
+	}
+	return string(data), nil
 }
 
 func (c *Client) detectPostgraduate(ctx context.Context, session *session) *bool {

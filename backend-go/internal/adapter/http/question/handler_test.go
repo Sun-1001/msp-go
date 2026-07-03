@@ -235,6 +235,115 @@ func TestBatchImportAndAIParse(t *testing.T) {
 	}
 }
 
+func TestQuestionBoundaryValidationRejectsBeforeService(t *testing.T) {
+	tests := []struct {
+		name       string
+		method     string
+		path       string
+		body       string
+		wantStatus int
+		assert     func(*testing.T, *fakeQuestionService)
+	}{
+		{
+			name:       "create oversized body",
+			method:     http.MethodPost,
+			path:       "/api/v1/questions",
+			body:       `{"title":"导数","body":"` + strings.Repeat("x", questionapp.MaxQuestionBodyBytes+1) + `","answer":"1"}`,
+			wantStatus: http.StatusUnprocessableEntity,
+			assert: func(t *testing.T, service *fakeQuestionService) {
+				t.Helper()
+				if service.lastOwnerID != "" {
+					t.Fatalf("service was called: %#v", service.lastInput)
+				}
+			},
+		},
+		{
+			name:       "batch publish too many IDs",
+			method:     http.MethodPost,
+			path:       "/api/v1/questions/batch/publish",
+			body:       `{"question_ids":` + stringListJSON(questionapp.MaxBatchOperationIDs+1, "question-1") + `}`,
+			wantStatus: http.StatusUnprocessableEntity,
+			assert: func(t *testing.T, service *fakeQuestionService) {
+				t.Helper()
+				if len(service.lastIDs) != 0 {
+					t.Fatalf("service was called: %#v", service.lastIDs)
+				}
+			},
+		},
+		{
+			name:       "batch import too many questions",
+			method:     http.MethodPost,
+			path:       "/api/v1/questions/batch/import",
+			body:       questionImportJSON(questionapp.MaxBatchImportQuestions + 1),
+			wantStatus: http.StatusUnprocessableEntity,
+			assert: func(t *testing.T, service *fakeQuestionService) {
+				t.Helper()
+				if len(service.lastInputs) != 0 {
+					t.Fatalf("service was called: %#v", service.lastInputs)
+				}
+			},
+		},
+		{
+			name:       "batch import too many options",
+			method:     http.MethodPost,
+			path:       "/api/v1/questions/batch/import",
+			body:       `{"questions":[{"title":"导数","body":"题目","answer":"1","options":` + stringListJSON(questionapp.MaxQuestionListItems+1, "A") + `}]}`,
+			wantStatus: http.StatusUnprocessableEntity,
+			assert: func(t *testing.T, service *fakeQuestionService) {
+				t.Helper()
+				if len(service.lastInputs) != 0 {
+					t.Fatalf("service was called: %#v", service.lastInputs)
+				}
+			},
+		},
+		{
+			name:       "ai parse too many raw texts",
+			method:     http.MethodPost,
+			path:       "/api/v1/questions/ai-parse",
+			body:       `{"raw_texts":` + stringListJSON(questionapp.MaxAIParseRawTexts+1, "导数题") + `}`,
+			wantStatus: http.StatusUnprocessableEntity,
+			assert: func(t *testing.T, service *fakeQuestionService) {
+				t.Helper()
+				if len(service.lastRawTexts) != 0 {
+					t.Fatalf("service was called: %#v", service.lastRawTexts)
+				}
+			},
+		},
+		{
+			name:       "ai parse oversized raw text",
+			method:     http.MethodPost,
+			path:       "/api/v1/questions/ai-parse",
+			body:       `{"raw_texts":["` + strings.Repeat("x", questionapp.MaxAIParseRawTextBytes+1) + `"]}`,
+			wantStatus: http.StatusBadRequest,
+			assert: func(t *testing.T, service *fakeQuestionService) {
+				t.Helper()
+				if len(service.lastRawTexts) != 0 {
+					t.Fatalf("service was called: %#v", service.lastRawTexts)
+				}
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			service := &fakeQuestionService{}
+			handler := newTestHandler(t, service, &fakeAuthenticator{principal: authapp.Principal{UserID: "teacher-1", Role: user.RoleTeacher}})
+			mux := http.NewServeMux()
+			handler.Register(mux, "/api/v1/questions")
+
+			recorder := httptest.NewRecorder()
+			request := httptest.NewRequest(tt.method, tt.path, bytes.NewBufferString(tt.body))
+			request.Header.Set("Authorization", "Bearer token")
+			mux.ServeHTTP(recorder, request)
+
+			if recorder.Code != tt.wantStatus {
+				t.Fatalf("status = %d, want %d, body = %s", recorder.Code, tt.wantStatus, recorder.Body.String())
+			}
+			tt.assert(t, service)
+		})
+	}
+}
+
 func TestGenerateIsomorphicProblemForwardsRequest(t *testing.T) {
 	service := &fakeQuestionService{
 		generateResponse: questionapp.GeneratedQuestion{
@@ -507,6 +616,33 @@ func assertNoQuestionCredentialLeak(t *testing.T, value string) {
 			t.Fatalf("value leaked %q in %q", leaked, value)
 		}
 	}
+}
+
+func questionImportJSON(count int) string {
+	var builder strings.Builder
+	builder.WriteString(`{"questions":[`)
+	for index := 0; index < count; index++ {
+		if index > 0 {
+			builder.WriteByte(',')
+		}
+		builder.WriteString(`{"title":"导数","body":"题目","answer":"1"}`)
+	}
+	builder.WriteString(`]}`)
+	return builder.String()
+}
+
+func stringListJSON(count int, value string) string {
+	var builder strings.Builder
+	builder.WriteByte('[')
+	for index := 0; index < count; index++ {
+		if index > 0 {
+			builder.WriteByte(',')
+		}
+		encoded, _ := json.Marshal(value)
+		builder.Write(encoded)
+	}
+	builder.WriteByte(']')
+	return builder.String()
 }
 
 type fakeAuthenticator struct {

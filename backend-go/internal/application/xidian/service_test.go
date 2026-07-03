@@ -44,7 +44,7 @@ func TestStartAndCompleteBindingStoresAccount(t *testing.T) {
 	cipher := &fakeCipher{}
 	repo := &fakeRepo{}
 	service := newTestService(repo, portal, cipher)
-	service.newID = func() string { return "challenge-1" }
+	service.newID = func() (string, error) { return "challenge-1", nil }
 	now := time.Date(2026, 5, 6, 10, 0, 0, 0, time.UTC)
 	service.now = func() time.Time { return now }
 
@@ -81,7 +81,7 @@ func TestCompleteBindingReusesStoredPassword(t *testing.T) {
 	repo := &fakeRepo{accountFound: true, account: Account{Username: "student", EncryptedPassword: "enc:stored"}}
 	portal := &fakePortal{login: LoginResult{}}
 	service := newTestService(repo, portal, &fakeCipher{})
-	service.newID = func() string { return "challenge-1" }
+	service.newID = func() (string, error) { return "challenge-1", nil }
 	_, err := service.StartBinding(context.Background())
 	if err != nil {
 		t.Fatalf("StartBinding() error = %v", err)
@@ -99,7 +99,7 @@ func TestSyncSavesSnapshotAndCookies(t *testing.T) {
 	repo := &fakeRepo{accountFound: true, account: Account{Username: "student", SessionCookies: []Cookie{{"name": "sid", "value": "old"}}}}
 	portal := &fakePortal{syncResult: SyncResult{Payload: map[string]any{"semester_code": "2025-2026-2", "scores": []any{}}, Cookies: []Cookie{{"name": "sid", "value": "new"}}}}
 	service := newTestService(repo, portal, &fakeCipher{})
-	service.newID = func() string { return "snapshot-1" }
+	service.newID = func() (string, error) { return "snapshot-1", nil }
 	now := time.Date(2026, 5, 6, 10, 0, 0, 0, time.UTC)
 	service.now = func() time.Time { return now }
 
@@ -138,6 +138,56 @@ func TestSyncFallsBackToSnapshot(t *testing.T) {
 	}
 }
 
+func TestStartBindingReturnsIDGenerationError(t *testing.T) {
+	idErr := errors.New("random failed")
+	service := newTestService(&fakeRepo{}, &fakePortal{}, &fakeCipher{})
+	service.newID = func() (string, error) { return "", idErr }
+
+	if _, err := service.StartBinding(context.Background()); !errors.Is(err, idErr) {
+		t.Fatalf("StartBinding() error = %v, want %v", err, idErr)
+	}
+}
+
+func TestCompleteBindingReturnsIDGenerationError(t *testing.T) {
+	idErr := errors.New("random failed")
+	service := newTestService(&fakeRepo{}, &fakePortal{}, &fakeCipher{})
+	if err := service.challenges.Set(context.Background(), "challenge-1", ChallengeState{PasswordSalt: "salt"}, time.Minute); err != nil {
+		t.Fatalf("Set() error = %v", err)
+	}
+	service.newID = func() (string, error) { return "", idErr }
+	username := "student"
+	password := "password"
+
+	_, err := service.CompleteBinding(context.Background(), "user-1", CompleteBindingInput{
+		ChallengeID:    "challenge-1",
+		SliderPosition: 0.5,
+		Username:       &username,
+		Password:       &password,
+	})
+	if !errors.Is(err, idErr) {
+		t.Fatalf("CompleteBinding() error = %v, want %v", err, idErr)
+	}
+}
+
+func TestSyncReturnsIDGenerationError(t *testing.T) {
+	idErr := errors.New("random failed")
+	repo := &fakeRepo{accountFound: true, account: Account{Username: "student"}}
+	portal := &fakePortal{syncResult: SyncResult{
+		Payload: map[string]any{"scores": []any{}},
+		Cookies: []Cookie{{"name": "sid", "value": "new"}},
+	}}
+	service := newTestService(repo, portal, &fakeCipher{})
+	service.newID = func() (string, error) { return "", idErr }
+
+	_, err := service.SyncScores(context.Background(), "user-1")
+	if !errors.Is(err, idErr) {
+		t.Fatalf("SyncScores() error = %v, want %v", err, idErr)
+	}
+	if len(repo.updatedCookies) != 0 {
+		t.Fatalf("updatedCookies = %#v, want none when snapshot ID generation fails", repo.updatedCookies)
+	}
+}
+
 func TestPortalServiceErrorsAreRedacted(t *testing.T) {
 	portal := &fakePortal{
 		loginErr: ServiceError{
@@ -148,7 +198,7 @@ func TestPortalServiceErrorsAreRedacted(t *testing.T) {
 		},
 	}
 	service := newTestService(&fakeRepo{}, portal, &fakeCipher{})
-	service.newID = func() string { return "challenge-1" }
+	service.newID = func() (string, error) { return "challenge-1", nil }
 	_, err := service.StartBinding(context.Background())
 	if err != nil {
 		t.Fatalf("StartBinding() error = %v", err)

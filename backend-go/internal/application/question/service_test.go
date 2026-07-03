@@ -3,6 +3,7 @@ package question
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 )
@@ -78,6 +79,40 @@ func TestBatchPublishDeduplicatesIDs(t *testing.T) {
 	}
 }
 
+func TestBatchOperationsRejectTooManyIDs(t *testing.T) {
+	repo := &fakeQuestionRepo{batchCount: 1}
+	service := newTestService(repo, time.Now())
+	ids := makeStrings(MaxBatchOperationIDs+1, "question")
+
+	tests := []struct {
+		name string
+		call func() (BatchOperationResponse, error)
+	}{
+		{name: "publish", call: func() (BatchOperationResponse, error) {
+			return service.BatchPublish(context.Background(), "teacher-1", ids)
+		}},
+		{name: "delete", call: func() (BatchOperationResponse, error) {
+			return service.BatchDelete(context.Background(), "teacher-1", ids)
+		}},
+		{name: "duplicate", call: func() (BatchOperationResponse, error) {
+			return service.BatchDuplicate(context.Background(), "teacher-1", ids)
+		}},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			repo.lastIDs = nil
+			_, err := tt.call()
+			if !errors.Is(err, ErrBadRequest) {
+				t.Fatalf("error = %v, want ErrBadRequest", err)
+			}
+			if len(repo.lastIDs) != 0 {
+				t.Fatalf("repo called with ids = %#v", repo.lastIDs)
+			}
+		})
+	}
+}
+
 func TestBatchImportNormalizesAndMatchesConcepts(t *testing.T) {
 	repo := &fakeQuestionRepo{
 		matchedConceptIDs: []string{"concept-1"},
@@ -94,6 +129,50 @@ func TestBatchImportNormalizesAndMatchesConcepts(t *testing.T) {
 	}
 }
 
+func TestBatchImportRejectsInvalidBoundariesBeforeRepo(t *testing.T) {
+	tests := []struct {
+		name      string
+		questions []QuestionInput
+	}{
+		{
+			name:      "too many questions",
+			questions: makeQuestionInputs(MaxBatchImportQuestions + 1),
+		},
+		{
+			name: "oversized body",
+			questions: []QuestionInput{{
+				Title:  "导数",
+				Body:   strings.Repeat("x", MaxQuestionBodyBytes+1),
+				Answer: "1",
+			}},
+		},
+		{
+			name: "too many tags",
+			questions: []QuestionInput{{
+				Title:  "导数",
+				Body:   "题目",
+				Answer: "1",
+				Tags:   makeStrings(MaxQuestionListItems+1, "tag"),
+			}},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			repo := &fakeQuestionRepo{matchedConceptIDs: []string{"concept-1"}}
+			service := newTestService(repo, time.Now())
+
+			_, err := service.BatchImport(context.Background(), "teacher-1", tt.questions)
+			if !errors.Is(err, ErrBadRequest) {
+				t.Fatalf("BatchImport() error = %v, want ErrBadRequest", err)
+			}
+			if repo.matchCalled || len(repo.lastInputs) != 0 {
+				t.Fatalf("repo was called: match=%t inputs=%#v", repo.matchCalled, repo.lastInputs)
+			}
+		})
+	}
+}
+
 func TestParseQuestionsBuildsShapeCompatibleFallback(t *testing.T) {
 	service := newTestService(&fakeQuestionRepo{}, time.Now())
 
@@ -103,6 +182,33 @@ func TestParseQuestionsBuildsShapeCompatibleFallback(t *testing.T) {
 	}
 	if len(response.Questions) != 1 || response.Questions[0].Title != "极限题" || response.Questions[0].Type != "short_answer" {
 		t.Fatalf("response = %#v", response)
+	}
+}
+
+func TestParseQuestionsRejectsInvalidBoundariesBeforeParser(t *testing.T) {
+	tests := []struct {
+		name string
+		raw  []string
+	}{
+		{name: "empty", raw: []string{}},
+		{name: "too many", raw: makeStrings(MaxAIParseRawTexts+1, "raw")},
+		{name: "oversized", raw: []string{strings.Repeat("x", MaxAIParseRawTextBytes+1)}},
+		{name: "blank", raw: []string{"   "}},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			parser := &fakeParser{response: AIParseResponse{Questions: []AIParseQuestionItem{{Title: "解析题", Body: "解析题"}}}}
+			service := newTestService(&fakeQuestionRepo{}, time.Now(), WithParser(parser))
+
+			_, err := service.ParseQuestions(context.Background(), tt.raw)
+			if !errors.Is(err, ErrBadRequest) {
+				t.Fatalf("ParseQuestions() error = %v, want ErrBadRequest", err)
+			}
+			if parser.called {
+				t.Fatal("parser was called for invalid input")
+			}
+		})
 	}
 }
 
@@ -132,6 +238,43 @@ func TestParseQuestionsUsesConfiguredParser(t *testing.T) {
 	}
 	if len(response.Questions[0].Tags) != 1 || response.Questions[0].Tags[0] != "导数" {
 		t.Fatalf("tags = %#v", response.Questions[0].Tags)
+	}
+}
+
+func TestParseQuestionsFallsBackForInvalidParserShape(t *testing.T) {
+	tests := []struct {
+		name     string
+		response AIParseResponse
+	}{
+		{
+			name:     "too many parsed questions",
+			response: AIParseResponse{Questions: makeAIParseItems(MaxAIParsedQuestions + 1)},
+		},
+		{
+			name: "oversized parsed body",
+			response: AIParseResponse{Questions: []AIParseQuestionItem{{
+				Title: "导数",
+				Body:  strings.Repeat("x", MaxQuestionBodyBytes+1),
+			}}},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			parser := &fakeParser{response: tt.response}
+			service := newTestService(&fakeQuestionRepo{}, time.Now(), WithParser(parser))
+
+			response, err := service.ParseQuestions(context.Background(), []string{"# 兜底题\n求导"})
+			if err != nil {
+				t.Fatalf("ParseQuestions() error = %v", err)
+			}
+			if !parser.called {
+				t.Fatal("parser was not called")
+			}
+			if len(response.Questions) != 1 || response.Questions[0].Title != "兜底题" {
+				t.Fatalf("response = %#v, want fallback", response)
+			}
+		})
 	}
 }
 
@@ -185,6 +328,37 @@ func newTestService(repo Repository, now time.Time, options ...Option) *Service 
 	}
 	service.now = func() time.Time { return now }
 	return service
+}
+
+func makeQuestionInputs(count int) []QuestionInput {
+	inputs := make([]QuestionInput, count)
+	for index := range inputs {
+		inputs[index] = QuestionInput{
+			Title:  "题目",
+			Body:   "题干",
+			Answer: "1",
+		}
+	}
+	return inputs
+}
+
+func makeAIParseItems(count int) []AIParseQuestionItem {
+	items := make([]AIParseQuestionItem, count)
+	for index := range items {
+		items[index] = AIParseQuestionItem{
+			Title: "题目",
+			Body:  "题干",
+		}
+	}
+	return items
+}
+
+func makeStrings(count int, prefix string) []string {
+	values := make([]string, count)
+	for index := range values {
+		values[index] = prefix + strings.Repeat("x", index+1)
+	}
+	return values
 }
 
 type fakeParser struct {

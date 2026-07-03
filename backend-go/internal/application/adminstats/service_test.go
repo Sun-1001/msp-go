@@ -3,7 +3,6 @@ package adminstats
 import (
 	"context"
 	"errors"
-	"strconv"
 	"testing"
 	"time"
 )
@@ -71,9 +70,9 @@ func TestUserGrowthBuildsCompleteDateSeries(t *testing.T) {
 func TestRecentActivitiesMapsRoleActions(t *testing.T) {
 	displayName := "Teacher One"
 	repo := &fakeRepository{recentUsers: []RecentUser{
-		{Username: "admin", Role: "ADMIN", CreatedAt: time.Date(2026, 5, 1, 8, 0, 0, 0, time.UTC)},
-		{Username: "teacher", DisplayName: &displayName, Role: "TEACHER", CreatedAt: time.Date(2026, 5, 1, 9, 0, 0, 0, time.UTC)},
-		{Username: "student", Role: "STUDENT", CreatedAt: time.Date(2026, 5, 1, 10, 0, 0, 0, time.UTC)},
+		{ID: "admin-1", Username: "admin", Role: "ADMIN", CreatedAt: time.Date(2026, 5, 1, 8, 0, 0, 0, time.UTC)},
+		{ID: "teacher-1", Username: "teacher", DisplayName: &displayName, Role: "TEACHER", CreatedAt: time.Date(2026, 5, 1, 9, 0, 0, 0, time.UTC)},
+		{ID: "student-1", Username: "student", Role: "STUDENT", CreatedAt: time.Date(2026, 5, 1, 10, 0, 0, 0, time.UTC)},
 	}}
 	service := newTestService(t, repo, nil)
 
@@ -83,6 +82,9 @@ func TestRecentActivitiesMapsRoleActions(t *testing.T) {
 	}
 	if response.Total != 3 || response.Items[0].Type != "warning" || response.Items[1].UserName != "Teacher One" || response.Items[2].ActionDisplay != "创建了新账户" {
 		t.Fatalf("response = %#v", response)
+	}
+	if response.Items[0].ID != "user-admin-1" || response.Items[2].ID != "user-student-1" {
+		t.Fatalf("items = %#v", response.Items)
 	}
 
 	_, err = service.RecentActivities(context.Background(), 51)
@@ -107,6 +109,9 @@ func TestSystemStatusBuildsAlerts(t *testing.T) {
 	if len(response.Alerts) != 1 || response.Alerts[0].Severity != "error" || response.Alerts[0].Title != "Redis已停止" {
 		t.Fatalf("response = %#v", response)
 	}
+	if response.Alerts[0].ID != "service-redis-stopped" {
+		t.Fatalf("alerts = %#v", response.Alerts)
+	}
 }
 
 func newTestService(t *testing.T, repo *fakeRepository, provider StatusProvider) *Service {
@@ -116,11 +121,6 @@ func newTestService(t *testing.T, repo *fakeRepository, provider StatusProvider)
 		t.Fatalf("NewService() error = %v", err)
 	}
 	service.now = func() time.Time { return time.Date(2026, 5, 3, 15, 4, 5, 0, time.UTC) }
-	id := 0
-	service.newID = func() string {
-		id++
-		return "id-" + strconv.Itoa(id)
-	}
 	return service
 }
 

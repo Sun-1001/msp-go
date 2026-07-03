@@ -3,6 +3,7 @@ package xidian
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -33,6 +34,21 @@ func TestStartBindingParsesLoginPageAndCaptcha(t *testing.T) {
 	}
 	if challenge.State.PasswordSalt != "1234567890abcdef" || challenge.State.HiddenInputs["lt"] != "token" {
 		t.Fatalf("state = %#v", challenge.State)
+	}
+}
+
+func TestStartBindingRejectsOversizedLoginPage(t *testing.T) {
+	client := newTestClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/authserver/login":
+			_, _ = w.Write([]byte(strings.Repeat("x", maxXidianHTMLBytes+1)))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+
+	if _, err := client.StartBinding(context.Background()); !errors.Is(err, errXidianResponseTooLarge) {
+		t.Fatalf("StartBinding() error = %v, want errXidianResponseTooLarge", err)
 	}
 }
 

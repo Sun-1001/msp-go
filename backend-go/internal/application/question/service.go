@@ -19,6 +19,21 @@ var (
 	ErrForbidden = errors.New("question forbidden")
 )
 
+// Public question bank input limits shared by HTTP and application boundaries.
+const (
+	MaxBatchOperationIDs            = 100
+	MaxBatchImportQuestions         = 200
+	MaxAIParseRawTexts              = 10
+	MaxAIParseRawTextBytes          = 3000
+	MaxAIParsedQuestions            = 20
+	MaxQuestionTitleBytes           = 500
+	MaxQuestionBodyBytes            = 20000
+	MaxQuestionAnswerBytes          = 20000
+	MaxQuestionListItems            = 50
+	MaxQuestionListItemBytes        = 1000
+	MaxQuestionEstimatedTimeSeconds = 24 * 60 * 60
+)
+
 // Repository is the persistence surface required by teacher question bank use cases.
 type Repository interface {
 	MatchConceptIDs(context.Context, string) ([]string, error)
@@ -246,6 +261,9 @@ func (s *Service) GetQuestion(ctx context.Context, ownerID string, questionID st
 // CreateQuestion creates a teacher-owned draft problem.
 func (s *Service) CreateQuestion(ctx context.Context, ownerID string, input QuestionInput) (Question, error) {
 	input = normalizeQuestionInput(input)
+	if !validQuestionInput(input) {
+		return Question{}, ErrBadRequest
+	}
 	if len(input.ConceptIDs) == 0 {
 		conceptIDs, err := s.repo.MatchConceptIDs(ctx, input.Title)
 		if err != nil {
@@ -259,6 +277,9 @@ func (s *Service) CreateQuestion(ctx context.Context, ownerID string, input Ques
 // UpdateQuestion updates a teacher-owned problem.
 func (s *Service) UpdateQuestion(ctx context.Context, ownerID string, questionID string, update QuestionUpdate) (Question, error) {
 	update = normalizeQuestionUpdate(update)
+	if !validQuestionUpdate(update) {
+		return Question{}, ErrBadRequest
+	}
 	if update.Title != nil && update.ConceptIDs == nil {
 		conceptIDs, err := s.repo.MatchConceptIDs(ctx, *update.Title)
 		if err != nil {
@@ -307,7 +328,7 @@ func (s *Service) GetStats(ctx context.Context, ownerID string) (Stats, error) {
 // BatchPublish publishes teacher-owned problem content.
 func (s *Service) BatchPublish(ctx context.Context, ownerID string, questionIDs []string) (BatchOperationResponse, error) {
 	ids := normalizeIDs(questionIDs)
-	if len(ids) == 0 {
+	if len(ids) == 0 || len(ids) > MaxBatchOperationIDs {
 		return BatchOperationResponse{}, ErrBadRequest
 	}
 	count, err := s.repo.BatchPublish(ctx, ownerID, ids, s.now())
@@ -320,7 +341,7 @@ func (s *Service) BatchPublish(ctx context.Context, ownerID string, questionIDs 
 // BatchDelete soft-deletes teacher-owned problem content.
 func (s *Service) BatchDelete(ctx context.Context, ownerID string, questionIDs []string) (BatchOperationResponse, error) {
 	ids := normalizeIDs(questionIDs)
-	if len(ids) == 0 {
+	if len(ids) == 0 || len(ids) > MaxBatchOperationIDs {
 		return BatchOperationResponse{}, ErrBadRequest
 	}
 	count, err := s.repo.BatchDelete(ctx, ownerID, ids, s.now())
@@ -333,7 +354,7 @@ func (s *Service) BatchDelete(ctx context.Context, ownerID string, questionIDs [
 // BatchDuplicate duplicates teacher-owned problem content.
 func (s *Service) BatchDuplicate(ctx context.Context, ownerID string, questionIDs []string) (BatchOperationResponse, error) {
 	ids := normalizeIDs(questionIDs)
-	if len(ids) == 0 {
+	if len(ids) == 0 || len(ids) > MaxBatchOperationIDs {
 		return BatchOperationResponse{}, ErrBadRequest
 	}
 	return s.repo.BatchDuplicate(ctx, ownerID, ids, s.now())
@@ -341,12 +362,15 @@ func (s *Service) BatchDuplicate(ctx context.Context, ownerID string, questionID
 
 // BatchImport inserts already parsed questions.
 func (s *Service) BatchImport(ctx context.Context, ownerID string, questions []QuestionInput) (BatchOperationResponse, error) {
-	if len(questions) == 0 || len(questions) > 200 {
+	if len(questions) == 0 || len(questions) > MaxBatchImportQuestions {
 		return BatchOperationResponse{}, ErrBadRequest
 	}
 	normalized := make([]QuestionInput, 0, len(questions))
 	for _, input := range questions {
 		input = normalizeQuestionInput(input)
+		if !validQuestionInput(input) {
+			return BatchOperationResponse{}, ErrBadRequest
+		}
 		if len(input.ConceptIDs) == 0 {
 			conceptIDs, err := s.repo.MatchConceptIDs(ctx, input.Title)
 			if err != nil {
@@ -361,16 +385,19 @@ func (s *Service) BatchImport(ctx context.Context, ownerID string, questions []Q
 
 // ParseQuestions extracts question candidates with an optional LLM parser and deterministic fallback.
 func (s *Service) ParseQuestions(ctx context.Context, rawTexts []string) (AIParseResponse, error) {
-	if len(rawTexts) == 0 || len(rawTexts) > 10 {
+	if len(rawTexts) == 0 || len(rawTexts) > MaxAIParseRawTexts {
 		return AIParseResponse{}, ErrBadRequest
 	}
 	normalizedTexts := make([]string, 0, len(rawTexts))
 	items := make([]AIParseQuestionItem, 0, len(rawTexts))
 	for _, text := range rawTexts {
-		if len(text) > 3000 {
+		if len(text) > MaxAIParseRawTextBytes {
 			return AIParseResponse{}, ErrBadRequest
 		}
 		trimmed := strings.TrimSpace(text)
+		if trimmed == "" {
+			return AIParseResponse{}, ErrBadRequest
+		}
 		normalizedTexts = append(normalizedTexts, trimmed)
 		items = append(items, AIParseQuestionItem{
 			Title:         firstNonEmptyLine(trimmed),
@@ -392,10 +419,13 @@ func (s *Service) ParseQuestions(ctx context.Context, rawTexts []string) (AIPars
 	if err != nil || len(parsed.Questions) == 0 {
 		return fallback, nil
 	}
+	if len(parsed.Questions) > MaxAIParsedQuestions {
+		return fallback, nil
+	}
 	normalized := AIParseResponse{Questions: make([]AIParseQuestionItem, 0, len(parsed.Questions))}
 	for _, item := range parsed.Questions {
 		item = normalizeAIParseQuestionItem(item)
-		if item.Title == "" || item.Body == "" {
+		if !validAIParseQuestionItem(item) {
 			return fallback, nil
 		}
 		normalized.Questions = append(normalized.Questions, item)
@@ -576,6 +606,87 @@ func normalizeAIParseQuestionItem(item AIParseQuestionItem) AIParseQuestionItem 
 	item.SolutionSteps = normalizeStringSlice(item.SolutionSteps)
 	item.Tags = normalizeStringSlice(item.Tags)
 	return item
+}
+
+func validQuestionInput(input QuestionInput) bool {
+	if !validRequiredString(input.Title, MaxQuestionTitleBytes) ||
+		!validRequiredString(input.Body, MaxQuestionBodyBytes) ||
+		!validStringBytes(input.Answer, MaxQuestionAnswerBytes) ||
+		input.EstimatedTimeSeconds > MaxQuestionEstimatedTimeSeconds ||
+		!validQuestionStringSlice(input.ConceptIDs) ||
+		!validQuestionStringSlice(input.Tags) ||
+		!validQuestionStringSlice(input.Hints) ||
+		!validQuestionStringSlice(input.SolutionSteps) {
+		return false
+	}
+	if input.Options != nil && !validQuestionStringSlice(*input.Options) {
+		return false
+	}
+	return true
+}
+
+func validQuestionUpdate(update QuestionUpdate) bool {
+	if update.Title != nil && !validRequiredString(*update.Title, MaxQuestionTitleBytes) {
+		return false
+	}
+	if update.Body != nil && !validRequiredString(*update.Body, MaxQuestionBodyBytes) {
+		return false
+	}
+	if update.Answer != nil && !validStringBytes(*update.Answer, MaxQuestionAnswerBytes) {
+		return false
+	}
+	if update.Difficulty != nil && (*update.Difficulty < 0 || *update.Difficulty > 1) {
+		return false
+	}
+	if update.EstimatedTimeSeconds != nil && (*update.EstimatedTimeSeconds < 0 || *update.EstimatedTimeSeconds > MaxQuestionEstimatedTimeSeconds) {
+		return false
+	}
+	if update.ConceptIDs != nil && !validQuestionStringSlice(*update.ConceptIDs) {
+		return false
+	}
+	if update.Tags != nil && !validQuestionStringSlice(*update.Tags) {
+		return false
+	}
+	if update.Hints != nil && !validQuestionStringSlice(*update.Hints) {
+		return false
+	}
+	if update.SolutionSteps != nil && !validQuestionStringSlice(*update.SolutionSteps) {
+		return false
+	}
+	if update.Options != nil && !validQuestionStringSlice(*update.Options) {
+		return false
+	}
+	return true
+}
+
+func validAIParseQuestionItem(item AIParseQuestionItem) bool {
+	return validRequiredString(item.Title, MaxQuestionTitleBytes) &&
+		validRequiredString(item.Body, MaxQuestionBodyBytes) &&
+		validStringBytes(item.Answer, MaxQuestionAnswerBytes) &&
+		validQuestionStringSlice(item.Options) &&
+		validQuestionStringSlice(item.Hints) &&
+		validQuestionStringSlice(item.SolutionSteps) &&
+		validQuestionStringSlice(item.Tags)
+}
+
+func validRequiredString(value string, maxBytes int) bool {
+	return strings.TrimSpace(value) != "" && validStringBytes(value, maxBytes)
+}
+
+func validStringBytes(value string, maxBytes int) bool {
+	return maxBytes <= 0 || len(value) <= maxBytes
+}
+
+func validQuestionStringSlice(values []string) bool {
+	if len(values) > MaxQuestionListItems {
+		return false
+	}
+	for _, value := range values {
+		if !validStringBytes(value, MaxQuestionListItemBytes) {
+			return false
+		}
+	}
+	return true
 }
 
 func normalizeQuestionType(value string) string {

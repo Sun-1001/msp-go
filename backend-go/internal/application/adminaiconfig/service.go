@@ -6,12 +6,12 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"net/http"
 	"sort"
 	"strings"
 	"time"
 
+	"mathstudy/backend-go/internal/platform/httpjson"
 	"mathstudy/backend-go/internal/platform/outbound"
 	"mathstudy/backend-go/internal/platform/redact"
 )
@@ -969,7 +969,6 @@ func (s *Service) fetchModels(ctx context.Context, baseURL string, apiKey string
 		return FetchModelsResponse{Success: false, Models: []string{}, Message: "获取模型列表失败: " + redact.String(err.Error())}, nil
 	}
 	defer resp.Body.Close()
-	body, _ := io.ReadAll(io.LimitReader(resp.Body, 4<<20))
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		return FetchModelsResponse{Success: false, Models: []string{}, Message: fmt.Sprintf("获取模型列表失败: HTTP %d", resp.StatusCode)}, nil
 	}
@@ -978,7 +977,7 @@ func (s *Service) fetchModels(ctx context.Context, baseURL string, apiKey string
 			ID string `json:"id"`
 		} `json:"data"`
 	}
-	if err := json.Unmarshal(body, &payload); err != nil {
+	if err := httpjson.DecodeLimited(resp.Body, 4<<20, &payload); err != nil {
 		return FetchModelsResponse{Success: false, Models: []string{}, Message: "模型列表响应格式无效"}, nil
 	}
 	models := make([]string, 0, len(payload.Data))

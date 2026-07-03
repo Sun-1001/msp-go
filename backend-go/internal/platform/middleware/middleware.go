@@ -5,15 +5,24 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"mathstudy/backend-go/internal/platform/metrics"
 )
 
 type responseKey struct{}
+
+const maxRequestIDLength = 128
+
+var (
+	readRequestIDRandom     = rand.Read
+	requestIDFallbackSerial atomic.Uint64
+)
 
 // Chain applies middleware in declaration order.
 func Chain(handler http.Handler, middleware ...func(http.Handler) http.Handler) http.Handler {
@@ -26,7 +35,7 @@ func Chain(handler http.Handler, middleware ...func(http.Handler) http.Handler) 
 // RequestID ensures every response has an X-Request-ID header.
 func RequestID(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		requestID := r.Header.Get("X-Request-ID")
+		requestID := normalizeRequestID(r.Header.Get("X-Request-ID"))
 		if requestID == "" {
 			requestID = newRequestID()
 		}
@@ -173,8 +182,32 @@ func set(values []string) map[string]bool {
 
 func newRequestID() string {
 	var data [16]byte
-	if _, err := rand.Read(data[:]); err == nil {
+	if _, err := readRequestIDRandom(data[:]); err == nil {
 		return hex.EncodeToString(data[:])
 	}
-	return hex.EncodeToString([]byte(time.Now().UTC().Format(time.RFC3339Nano)))
+	return fmt.Sprintf("%016x%016x", time.Now().UTC().UnixNano(), requestIDFallbackSerial.Add(1))
+}
+
+func normalizeRequestID(value string) string {
+	value = strings.TrimSpace(value)
+	if value == "" || len(value) > maxRequestIDLength {
+		return ""
+	}
+	for _, r := range value {
+		if !isRequestIDChar(r) {
+			return ""
+		}
+	}
+	return value
+}
+
+func isRequestIDChar(r rune) bool {
+	return (r >= 'a' && r <= 'z') ||
+		(r >= 'A' && r <= 'Z') ||
+		(r >= '0' && r <= '9') ||
+		r == '-' ||
+		r == '_' ||
+		r == '.' ||
+		r == ':' ||
+		r == '/'
 }

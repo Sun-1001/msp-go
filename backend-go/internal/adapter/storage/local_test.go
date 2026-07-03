@@ -47,3 +47,22 @@ func TestCleanObjectKeyNormalizesRedundantSeparators(t *testing.T) {
 		t.Fatalf("key = %q", key)
 	}
 }
+
+func TestCleanObjectKeyRejectsAmbiguousKeys(t *testing.T) {
+	cases := []string{
+		"images/%2e%2e/file.png",
+		"images/file.png?download=1",
+		"images/file.png#fragment",
+		"images/file:name.png",
+		"images/\x00file.png",
+		"C:/tmp/file.png",
+		"avatars/file.png",
+	}
+	for _, value := range cases {
+		t.Run(value, func(t *testing.T) {
+			if _, err := cleanObjectKey(value); err == nil {
+				t.Fatal("cleanObjectKey() error = nil, want error")
+			}
+		})
+	}
+}

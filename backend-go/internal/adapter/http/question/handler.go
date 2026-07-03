@@ -16,6 +16,8 @@ import (
 	"mathstudy/backend-go/internal/platform/redact"
 )
 
+const maxJSONBodyBytes = 2 << 20
+
 // Service is the question application surface used by HTTP handlers.
 type Service interface {
 	ListQuestions(context.Context, string, questionapp.ListFilter) (questionapp.ListResponse, error)
@@ -220,6 +222,10 @@ func (h *Handler) create(w http.ResponseWriter, r *http.Request) {
 	}
 	response, err := h.service.CreateQuestion(r.Context(), principal.UserID, input)
 	if err != nil {
+		if errors.Is(err, questionapp.ErrBadRequest) {
+			writeQuestionError(w, http.StatusUnprocessableEntity, "VALIDATION_ERROR", "题目内容不合法")
+			return
+		}
 		h.logQuestionError("create question failed", err)
 		writeQuestionError(w, http.StatusInternalServerError, "INTERNAL_ERROR", "创建题目失败")
 		return
@@ -243,7 +249,7 @@ func (h *Handler) update(w http.ResponseWriter, r *http.Request) {
 	response, err := h.service.UpdateQuestion(r.Context(), principal.UserID, r.PathValue("question_id"), update)
 	if err != nil {
 		if errors.Is(err, questionapp.ErrBadRequest) {
-			writeQuestionError(w, http.StatusBadRequest, "BAD_REQUEST", "该内容不是题目类型")
+			writeQuestionError(w, http.StatusBadRequest, "BAD_REQUEST", "更新请求不合法")
 			return
 		}
 		if errors.Is(err, questionapp.ErrForbidden) {
@@ -330,7 +336,7 @@ func (h *Handler) batchImport(w http.ResponseWriter, r *http.Request) {
 	if !decodeRequest(w, r, &request) {
 		return
 	}
-	if len(request.Questions) < 1 || len(request.Questions) > 200 {
+	if len(request.Questions) < 1 || len(request.Questions) > questionapp.MaxBatchImportQuestions {
 		writeQuestionError(w, http.StatusUnprocessableEntity, "VALIDATION_ERROR", "questions 长度必须在 1 到 200 之间")
 		return
 	}
@@ -345,7 +351,7 @@ func (h *Handler) batchImport(w http.ResponseWriter, r *http.Request) {
 	response, err := h.service.BatchImport(r.Context(), principal.UserID, inputs)
 	if err != nil {
 		if errors.Is(err, questionapp.ErrBadRequest) {
-			writeQuestionError(w, http.StatusUnprocessableEntity, "VALIDATION_ERROR", "questions 长度必须在 1 到 200 之间")
+			writeQuestionError(w, http.StatusUnprocessableEntity, "VALIDATION_ERROR", "questions 不合法")
 			return
 		}
 		h.logQuestionError("batch import questions failed", err)
@@ -365,13 +371,17 @@ func (h *Handler) aiParse(w http.ResponseWriter, r *http.Request) {
 	if !decodeRequest(w, r, &request) {
 		return
 	}
-	if len(request.RawTexts) < 1 || len(request.RawTexts) > 10 {
+	if len(request.RawTexts) < 1 || len(request.RawTexts) > questionapp.MaxAIParseRawTexts {
 		writeQuestionError(w, http.StatusUnprocessableEntity, "VALIDATION_ERROR", "raw_texts 长度必须在 1 到 10 之间")
 		return
 	}
 	for index, text := range request.RawTexts {
-		if len(text) > 3000 {
+		if len(text) > questionapp.MaxAIParseRawTextBytes {
 			writeQuestionError(w, http.StatusBadRequest, "BAD_REQUEST", "第 "+strconv.Itoa(index+1)+" 段文本超过 3000 字符限制")
+			return
+		}
+		if strings.TrimSpace(text) == "" {
+			writeQuestionError(w, http.StatusBadRequest, "BAD_REQUEST", "第 "+strconv.Itoa(index+1)+" 段文本不能为空")
 			return
 		}
 	}
@@ -508,9 +518,15 @@ func parseStringArrayQuery(r *http.Request, name string) []string {
 }
 
 func (r createRequest) toInput(w http.ResponseWriter) (questionapp.QuestionInput, bool) {
-	if !validateRequiredString(w, r.Title, 1, 500, "title") ||
-		!validateRequiredString(w, r.Body, 1, 0, "body") ||
+	if !validateRequiredString(w, r.Title, 1, questionapp.MaxQuestionTitleBytes, "title") ||
+		!validateRequiredString(w, r.Body, 1, questionapp.MaxQuestionBodyBytes, "body") ||
 		!validateRequiredField(w, r.Answer, "answer") ||
+		!validateOptionalString(w, r.Answer, questionapp.MaxQuestionAnswerBytes, "answer") ||
+		!validateStringSlice(w, r.ConceptIDs, "concept_ids") ||
+		!validateStringSlice(w, r.Tags, "tags") ||
+		!validateStringSlice(w, r.Hints, "hints") ||
+		!validateStringSlice(w, r.SolutionSteps, "solution_steps") ||
+		!validateOptionalStringSlice(w, r.Options, "options") ||
 		!validateDifficulty(w, r.Difficulty) ||
 		!validateEstimatedSeconds(w, r.EstimatedTimeSeconds) {
 		return questionapp.QuestionInput{}, false
@@ -540,13 +556,20 @@ func (r createRequest) toInput(w http.ResponseWriter) (questionapp.QuestionInput
 }
 
 func (r updateRequest) toUpdate(w http.ResponseWriter) (questionapp.QuestionUpdate, bool) {
-	if r.Title != nil && !validateRequiredString(w, *r.Title, 1, 500, "title") {
+	if r.Title != nil && !validateRequiredString(w, *r.Title, 1, questionapp.MaxQuestionTitleBytes, "title") {
 		return questionapp.QuestionUpdate{}, false
 	}
-	if r.Body != nil && !validateRequiredString(w, *r.Body, 1, 0, "body") {
+	if r.Body != nil && !validateRequiredString(w, *r.Body, 1, questionapp.MaxQuestionBodyBytes, "body") {
 		return questionapp.QuestionUpdate{}, false
 	}
-	if !validateDifficulty(w, r.Difficulty) || !validateEstimatedSeconds(w, r.EstimatedTimeSeconds) {
+	if !validateOptionalString(w, r.Answer, questionapp.MaxQuestionAnswerBytes, "answer") ||
+		!validateOptionalStringSlice(w, r.ConceptIDs, "concept_ids") ||
+		!validateOptionalStringSlice(w, r.Tags, "tags") ||
+		!validateOptionalStringSlice(w, r.Hints, "hints") ||
+		!validateOptionalStringSlice(w, r.SolutionSteps, "solution_steps") ||
+		!validateOptionalStringSlice(w, r.Options, "options") ||
+		!validateDifficulty(w, r.Difficulty) ||
+		!validateEstimatedSeconds(w, r.EstimatedTimeSeconds) {
 		return questionapp.QuestionUpdate{}, false
 	}
 	if r.Status != nil && !validStatus(*r.Status) {
@@ -591,6 +614,35 @@ func validateRequiredField(w http.ResponseWriter, value *string, name string) bo
 	return false
 }
 
+func validateOptionalString(w http.ResponseWriter, value *string, max int, name string) bool {
+	if value == nil || len(*value) <= max {
+		return true
+	}
+	writeQuestionError(w, http.StatusUnprocessableEntity, "VALIDATION_ERROR", name+" 长度超出限制")
+	return false
+}
+
+func validateStringSlice(w http.ResponseWriter, values []string, name string) bool {
+	if len(values) > questionapp.MaxQuestionListItems {
+		writeQuestionError(w, http.StatusUnprocessableEntity, "VALIDATION_ERROR", name+" 数量超出限制")
+		return false
+	}
+	for _, value := range values {
+		if len(strings.TrimSpace(value)) > questionapp.MaxQuestionListItemBytes {
+			writeQuestionError(w, http.StatusUnprocessableEntity, "VALIDATION_ERROR", name+" 单项长度超出限制")
+			return false
+		}
+	}
+	return true
+}
+
+func validateOptionalStringSlice(w http.ResponseWriter, values *[]string, name string) bool {
+	if values == nil {
+		return true
+	}
+	return validateStringSlice(w, *values, name)
+}
+
 func validateDifficulty(w http.ResponseWriter, value *float64) bool {
 	if value == nil {
 		return true
@@ -603,15 +655,15 @@ func validateDifficulty(w http.ResponseWriter, value *float64) bool {
 }
 
 func validateEstimatedSeconds(w http.ResponseWriter, value *int) bool {
-	if value == nil || *value >= 0 {
+	if value == nil || (*value >= 0 && *value <= questionapp.MaxQuestionEstimatedTimeSeconds) {
 		return true
 	}
-	writeQuestionError(w, http.StatusUnprocessableEntity, "VALIDATION_ERROR", "estimated_time_seconds 必须大于等于 0")
+	writeQuestionError(w, http.StatusUnprocessableEntity, "VALIDATION_ERROR", "estimated_time_seconds 必须在 0 到 86400 之间")
 	return false
 }
 
 func validateBatchIDs(w http.ResponseWriter, ids []string) bool {
-	if len(ids) >= 1 && len(ids) <= 100 {
+	if len(ids) >= 1 && len(ids) <= questionapp.MaxBatchOperationIDs {
 		return true
 	}
 	writeQuestionError(w, http.StatusUnprocessableEntity, "VALIDATION_ERROR", "question_ids 长度必须在 1 到 100 之间")
@@ -628,7 +680,7 @@ func validStatus(value string) bool {
 }
 
 func decodeRequest(w http.ResponseWriter, r *http.Request, target any) bool {
-	if err := httpjson.DecodeStrict(w, r, 2<<20, target); err != nil {
+	if err := httpjson.DecodeStrict(w, r, maxJSONBodyBytes, target); err != nil {
 		writeQuestionError(w, http.StatusUnprocessableEntity, "VALIDATION_ERROR", "请求体格式错误")
 		return false
 	}

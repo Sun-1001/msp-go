@@ -2,9 +2,7 @@ package adminstats
 
 import (
 	"context"
-	"crypto/rand"
 	"errors"
-	"fmt"
 	"math"
 	"strings"
 	"time"
@@ -170,7 +168,6 @@ type Service struct {
 	repo           Repository
 	statusProvider StatusProvider
 	now            func() time.Time
-	newID          func() string
 }
 
 // NewService creates an admin stats service.
@@ -186,7 +183,6 @@ func NewService(repo Repository, providers ...StatusProvider) (*Service, error) 
 		repo:           repo,
 		statusProvider: provider,
 		now:            func() time.Time { return time.Now().UTC() },
-		newID:          newUUID,
 	}, nil
 }
 
@@ -305,7 +301,7 @@ func (s *Service) RecentActivities(ctx context.Context, limit int) (RecentActivi
 			name = *account.DisplayName
 		}
 		items = append(items, ActivityItem{
-			ID:            s.newID(),
+			ID:            recentActivityID(account),
 			UserName:      name,
 			ActionDisplay: action,
 			Timestamp:     account.CreatedAt,
@@ -333,14 +329,14 @@ func (s *Service) SystemStatus(ctx context.Context) (SystemStatusResponse, error
 		switch service.Status {
 		case "stopped":
 			alerts = append(alerts, SystemAlert{
-				ID:          s.newID(),
+				ID:          systemAlertID(service.Name, service.Status),
 				Title:       service.Name + "已停止",
 				Description: service.Name + "无法连接，请检查服务是否正常运行",
 				Severity:    "error",
 			})
 		case "warning":
 			alerts = append(alerts, SystemAlert{
-				ID:          s.newID(),
+				ID:          systemAlertID(service.Name, service.Status),
 				Title:       service.Name + "状态异常",
 				Description: service.Name + "可能存在配置问题或性能问题",
 				Severity:    "warning",
@@ -349,7 +345,7 @@ func (s *Service) SystemStatus(ctx context.Context) (SystemStatusResponse, error
 	}
 	if len(alerts) == 0 {
 		alerts = append(alerts, SystemAlert{
-			ID:          s.newID(),
+			ID:          "system-ok",
 			Title:       "系统运行正常",
 			Description: "所有服务运行正常",
 			Severity:    "info",
@@ -392,20 +388,41 @@ func round(value float64, places int) float64 {
 	return math.Round(value*scale) / scale
 }
 
-func newUUID() string {
-	var data [16]byte
-	if _, err := rand.Read(data[:]); err != nil {
-		return fmt.Sprintf("activity-%d", time.Now().UnixNano())
+func recentActivityID(account RecentUser) string {
+	if strings.TrimSpace(account.ID) != "" {
+		return "user-" + stableIDPart(account.ID)
 	}
-	data[6] = (data[6] & 0x0f) | 0x40
-	data[8] = (data[8] & 0x3f) | 0x80
-	return fmt.Sprintf("%08x-%04x-%04x-%04x-%012x",
-		data[0:4],
-		data[4:6],
-		data[6:8],
-		data[8:10],
-		data[10:16],
-	)
+	return "user-" + stableIDPart(account.Username) + "-" + account.CreatedAt.UTC().Format("20060102150405.000000000")
+}
+
+func systemAlertID(serviceName string, status string) string {
+	return "service-" + stableIDPart(serviceName) + "-" + stableIDPart(status)
+}
+
+func stableIDPart(value string) string {
+	value = strings.ToLower(strings.TrimSpace(value))
+	var builder strings.Builder
+	lastDash := false
+	for _, r := range value {
+		isAlphaNumeric := (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9')
+		if isAlphaNumeric {
+			builder.WriteRune(r)
+			lastDash = false
+			continue
+		}
+		if builder.Len() > 0 && !lastDash {
+			builder.WriteByte('-')
+			lastDash = true
+		}
+	}
+	part := strings.Trim(builder.String(), "-")
+	if part == "" {
+		return "unknown"
+	}
+	if len(part) > 80 {
+		return strings.TrimRight(part[:80], "-")
+	}
+	return part
 }
 
 func badRequest(message string) error {

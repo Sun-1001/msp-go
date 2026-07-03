@@ -64,7 +64,15 @@ func (s *LocalStorage) UploadStream(_ context.Context, reader io.Reader, key str
 }
 
 func cleanObjectKey(key string) (string, error) {
-	key = strings.TrimSpace(strings.ReplaceAll(key, "\\", "/"))
+	key = strings.TrimSpace(key)
+	if strings.ContainsAny(key, "\\?#%:") {
+		return "", errors.New("upload key contains unsafe character")
+	}
+	for _, value := range key {
+		if value < 0x20 || value == 0x7f {
+			return "", errors.New("upload key contains control character")
+		}
+	}
 	key = strings.TrimPrefix(key, "/")
 	if key == "" {
 		return "", errors.New("upload key is empty")
@@ -83,7 +91,14 @@ func cleanObjectKey(key string) (string, error) {
 	if len(cleaned) == 0 {
 		return "", errors.New("upload key is empty")
 	}
+	if !isAllowedObjectPrefix(cleaned[0]) {
+		return "", errors.New("upload key has unsupported prefix")
+	}
 	return strings.Join(cleaned, "/"), nil
+}
+
+func isAllowedObjectPrefix(value string) bool {
+	return value == "images" || value == "documents" || value == "videos"
 }
 
 func isSubpath(root string, target string) bool {

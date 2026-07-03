@@ -13,6 +13,7 @@ import (
 	"errors"
 	"fmt"
 	"hash"
+	"io"
 	"strings"
 	"time"
 
@@ -220,7 +221,16 @@ func decodeSegment(segment string, target any) error {
 	}
 	decoder := json.NewDecoder(bytes.NewReader(data))
 	decoder.UseNumber()
-	return decoder.Decode(target)
+	if err := decoder.Decode(target); err != nil {
+		return err
+	}
+	if err := decoder.Decode(&struct{}{}); err != io.EOF {
+		if err == nil {
+			return errInvalidToken
+		}
+		return err
+	}
+	return nil
 }
 
 func randomHex(size int) (string, error) {

@@ -199,7 +199,11 @@ func validateResourceContent(reader io.Reader, contentType string) (io.Reader, e
 	if !resourceContentMatches(contentType, prefix) {
 		return nil, ErrInvalidContentType
 	}
-	return io.MultiReader(bytes.NewReader(prefix), reader), nil
+	checked := io.MultiReader(bytes.NewReader(prefix), reader)
+	if isTextResourceContentType(contentType) {
+		return &textResourceReader{reader: checked}, nil
+	}
+	return checked, nil
 }
 
 func readPrefix(reader io.Reader, limit int) ([]byte, error) {
@@ -220,11 +224,26 @@ func resourceContentMatches(contentType string, prefix []byte) bool {
 	case "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
 		"application/vnd.openxmlformats-officedocument.presentationml.presentation":
 		return bytes.HasPrefix(prefix, []byte("PK\x03\x04")) || bytes.HasPrefix(prefix, []byte("PK\x05\x06")) || bytes.HasPrefix(prefix, []byte("PK\x07\x08"))
+	case "video/mp4", "video/quicktime":
+		return hasISOBaseMediaFileType(prefix)
+	case "video/avi":
+		return bytes.HasPrefix(prefix, []byte("RIFF")) && len(prefix) >= 12 && string(prefix[8:12]) == "AVI "
+	case "video/webm", "video/x-matroska":
+		return bytes.HasPrefix(prefix, []byte{0x1a, 0x45, 0xdf, 0xa3})
 	case "text/plain", "text/markdown":
 		return utf8.Valid(prefix) && !bytes.Contains(prefix, []byte{0})
 	default:
 		return len(prefix) > 0
 	}
+}
+
+func isTextResourceContentType(contentType string) bool {
+	return contentType == "text/plain" || contentType == "text/markdown"
+}
+
+func hasISOBaseMediaFileType(prefix []byte) bool {
+	searchLimit := min(len(prefix), 64)
+	return bytes.Contains(prefix[:searchLimit], []byte("ftyp"))
 }
 
 // IsSafeImagePath reports whether value is a local URL path produced by SaveImage.
@@ -252,6 +271,50 @@ func (r *maxBytesReader) Read(p []byte) (int, error) {
 	n, err := r.reader.Read(p)
 	r.remaining -= int64(n)
 	return n, err
+}
+
+type textResourceReader struct {
+	reader  io.Reader
+	pending []byte
+}
+
+func (r *textResourceReader) Read(p []byte) (int, error) {
+	n, err := r.reader.Read(p)
+	if n > 0 {
+		if bytes.Contains(p[:n], []byte{0}) {
+			return 0, ErrInvalidContentType
+		}
+		combined := make([]byte, len(r.pending)+n)
+		copy(combined, r.pending)
+		copy(combined[len(r.pending):], p[:n])
+		validLen, validateErr := validUTF8PrefixLen(combined, err == nil)
+		if validateErr != nil {
+			return 0, validateErr
+		}
+		r.pending = append(r.pending[:0], combined[validLen:]...)
+	}
+	if err == io.EOF && len(r.pending) > 0 {
+		return 0, ErrInvalidContentType
+	}
+	return n, err
+}
+
+func validUTF8PrefixLen(data []byte, allowIncomplete bool) (int, error) {
+	index := 0
+	for index < len(data) {
+		if !utf8.FullRune(data[index:]) {
+			if allowIncomplete {
+				return index, nil
+			}
+			return 0, ErrInvalidContentType
+		}
+		r, size := utf8.DecodeRune(data[index:])
+		if r == utf8.RuneError && size == 1 {
+			return 0, ErrInvalidContentType
+		}
+		index += size
+	}
+	return index, nil
 }
 
 type countingReader struct {

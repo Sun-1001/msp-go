@@ -23,7 +23,12 @@ import (
 	"mathstudy/backend-go/internal/platform/redact"
 )
 
-const maxImportBytes = 5 << 20
+const (
+	maxImportBytes      = 5 << 20
+	maxImportRows       = 5000
+	maxImportColumns    = 20
+	maxImportFieldRunes = 1000
+)
 
 // Service is the admin user application surface used by HTTP handlers.
 type Service interface {
@@ -381,6 +386,12 @@ func parseImportCSV(text string) ([]adminuserapp.ImportUser, error) {
 	if err != nil {
 		return nil, err
 	}
+	if len(header) > maxImportColumns {
+		return nil, errors.New("CSV 列数超过限制")
+	}
+	if err := validateImportRecord(header); err != nil {
+		return nil, err
+	}
 	fields := make([]string, len(header))
 	for index, name := range header {
 		fields[index] = importFieldName(name)
@@ -393,6 +404,12 @@ func parseImportCSV(text string) ([]adminuserapp.ImportUser, error) {
 			break
 		}
 		if err != nil {
+			return nil, err
+		}
+		if len(record) > maxImportColumns {
+			return nil, errors.New("CSV 列数超过限制")
+		}
+		if err := validateImportRecord(record); err != nil {
 			return nil, err
 		}
 		var row adminuserapp.ImportUser
@@ -418,9 +435,21 @@ func parseImportCSV(text string) ([]adminuserapp.ImportUser, error) {
 		}
 		if hasKnownField {
 			users = append(users, row)
+			if len(users) > maxImportRows {
+				return nil, errors.New("CSV 行数超过限制")
+			}
 		}
 	}
 	return users, nil
+}
+
+func validateImportRecord(record []string) error {
+	for _, value := range record {
+		if len([]rune(value)) > maxImportFieldRunes {
+			return errors.New("CSV 字段长度超过限制")
+		}
+	}
+	return nil
 }
 
 func importFieldName(value string) string {

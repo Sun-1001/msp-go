@@ -64,7 +64,7 @@ type Service struct {
 	challenges ChallengeStore
 	config     Config
 	now        func() time.Time
-	newID      func() string
+	newID      func() (string, error)
 }
 
 // NewService creates a Xidian application service.
@@ -126,7 +126,10 @@ func (s *Service) StartBinding(ctx context.Context) (BindStartResponse, error) {
 	if err != nil {
 		return BindStartResponse{}, normalizeServiceError(err, "BINDING_START_FAILED", "获取验证码失败")
 	}
-	challengeID := s.newID()
+	challengeID, err := s.newID()
+	if err != nil {
+		return BindStartResponse{}, err
+	}
 	if err := s.challenges.Set(ctx, challengeID, challenge.State, s.config.ChallengeTTL); err != nil {
 		return BindStartResponse{}, err
 	}
@@ -187,9 +190,13 @@ func (s *Service) CompleteBinding(ctx context.Context, userID string, input Comp
 	if err != nil {
 		return BindCompleteResponse{}, err
 	}
+	accountID, err := s.newID()
+	if err != nil {
+		return BindCompleteResponse{}, err
+	}
 	now := s.now()
 	account, err = s.repo.UpsertAccount(ctx, AccountUpsert{
-		ID:                s.newID(),
+		ID:                accountID,
 		UserID:            userID,
 		Username:          username,
 		EncryptedPassword: encryptedPassword,
@@ -273,13 +280,17 @@ func (s *Service) sync(ctx context.Context, userID string, dataType string) (Syn
 		return SyncResponse{}, normalizeServiceError(err, "SYNC_FAILED", "同步失败，请稍后重试")
 	}
 	now := s.now()
+	snapshotID, err := s.newID()
+	if err != nil {
+		return SyncResponse{}, err
+	}
 	if len(result.Cookies) > 0 {
 		if err := s.repo.UpdateCookies(ctx, userID, result.Cookies, now); err != nil {
 			return SyncResponse{}, err
 		}
 	}
 	if err := s.repo.SaveSnapshot(ctx, SnapshotInput{
-		ID:           s.newID(),
+		ID:           snapshotID,
 		UserID:       userID,
 		DataType:     dataType,
 		SemesterCode: stringPtrFromAny(result.Payload["semester_code"]),

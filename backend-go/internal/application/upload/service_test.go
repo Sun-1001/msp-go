@@ -28,10 +28,11 @@ func TestSaveImageStoresAllowedContentType(t *testing.T) {
 }
 
 func TestSaveResourceFileUsesVideoAndDocumentPrefixes(t *testing.T) {
-	storage := &fakeStorage{object: StoredObject{URL: "/uploads/videos/id-2.mp4", Size: 2, ContentType: "video/mp4"}}
+	videoContent := "\x00\x00\x00\x18ftypmp42\x00\x00\x00\x00mp42isom"
+	storage := &fakeStorage{object: StoredObject{URL: "/uploads/videos/id-2.mp4", Size: int64(len(videoContent)), ContentType: "video/mp4"}}
 	service := newTestService(storage, "id-2")
 
-	response, err := service.SaveResourceFile(context.Background(), strings.NewReader("ok"), FileMeta{ContentType: "video/mp4", Size: 2})
+	response, err := service.SaveResourceFile(context.Background(), strings.NewReader(videoContent), FileMeta{ContentType: "video/mp4", Size: int64(len(videoContent))})
 	if err != nil {
 		t.Fatalf("SaveResourceFile(video) error = %v", err)
 	}
@@ -55,8 +56,20 @@ func TestSaveResourceFileRejectsSpoofedDocumentContent(t *testing.T) {
 	if _, err := service.SaveResourceFile(context.Background(), strings.NewReader("not a pdf"), FileMeta{ContentType: "application/pdf", Size: 9}); !errors.Is(err, ErrInvalidContentType) {
 		t.Fatalf("spoofed pdf error = %v, want ErrInvalidContentType", err)
 	}
+	if _, err := service.SaveResourceFile(context.Background(), strings.NewReader("not a video"), FileMeta{ContentType: "video/mp4", Size: 11}); !errors.Is(err, ErrInvalidContentType) {
+		t.Fatalf("spoofed video error = %v, want ErrInvalidContentType", err)
+	}
 	if _, err := service.SaveResourceFile(context.Background(), strings.NewReader("hello\x00world"), FileMeta{ContentType: "text/plain", Size: 11}); !errors.Is(err, ErrInvalidContentType) {
 		t.Fatalf("text with nul error = %v, want ErrInvalidContentType", err)
+	}
+}
+
+func TestSaveResourceFileRejectsBinaryAfterTextPrefix(t *testing.T) {
+	service := newTestService(&fakeStorage{}, "id-1")
+	content := strings.Repeat("a", 600) + "\x00binary"
+
+	if _, err := service.SaveResourceFile(context.Background(), strings.NewReader(content), FileMeta{ContentType: "text/plain", Size: int64(len(content))}); !errors.Is(err, ErrInvalidContentType) {
+		t.Fatalf("text with late binary error = %v, want ErrInvalidContentType", err)
 	}
 }
 

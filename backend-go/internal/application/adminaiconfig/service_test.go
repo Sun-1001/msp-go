@@ -100,6 +100,25 @@ func TestFetchModelsByCredentialsReadsOpenAICompatibleList(t *testing.T) {
 	}
 }
 
+func TestFetchModelsByCredentialsRejectsTrailingResponseData(t *testing.T) {
+	service := newTestService(t, &fakeRepo{})
+	service.httpClient = fakeHTTPDoer(func(*http.Request) (*http.Response, error) {
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Body:       io.NopCloser(strings.NewReader(`{"data":[{"id":"a"}]} {"data":[{"id":"b"}]}`)),
+			Header:     http.Header{},
+		}, nil
+	})
+
+	response, err := service.FetchModelsByCredentials(context.Background(), FetchModelsByCredentialsRequest{BaseURL: "https://api.example.com", APIKey: "key"})
+	if err != nil {
+		t.Fatalf("FetchModelsByCredentials() error = %v", err)
+	}
+	if response.Success || response.Message != "模型列表响应格式无效" {
+		t.Fatalf("response = %#v", response)
+	}
+}
+
 func TestFetchModelsAndProviderTestRedactTransportErrors(t *testing.T) {
 	repo := &fakeRepo{
 		providers: map[string]StoredProvider{

@@ -197,6 +197,34 @@ func TestImportUsersParsesMultipartCSV(t *testing.T) {
 	}
 }
 
+func TestParseImportCSVRejectsBoundaryAbuse(t *testing.T) {
+	t.Run("too many rows", func(t *testing.T) {
+		var builder strings.Builder
+		builder.WriteString("用户名,邮箱,密码,角色\n")
+		for index := 0; index < maxImportRows+1; index++ {
+			builder.WriteString("alice,alice@example.com,Strong1!,student\n")
+		}
+		if _, err := parseImportCSV(builder.String()); err == nil || !strings.Contains(err.Error(), "行数") {
+			t.Fatalf("parseImportCSV() error = %v, want row limit", err)
+		}
+	})
+
+	t.Run("too many columns", func(t *testing.T) {
+		header := strings.Repeat("额外列,", maxImportColumns) + "额外列\n"
+		row := strings.Repeat("value,", maxImportColumns) + "value\n"
+		if _, err := parseImportCSV(header + row); err == nil || !strings.Contains(err.Error(), "列数") {
+			t.Fatalf("parseImportCSV() error = %v, want column limit", err)
+		}
+	})
+
+	t.Run("field too long", func(t *testing.T) {
+		content := "用户名,邮箱,密码,角色\n" + strings.Repeat("a", maxImportFieldRunes+1) + ",alice@example.com,Strong1!,student\n"
+		if _, err := parseImportCSV(content); err == nil || !strings.Contains(err.Error(), "字段长度") {
+			t.Fatalf("parseImportCSV() error = %v, want field length limit", err)
+		}
+	})
+}
+
 func TestExportUsersWritesCSV(t *testing.T) {
 	service := &fakeAdminUserService{exportUsers: []adminuserapp.ExportUser{{
 		Username:    "=cmd|'/C calc'!A0",

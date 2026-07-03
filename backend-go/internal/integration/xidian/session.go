@@ -2,7 +2,6 @@ package xidian
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -15,6 +14,7 @@ import (
 	"time"
 
 	xidianapp "mathstudy/backend-go/internal/application/xidian"
+	"mathstudy/backend-go/internal/platform/httpjson"
 )
 
 type session struct {
@@ -119,7 +119,7 @@ func (s *session) getJSON(ctx context.Context, rawURL string, form url.Values, h
 	}
 	defer response.Body.Close()
 	var payload map[string]any
-	if err := json.NewDecoder(response.Body).Decode(&payload); err != nil {
+	if err := httpjson.DecodeLimited(response.Body, maxXidianJSONBytes, &payload); err != nil {
 		return nil, response.StatusCode, response.Header, err
 	}
 	return payload, response.StatusCode, response.Header, nil
