@@ -61,12 +61,6 @@ func (h *Handler) Register(mux *http.ServeMux, prefix string) {
 	mux.HandleFunc("DELETE "+prefix+"/{attempt_id}", h.delete)
 }
 
-type errorResponse struct {
-	Detail  string `json:"detail"`
-	Code    string `json:"code,omitempty"`
-	Message string `json:"message,omitempty"`
-}
-
 func (h *Handler) list(w http.ResponseWriter, r *http.Request) {
 	principal, ok := h.requirePrincipal(w, r)
 	if !ok {
@@ -297,5 +291,5 @@ func parseOptionalTimeQuery(w http.ResponseWriter, value string, message string)
 }
 
 func writeMistakeError(w http.ResponseWriter, status int, code, message string) {
-	httpjson.Write(w, status, errorResponse{Detail: message, Code: code, Message: message})
+	httpjson.WriteDetailError(w, status, code, message)
 }

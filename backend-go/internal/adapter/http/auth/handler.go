@@ -143,12 +143,6 @@ type forgotPasswordStatusResponse struct {
 	CreatedAt  *string `json:"created_at"`
 }
 
-type errorResponse struct {
-	Detail  string `json:"detail"`
-	Code    string `json:"code,omitempty"`
-	Message string `json:"message,omitempty"`
-}
-
 func (h *Handler) login(w http.ResponseWriter, r *http.Request) {
 	var request loginRequest
 	if !decodeRequest(w, r, &request) {
@@ -465,5 +459,5 @@ func toUserResponse(account user.User) userResponse {
 }
 
 func writeAuthError(w http.ResponseWriter, status int, code, message string) {
-	httpjson.Write(w, status, errorResponse{Detail: message, Code: code, Message: message})
+	httpjson.WriteDetailError(w, status, code, message)
 }

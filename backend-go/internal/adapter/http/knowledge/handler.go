@@ -115,12 +115,6 @@ type chaptersResponse struct {
 	Chapters []string `json:"chapters"`
 }
 
-type errorResponse struct {
-	Detail  string `json:"detail"`
-	Code    string `json:"code,omitempty"`
-	Message string `json:"message,omitempty"`
-}
-
 func (h *Handler) stats(w http.ResponseWriter, r *http.Request) {
 	if _, ok := h.requireAdmin(w, r); !ok {
 		return
@@ -612,5 +606,5 @@ func decodeRequest(w http.ResponseWriter, r *http.Request, target any) bool {
 }
 
 func writeKnowledgeError(w http.ResponseWriter, status int, code, message string) {
-	httpjson.Write(w, status, errorResponse{Detail: message, Code: code, Message: message})
+	httpjson.WriteDetailError(w, status, code, message)
 }
