@@ -17,3 +17,11 @@ func ValueOrZero[T any](value *T) T {
 	}
 	return *value
 }
+
+// ValueOrDefault returns the pointed value, or fallback when value is nil.
+func ValueOrDefault[T any](value *T, fallback T) T {
+	if value == nil {
+		return fallback
+	}
+	return *value
+}

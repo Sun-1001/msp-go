@@ -36,3 +36,16 @@ func TestValueOrZeroNil(t *testing.T) {
 		t.Fatalf("ValueOrZero(nil int) = %d, want 0", got)
 	}
 }
+
+func TestValueOrDefault(t *testing.T) {
+	source := 0.3
+	if got := ValueOrDefault(&source, 0.7); got != 0.3 {
+		t.Fatalf("ValueOrDefault() = %v, want 0.3", got)
+	}
+}
+
+func TestValueOrDefaultNil(t *testing.T) {
+	if got := ValueOrDefault[int](nil, 60); got != 60 {
+		t.Fatalf("ValueOrDefault(nil int) = %d, want 60", got)
+	}
+}

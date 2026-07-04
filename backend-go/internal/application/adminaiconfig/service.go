@@ -13,6 +13,7 @@ import (
 
 	"mathstudy/backend-go/internal/platform/httpjson"
 	"mathstudy/backend-go/internal/platform/outbound"
+	"mathstudy/backend-go/internal/platform/ptrutil"
 	"mathstudy/backend-go/internal/platform/redact"
 )
 
@@ -872,11 +873,11 @@ func (s *Service) modelInputFromRequest(request CreateModelRequest) (ModelInput,
 		ProviderID:         strings.TrimSpace(request.ProviderID),
 		Name:               name,
 		ModelID:            modelID,
-		DefaultTemperature: valueOrDefaultFloat(request.DefaultTemperature, defaultTemperature),
+		DefaultTemperature: ptrutil.ValueOrDefault(request.DefaultTemperature, defaultTemperature),
 		DefaultMaxTokens:   request.DefaultMaxTokens,
 		DefaultTopP:        request.DefaultTopP,
-		DefaultTimeout:     valueOrDefaultInt(request.DefaultTimeout, defaultTimeout),
-		DefaultMaxRetries:  valueOrDefaultInt(request.DefaultMaxRetries, defaultMaxRetries),
+		DefaultTimeout:     ptrutil.ValueOrDefault(request.DefaultTimeout, defaultTimeout),
+		DefaultMaxRetries:  ptrutil.ValueOrDefault(request.DefaultMaxRetries, defaultMaxRetries),
 		Capabilities:       normalizeObjectMap(request.Capabilities),
 		Description:        optionalTrimmedString(request.Description, 500),
 		IsActive:           true,
@@ -1089,20 +1090,6 @@ func normalizeObjectMap(value map[string]any) map[string]any {
 		return map[string]any{}
 	}
 	return value
-}
-
-func valueOrDefaultFloat(value *float64, fallback float64) float64 {
-	if value == nil {
-		return fallback
-	}
-	return *value
-}
-
-func valueOrDefaultInt(value *int, fallback int) int {
-	if value == nil {
-		return fallback
-	}
-	return *value
 }
 
 func joinProviderURL(baseURL string, apiPath string) string {
