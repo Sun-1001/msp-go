@@ -616,14 +616,3 @@ func scanAttemptAndContent(scanner rowScanner, attempt *mistakeapp.Attempt, cont
 	content.Meta = meta
 	return nil
 }
-
-func decodeObjectMap(raw []byte) (map[string]any, error) {
-	if len(raw) == 0 {
-		return map[string]any{}, nil
-	}
-	values := map[string]any{}
-	if err := json.Unmarshal(raw, &values); err != nil {
-		return nil, err
-	}
-	return values, nil
-}

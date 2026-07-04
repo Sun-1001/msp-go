@@ -2,7 +2,6 @@ package postgres
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"strings"
 	"time"
@@ -449,17 +448,6 @@ func scanKnowledgeNode(rows pgx.Rows) (progressapp.KnowledgeNode, error) {
 		node.Chapter = &value
 	}
 	return node, nil
-}
-
-func decodeFloatMap(raw []byte) (map[string]float64, error) {
-	if len(raw) == 0 {
-		return map[string]float64{}, nil
-	}
-	values := map[string]float64{}
-	if err := json.Unmarshal(raw, &values); err != nil {
-		return nil, err
-	}
-	return values, nil
 }
 
 func progressNodeTypeToDB(value string) string {

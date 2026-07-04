@@ -2,7 +2,6 @@ package postgres
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"time"
 
@@ -172,15 +171,4 @@ func scanOptionalPortrait(row pgx.Row) (portraitapp.Profile, bool, error) {
 		profile.PortraitGeneratedAt = &value
 	}
 	return profile, true, nil
-}
-
-func decodeStringSlice(raw []byte) ([]string, error) {
-	if len(raw) == 0 {
-		return []string{}, nil
-	}
-	values := []string{}
-	if err := json.Unmarshal(raw, &values); err != nil {
-		return nil, err
-	}
-	return values, nil
 }
