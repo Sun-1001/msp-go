@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -42,7 +43,7 @@ func TestListForwardsFilters(t *testing.T) {
 	handler.Register(mux, "/api/v1/questions")
 
 	recorder := httptest.NewRecorder()
-	request := httptest.NewRequest(http.MethodGet, "/api/v1/questions?page=2&page_size=10&search=limit&difficulty=easy&type=proof&status=published&tags=calculus&tags[]=exam&group=导数&sort_by=usage_count&sort_order=asc", nil)
+	request := httptest.NewRequest(http.MethodGet, "/api/v1/questions?page=2&page_size=10&search=limit&difficulty=easy&type=proof&status=published&tags=calculus,analysis&tags[]=exam&tags[]=&group=导数&sort_by=usage_count&sort_order=asc", nil)
 	request.Header.Set("Authorization", "Bearer token")
 	mux.ServeHTTP(recorder, request)
 
@@ -53,7 +54,7 @@ func TestListForwardsFilters(t *testing.T) {
 	if service.lastOwnerID != "teacher-1" || filter.Page != 2 || filter.PageSize != 10 || filter.Search != "limit" || filter.Type != "proof" {
 		t.Fatalf("owner/filter = %q %#v", service.lastOwnerID, filter)
 	}
-	if len(filter.Tags) != 2 || filter.Group != "导数" || filter.SortBy != "usage_count" || filter.SortOrder != "asc" {
+	if !reflect.DeepEqual(filter.Tags, []string{"calculus", "analysis", "exam"}) || filter.Group != "导数" || filter.SortBy != "usage_count" || filter.SortOrder != "asc" {
 		t.Fatalf("filter = %#v", filter)
 	}
 }

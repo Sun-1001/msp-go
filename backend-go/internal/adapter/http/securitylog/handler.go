@@ -246,8 +246,8 @@ func parseQueryFilter(w http.ResponseWriter, r *http.Request) (securitylogapp.Qu
 		return securitylogapp.QueryFilter{}, false
 	}
 	return securitylogapp.QueryFilter{
-		EventTypes:      parseEventTypes(queryValues(query["event_types"])),
-		Severities:      parseSeverities(queryValues(query["severities"])),
+		EventTypes:      parseEventTypes(httpquery.StringList(query["event_types"])),
+		Severities:      parseSeverities(httpquery.StringList(query["severities"])),
 		StartDate:       startDate,
 		EndDate:         endDate,
 		IncludeArchived: strings.EqualFold(query.Get("include_archived"), "true"),
@@ -279,19 +279,6 @@ func parseTimeQuery(w http.ResponseWriter, value string, name string) (*time.Tim
 		return nil, false
 	}
 	return &parsed, true
-}
-
-func queryValues(values []string) []string {
-	result := []string{}
-	for _, value := range values {
-		for _, part := range strings.Split(value, ",") {
-			part = strings.TrimSpace(part)
-			if part != "" {
-				result = append(result, part)
-			}
-		}
-	}
-	return result
 }
 
 func parseEventTypes(values []string) []securitylogapp.EventType {

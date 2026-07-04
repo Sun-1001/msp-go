@@ -486,7 +486,7 @@ func parseListFilter(w http.ResponseWriter, r *http.Request) (questionapp.ListFi
 		Difficulty: query.Get("difficulty"),
 		Type:       query.Get("type"),
 		Status:     query.Get("status"),
-		Tags:       parseStringArrayQuery(r, "tags"),
+		Tags:       httpquery.NamedStringList(query, "tags"),
 		Group:      query.Get("group"),
 		SortBy:     query.Get("sort_by"),
 		SortOrder:  query.Get("sort_order"),
@@ -500,21 +500,6 @@ func parseIntQuery(w http.ResponseWriter, value string, fallback int, name strin
 		return 0, false
 	}
 	return parsed, true
-}
-
-func parseStringArrayQuery(r *http.Request, name string) []string {
-	values := append([]string{}, r.URL.Query()[name]...)
-	values = append(values, r.URL.Query()[name+"[]"]...)
-	result := []string{}
-	for _, value := range values {
-		for _, part := range strings.Split(value, ",") {
-			part = strings.TrimSpace(part)
-			if part != "" {
-				result = append(result, part)
-			}
-		}
-	}
-	return result
 }
 
 func (r createRequest) toInput(w http.ResponseWriter) (questionapp.QuestionInput, bool) {

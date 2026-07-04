@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -47,7 +48,7 @@ func TestListLogsParsesFilters(t *testing.T) {
 	mux := http.NewServeMux()
 	handler.Register(mux, "/api/v1/admin/security-logs")
 
-	request := httptest.NewRequest(http.MethodGet, "/api/v1/admin/security-logs?event_types=login_failed,service_error&severities=warning&page=2&page_size=25&start_date=2026-05-01&include_archived=true", nil)
+	request := httptest.NewRequest(http.MethodGet, "/api/v1/admin/security-logs?event_types=login_failed,service_error&event_types=&severities=warning,error&page=2&page_size=25&start_date=2026-05-01&include_archived=true", nil)
 	request.Header.Set("Authorization", "Bearer token")
 	recorder := httptest.NewRecorder()
 	mux.ServeHTTP(recorder, request)
@@ -55,7 +56,11 @@ func TestListLogsParsesFilters(t *testing.T) {
 	if recorder.Code != http.StatusOK {
 		t.Fatalf("status=%d body=%s", recorder.Code, recorder.Body.String())
 	}
-	if service.lastFilter.Page != 2 || service.lastFilter.PageSize != 25 || len(service.lastFilter.EventTypes) != 2 || !service.lastFilter.IncludeArchived || service.lastFilter.StartDate == nil {
+	if service.lastFilter.Page != 2 || service.lastFilter.PageSize != 25 || !service.lastFilter.IncludeArchived || service.lastFilter.StartDate == nil {
+		t.Fatalf("filter = %#v", service.lastFilter)
+	}
+	if !reflect.DeepEqual(service.lastFilter.EventTypes, []securitylogapp.EventType{securitylogapp.EventLoginFailed, securitylogapp.EventServiceError}) ||
+		!reflect.DeepEqual(service.lastFilter.Severities, []securitylogapp.Severity{securitylogapp.SeverityWarning, securitylogapp.SeverityError}) {
 		t.Fatalf("filter = %#v", service.lastFilter)
 	}
 }
