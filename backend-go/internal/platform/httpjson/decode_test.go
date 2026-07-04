@@ -92,6 +92,42 @@ func TestDecodeStrictOrDetailErrorWritesCommonError(t *testing.T) {
 	}
 }
 
+func TestDecodeStrictOrBadRequest(t *testing.T) {
+	var payload struct {
+		Name string `json:"name"`
+	}
+	request := httptest.NewRequest("POST", "/", strings.NewReader(`{"name":"alice"}`))
+	recorder := httptest.NewRecorder()
+
+	if ok := DecodeStrictOrBadRequest(recorder, request, 1<<20, &payload); !ok {
+		t.Fatal("DecodeStrictOrBadRequest() = false, want true")
+	}
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status = %d, want untouched default 200", recorder.Code)
+	}
+	if payload.Name != "alice" {
+		t.Fatalf("payload = %#v", payload)
+	}
+}
+
+func TestDecodeStrictOrBadRequestWritesCommonError(t *testing.T) {
+	var payload struct {
+		Name string `json:"name"`
+	}
+	request := httptest.NewRequest("POST", "/", strings.NewReader(`{`))
+	recorder := httptest.NewRecorder()
+
+	if ok := DecodeStrictOrBadRequest(recorder, request, 1<<20, &payload); ok {
+		t.Fatal("DecodeStrictOrBadRequest() = true, want false")
+	}
+	if recorder.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400", recorder.Code)
+	}
+	if got := strings.TrimSpace(recorder.Body.String()); got != `{"detail":"请求体不是有效 JSON","code":"BAD_REQUEST","message":"请求体不是有效 JSON"}` {
+		t.Fatalf("body = %s", recorder.Body.String())
+	}
+}
+
 func TestDecodeLimitedAcceptsSingleJSONDocument(t *testing.T) {
 	var payload struct {
 		Name string `json:"name"`

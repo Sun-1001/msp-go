@@ -43,6 +43,15 @@ func DecodeStrictOrDetailError(w http.ResponseWriter, r *http.Request, maxBytes 
 	return true
 }
 
+// DecodeStrictOrBadRequest decodes a strict JSON request body and writes the common 400 bad JSON detail error on failure.
+func DecodeStrictOrBadRequest(w http.ResponseWriter, r *http.Request, maxBytes int64, target any) bool {
+	if err := DecodeStrict(w, r, maxBytes, target); err != nil {
+		WriteDetailError(w, http.StatusBadRequest, "BAD_REQUEST", "请求体不是有效 JSON")
+		return false
+	}
+	return true
+}
+
 func DecodeLimited(reader io.Reader, maxBytes int64, target any) error {
 	decoder := json.NewDecoder(&limitedReader{reader: reader, remaining: maxBytes})
 	if err := decoder.Decode(target); err != nil {

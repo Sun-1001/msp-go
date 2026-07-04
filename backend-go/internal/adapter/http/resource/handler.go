@@ -481,11 +481,7 @@ func validateOptionalPages(w http.ResponseWriter, value *int) bool {
 }
 
 func decodeRequest(w http.ResponseWriter, r *http.Request, target any) bool {
-	if err := httpjson.DecodeStrict(w, r, maxJSONBodyBytes, target); err != nil {
-		writeResourceError(w, http.StatusBadRequest, "BAD_REQUEST", "请求体不是有效 JSON")
-		return false
-	}
-	return true
+	return httpjson.DecodeStrictOrBadRequest(w, r, maxJSONBodyBytes, target)
 }
 
 func writeResourceError(w http.ResponseWriter, status int, code, message string) {
