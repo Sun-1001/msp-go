@@ -303,7 +303,7 @@ func (s *Service) GetOverview(ctx context.Context, userID string) (Overview, err
 	return Overview{
 		TotalExercises:   totalExercises,
 		CorrectCount:     correctCount,
-		CorrectRate:      numutil.RoundPlaces(percent(totalExercises, correctCount), 1),
+		CorrectRate:      numutil.RoundPlaces(numutil.Percent(totalExercises, correctCount), 1),
 		StudyMinutes:     totalSeconds / 60,
 		StreakDays:       streakDays,
 		MasteredConcepts: masteredConcepts,
@@ -939,13 +939,6 @@ func clampProbability(value float64) float64 {
 		return 0.999
 	}
 	return value
-}
-
-func percent(total int, count int) float64 {
-	if total <= 0 {
-		return 0
-	}
-	return float64(count) / float64(total) * 100.0
 }
 
 func weekdayMondayIndex(value time.Time) int {

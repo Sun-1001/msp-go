@@ -398,7 +398,7 @@ func (s *Service) GetStatistics(ctx context.Context, userID string, timeRange st
 		Overview: StatisticsOverview{
 			TotalMistakes:  totalMistakes,
 			TotalExercises: totalExercises,
-			MistakeRate:    numutil.RoundPlaces(percent(totalExercises, totalMistakes), 1),
+			MistakeRate:    numutil.RoundPlaces(numutil.Percent(totalExercises, totalMistakes), 1),
 			AvgMastery:     numutil.RoundPlaces(averageFloatMap(mastery), 2),
 		},
 		ErrorTypeDistribution: buildErrorTypeDistribution(errorCounts, totalMistakes),
@@ -807,13 +807,6 @@ func averageFloatMap(values map[string]float64) float64 {
 		sum += value
 	}
 	return sum / float64(len(values))
-}
-
-func percent(total int, count int) float64 {
-	if total <= 0 {
-		return 0
-	}
-	return float64(count) / float64(total) * 100
 }
 
 func totalPages(total int, pageSize int) int {
