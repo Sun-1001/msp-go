@@ -32,7 +32,9 @@ func TestRegistrationSettingsReadsDefaultsAndUpdates(t *testing.T) {
 	if err != nil {
 		t.Fatalf("UpdateRegistrationSettings() error = %v", err)
 	}
-	if !updated.AllowStudent || updated.AllowTeacher || len(repo.upserts) != 2 {
+	if !updated.AllowStudent || updated.AllowTeacher || len(repo.upserts) != 2 ||
+		repo.upserts[0].Key != allowStudentRegistration || repo.upserts[0].Value != "true" ||
+		repo.upserts[1].Key != allowTeacherRegistration || repo.upserts[1].Value != "false" {
 		t.Fatalf("updated=%#v upserts=%#v", updated, repo.upserts)
 	}
 }

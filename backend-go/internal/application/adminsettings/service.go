@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -252,8 +253,8 @@ func (s *Service) RegistrationSettings(ctx context.Context) (RegistrationSetting
 func (s *Service) UpdateRegistrationSettings(ctx context.Context, allowStudent bool, allowTeacher bool) (RegistrationSettingsResponse, error) {
 	now := s.now()
 	if err := s.repo.UpsertSettings(ctx, []SettingUpdate{
-		{Key: allowStudentRegistration, Value: boolString(allowStudent), Description: "是否允许学生注册", UpdatedAt: now},
-		{Key: allowTeacherRegistration, Value: boolString(allowTeacher), Description: "是否允许教师注册", UpdatedAt: now},
+		{Key: allowStudentRegistration, Value: strconv.FormatBool(allowStudent), Description: "是否允许学生注册", UpdatedAt: now},
+		{Key: allowTeacherRegistration, Value: strconv.FormatBool(allowTeacher), Description: "是否允许教师注册", UpdatedAt: now},
 	}); err != nil {
 		return RegistrationSettingsResponse{}, err
 	}
@@ -521,13 +522,6 @@ func settingBool(values map[string]string, key string, fallback bool) bool {
 		return fallback
 	}
 	return strings.EqualFold(value, "true")
-}
-
-func boolString(value bool) string {
-	if value {
-		return "true"
-	}
-	return "false"
 }
 
 func DisplayNameForTable(table string) string {
