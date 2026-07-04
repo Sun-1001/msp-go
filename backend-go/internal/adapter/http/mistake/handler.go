@@ -5,7 +5,6 @@ import (
 	"errors"
 	"log/slog"
 	"net/http"
-	"strconv"
 	"time"
 
 	authapp "mathstudy/backend-go/internal/application/auth"
@@ -274,10 +273,7 @@ func paginationErrorMessage(err error) string {
 }
 
 func parseFloatQuery(w http.ResponseWriter, value string, fallback float64, name string) (float64, bool) {
-	if value == "" {
-		return fallback, true
-	}
-	parsed, err := strconv.ParseFloat(value, 64)
+	parsed, err := httpquery.Float(value, fallback)
 	if err != nil {
 		writeMistakeError(w, http.StatusUnprocessableEntity, "VALIDATION_ERROR", name+" 必须是数字")
 		return 0, false

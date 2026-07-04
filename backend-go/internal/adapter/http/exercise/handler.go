@@ -5,13 +5,13 @@ import (
 	"errors"
 	"log/slog"
 	"net/http"
-	"strconv"
 	"strings"
 
 	authapp "mathstudy/backend-go/internal/application/auth"
 	exerciseapp "mathstudy/backend-go/internal/application/exercise"
 	"mathstudy/backend-go/internal/platform/httpauth"
 	"mathstudy/backend-go/internal/platform/httpjson"
+	"mathstudy/backend-go/internal/platform/httpquery"
 	"mathstudy/backend-go/internal/platform/redact"
 )
 
@@ -188,8 +188,8 @@ func parseNextQuery(w http.ResponseWriter, r *http.Request) (exerciseapp.NextQue
 	query := r.URL.Query()
 	var difficulty *float64
 	if raw := query.Get("difficulty"); raw != "" {
-		parsed, err := strconv.ParseFloat(raw, 64)
-		if err != nil || parsed < 0 || parsed > 1 {
+		parsed, err := httpquery.BoundedFloat(raw, 0, 0, 1)
+		if err != nil {
 			writeExerciseError(w, http.StatusUnprocessableEntity, "VALIDATION_ERROR", "difficulty 必须在 0 到 1 之间")
 			return exerciseapp.NextQuery{}, false
 		}

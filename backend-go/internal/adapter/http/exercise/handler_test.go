@@ -60,6 +60,29 @@ func TestNextForwardsQueryAndWritesNull(t *testing.T) {
 	}
 }
 
+func TestNextRejectsInvalidDifficultyBeforeServiceCall(t *testing.T) {
+	service := &fakeExerciseService{}
+	auth := &fakeAuthenticator{principal: authapp.Principal{UserID: "student-1", Role: user.RoleStudent}}
+	handler := newTestHandler(t, service, auth)
+	mux := http.NewServeMux()
+	handler.Register(mux, "/api/v1/exercise")
+
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodGet, "/api/v1/exercise/next?difficulty=1.5", nil)
+	request.Header.Set("Authorization", "Bearer token")
+	mux.ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("status = %d body=%s", recorder.Code, recorder.Body.String())
+	}
+	if !strings.Contains(recorder.Body.String(), "difficulty 必须在 0 到 1 之间") {
+		t.Fatalf("body = %s", recorder.Body.String())
+	}
+	if service.lastUserID != "" {
+		t.Fatalf("service was called for invalid difficulty: %#v", service)
+	}
+}
+
 func TestSubmitRejectsMissingAnswerBeforeServiceCall(t *testing.T) {
 	service := &fakeExerciseService{}
 	auth := &fakeAuthenticator{principal: authapp.Principal{UserID: "student-1", Role: user.RoleStudent}}
