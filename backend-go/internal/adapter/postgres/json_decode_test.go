@@ -68,6 +68,16 @@ func TestDecodeObjectMapEmpty(t *testing.T) {
 	}
 }
 
+func TestDecodeObjectMapNull(t *testing.T) {
+	got, err := decodeObjectMap([]byte(`null`))
+	if err != nil {
+		t.Fatalf("decodeObjectMap(null) error = %v", err)
+	}
+	if got == nil || len(got) != 0 {
+		t.Fatalf("decodeObjectMap(null) = %#v, want empty map", got)
+	}
+}
+
 func TestDecodeInvalidJSON(t *testing.T) {
 	if _, err := decodeFloatMap([]byte(`{`)); err == nil {
 		t.Fatal("decodeFloatMap(invalid) error = nil, want error")

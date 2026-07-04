@@ -32,5 +32,8 @@ func decodeObjectMap(raw []byte) (map[string]any, error) {
 	if err := json.Unmarshal(raw, &values); err != nil {
 		return nil, err
 	}
+	if values == nil {
+		return map[string]any{}, nil
+	}
 	return values, nil
 }

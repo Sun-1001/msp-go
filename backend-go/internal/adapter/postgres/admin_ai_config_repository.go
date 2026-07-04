@@ -784,7 +784,7 @@ func scanLLMModel(scanner rowScanner) (adminaiconfigapp.LLMModel, error) {
 	); err != nil {
 		return adminaiconfigapp.LLMModel{}, err
 	}
-	capabilities, err := decodeJSONMap(capabilitiesRaw)
+	capabilities, err := decodeObjectMap(capabilitiesRaw)
 	if err != nil {
 		return adminaiconfigapp.LLMModel{}, fmt.Errorf("decode llm model capabilities: %w", err)
 	}
@@ -828,7 +828,7 @@ func scanAgentModelConfig(scanner rowScanner) (adminaiconfigapp.AgentModelConfig
 	); err != nil {
 		return adminaiconfigapp.AgentModelConfig{}, err
 	}
-	extraConfig, err := decodeJSONMap(extraConfigRaw)
+	extraConfig, err := decodeObjectMap(extraConfigRaw)
 	if err != nil {
 		return adminaiconfigapp.AgentModelConfig{}, fmt.Errorf("decode agent extra config: %w", err)
 	}
@@ -852,20 +852,6 @@ func findModelByProviderModelID(models []adminaiconfigapp.LLMModel, providerMode
 		}
 	}
 	return adminaiconfigapp.LLMModel{}, false
-}
-
-func decodeJSONMap(raw []byte) (map[string]any, error) {
-	if len(raw) == 0 {
-		return map[string]any{}, nil
-	}
-	var value map[string]any
-	if err := json.Unmarshal(raw, &value); err != nil {
-		return nil, err
-	}
-	if value == nil {
-		return map[string]any{}, nil
-	}
-	return value, nil
 }
 
 func jsonObject(value map[string]any) string {
