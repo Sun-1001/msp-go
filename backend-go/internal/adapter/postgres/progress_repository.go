@@ -440,10 +440,7 @@ func scanKnowledgeNode(rows pgx.Rows) (progressapp.KnowledgeNode, error) {
 	); err != nil {
 		return progressapp.KnowledgeNode{}, err
 	}
-	if chapter.Valid {
-		value := chapter.String
-		node.Chapter = &value
-	}
+	node.Chapter = textPtr(chapter)
 	return node, nil
 }
 

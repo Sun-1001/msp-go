@@ -162,10 +162,7 @@ func scanOptionalPortrait(row pgx.Row) (portraitapp.Profile, bool, error) {
 	profile.MasteryVector = mastery
 	profile.ErrorTendency = errorTendency
 	profile.RecentConcepts = recentConcepts
-	if content.Valid {
-		value := content.String
-		profile.PortraitContent = &value
-	}
+	profile.PortraitContent = textPtr(content)
 	profile.PortraitGeneratedAt = timestampPtr(generatedAt)
 	return profile, true, nil
 }
