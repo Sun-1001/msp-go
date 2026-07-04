@@ -2,7 +2,6 @@ package admininboxhttp
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"log/slog"
 	"net/http"
@@ -84,7 +83,7 @@ func (h *Handler) listRequests(w http.ResponseWriter, r *http.Request) {
 		h.writeServiceError(w, err, "获取密码重置申请列表失败")
 		return
 	}
-	writeJSON(w, http.StatusOK, response)
+	httpjson.Write(w, http.StatusOK, response)
 }
 
 func (h *Handler) pendingCount(w http.ResponseWriter, r *http.Request) {
@@ -96,7 +95,7 @@ func (h *Handler) pendingCount(w http.ResponseWriter, r *http.Request) {
 		h.writeServiceError(w, err, "获取待处理申请数量失败")
 		return
 	}
-	writeJSON(w, http.StatusOK, pendingCountResponse{PendingCount: count})
+	httpjson.Write(w, http.StatusOK, pendingCountResponse{PendingCount: count})
 }
 
 func (h *Handler) reviewRequest(w http.ResponseWriter, r *http.Request) {
@@ -118,7 +117,7 @@ func (h *Handler) reviewRequest(w http.ResponseWriter, r *http.Request) {
 		h.writeServiceError(w, err, "审批密码重置申请失败")
 		return
 	}
-	writeJSON(w, http.StatusOK, response)
+	httpjson.Write(w, http.StatusOK, response)
 }
 
 func (h *Handler) requireAdmin(w http.ResponseWriter, r *http.Request) (authapp.Principal, bool) {
@@ -191,12 +190,6 @@ func decodeRequest(w http.ResponseWriter, r *http.Request, target any) bool {
 	return true
 }
 
-func writeJSON(w http.ResponseWriter, status int, payload any) {
-	w.Header().Set("Content-Type", "application/json; charset=utf-8")
-	w.WriteHeader(status)
-	_ = json.NewEncoder(w).Encode(payload)
-}
-
 func writeAdminInboxError(w http.ResponseWriter, status int, code, message string) {
-	writeJSON(w, status, errorResponse{Detail: message, Code: code, Message: message})
+	httpjson.Write(w, status, errorResponse{Detail: message, Code: code, Message: message})
 }

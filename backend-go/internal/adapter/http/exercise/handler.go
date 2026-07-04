@@ -2,7 +2,6 @@ package exercisehttp
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"log/slog"
 	"net/http"
@@ -86,7 +85,7 @@ func (h *Handler) next(w http.ResponseWriter, r *http.Request) {
 		h.writeExerciseError(w, err, "获取练习题失败")
 		return
 	}
-	writeJSON(w, http.StatusOK, response)
+	httpjson.Write(w, http.StatusOK, response)
 }
 
 func (h *Handler) submit(w http.ResponseWriter, r *http.Request) {
@@ -119,7 +118,7 @@ func (h *Handler) submit(w http.ResponseWriter, r *http.Request) {
 		h.writeExerciseError(w, err, "提交答案失败")
 		return
 	}
-	writeJSON(w, http.StatusOK, response)
+	httpjson.Write(w, http.StatusOK, response)
 }
 
 func (h *Handler) detail(w http.ResponseWriter, r *http.Request) {
@@ -136,7 +135,7 @@ func (h *Handler) detail(w http.ResponseWriter, r *http.Request) {
 		h.writeExerciseError(w, err, "获取题目详情失败")
 		return
 	}
-	writeJSON(w, http.StatusOK, response)
+	httpjson.Write(w, http.StatusOK, response)
 }
 
 func (h *Handler) solution(w http.ResponseWriter, r *http.Request) {
@@ -153,7 +152,7 @@ func (h *Handler) solution(w http.ResponseWriter, r *http.Request) {
 		h.writeExerciseError(w, err, "获取题目解析失败")
 		return
 	}
-	writeJSON(w, http.StatusOK, response)
+	httpjson.Write(w, http.StatusOK, response)
 }
 
 func (h *Handler) requirePrincipal(w http.ResponseWriter, r *http.Request) (authapp.Principal, bool) {
@@ -214,12 +213,6 @@ func valueOrEmpty(value *string) string {
 	return *value
 }
 
-func writeJSON(w http.ResponseWriter, status int, payload any) {
-	w.Header().Set("Content-Type", "application/json; charset=utf-8")
-	w.WriteHeader(status)
-	_ = json.NewEncoder(w).Encode(payload)
-}
-
 func writeExerciseError(w http.ResponseWriter, status int, code, message string) {
-	writeJSON(w, status, errorResponse{Detail: message, Code: code, Message: message})
+	httpjson.Write(w, status, errorResponse{Detail: message, Code: code, Message: message})
 }

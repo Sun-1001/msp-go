@@ -2,7 +2,6 @@ package adminstatshttp
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"log/slog"
 	"net/http"
@@ -10,6 +9,7 @@ import (
 	adminstatsapp "mathstudy/backend-go/internal/application/adminstats"
 	authapp "mathstudy/backend-go/internal/application/auth"
 	"mathstudy/backend-go/internal/platform/httpauth"
+	"mathstudy/backend-go/internal/platform/httpjson"
 	"mathstudy/backend-go/internal/platform/httpquery"
 	"mathstudy/backend-go/internal/platform/redact"
 )
@@ -71,7 +71,7 @@ func (h *Handler) overview(w http.ResponseWriter, r *http.Request) {
 		h.writeServiceError(w, err, "获取概览统计失败")
 		return
 	}
-	writeJSON(w, http.StatusOK, response)
+	httpjson.Write(w, http.StatusOK, response)
 }
 
 func (h *Handler) userGrowth(w http.ResponseWriter, r *http.Request) {
@@ -83,7 +83,7 @@ func (h *Handler) userGrowth(w http.ResponseWriter, r *http.Request) {
 		h.writeServiceError(w, err, "获取用户增长趋势失败")
 		return
 	}
-	writeJSON(w, http.StatusOK, response)
+	httpjson.Write(w, http.StatusOK, response)
 }
 
 func (h *Handler) recentActivities(w http.ResponseWriter, r *http.Request) {
@@ -104,7 +104,7 @@ func (h *Handler) recentActivities(w http.ResponseWriter, r *http.Request) {
 		h.writeServiceError(w, err, "获取最近活动失败")
 		return
 	}
-	writeJSON(w, http.StatusOK, response)
+	httpjson.Write(w, http.StatusOK, response)
 }
 
 func (h *Handler) systemStatus(w http.ResponseWriter, r *http.Request) {
@@ -116,7 +116,7 @@ func (h *Handler) systemStatus(w http.ResponseWriter, r *http.Request) {
 		h.writeServiceError(w, err, "获取系统状态失败")
 		return
 	}
-	writeJSON(w, http.StatusOK, response)
+	httpjson.Write(w, http.StatusOK, response)
 }
 
 func (h *Handler) requireAdmin(w http.ResponseWriter, r *http.Request) (authapp.Principal, bool) {
@@ -149,12 +149,6 @@ func (h *Handler) writeServiceError(w http.ResponseWriter, err error, fallback s
 	}
 }
 
-func writeJSON(w http.ResponseWriter, status int, payload any) {
-	w.Header().Set("Content-Type", "application/json; charset=utf-8")
-	w.WriteHeader(status)
-	_ = json.NewEncoder(w).Encode(payload)
-}
-
 func writeAdminStatsError(w http.ResponseWriter, status int, code, message string) {
-	writeJSON(w, status, errorResponse{Detail: message, Code: code, Message: message})
+	httpjson.Write(w, status, errorResponse{Detail: message, Code: code, Message: message})
 }

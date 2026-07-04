@@ -2,7 +2,6 @@ package uploadhttp
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"io"
 	"log/slog"
@@ -15,6 +14,7 @@ import (
 	authapp "mathstudy/backend-go/internal/application/auth"
 	uploadapp "mathstudy/backend-go/internal/application/upload"
 	"mathstudy/backend-go/internal/platform/httpauth"
+	"mathstudy/backend-go/internal/platform/httpjson"
 	"mathstudy/backend-go/internal/platform/redact"
 )
 
@@ -119,7 +119,7 @@ func (h *Handler) upload(w http.ResponseWriter, r *http.Request, maxSize int64, 
 		h.writeServiceError(w, err, fallback)
 		return
 	}
-	writeJSON(w, http.StatusOK, response)
+	httpjson.Write(w, http.StatusOK, response)
 }
 
 func (h *Handler) requirePrincipal(w http.ResponseWriter, r *http.Request) (authapp.Principal, bool) {
@@ -170,14 +170,8 @@ func (h *Handler) writeServiceError(w http.ResponseWriter, err error, fallback s
 	}
 }
 
-func writeJSON(w http.ResponseWriter, status int, payload any) {
-	w.Header().Set("Content-Type", "application/json; charset=utf-8")
-	w.WriteHeader(status)
-	_ = json.NewEncoder(w).Encode(payload)
-}
-
 func writeUploadError(w http.ResponseWriter, status int, code, message string) {
-	writeJSON(w, status, errorResponse{Detail: message, Code: code, Message: message})
+	httpjson.Write(w, status, errorResponse{Detail: message, Code: code, Message: message})
 }
 
 func uploadRateKey(r *http.Request, principal authapp.Principal) string {

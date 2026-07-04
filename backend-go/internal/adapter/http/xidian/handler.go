@@ -2,7 +2,6 @@ package xidianhttp
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"log/slog"
 	"net/http"
@@ -81,7 +80,7 @@ func (h *Handler) bindingStatus(w http.ResponseWriter, r *http.Request) {
 		h.writeServiceError(w, err, "获取绑定状态失败")
 		return
 	}
-	writeJSON(w, http.StatusOK, response)
+	httpjson.Write(w, http.StatusOK, response)
 }
 
 func (h *Handler) startBinding(w http.ResponseWriter, r *http.Request) {
@@ -93,7 +92,7 @@ func (h *Handler) startBinding(w http.ResponseWriter, r *http.Request) {
 		h.writeServiceError(w, err, "获取验证码失败")
 		return
 	}
-	writeJSON(w, http.StatusOK, response)
+	httpjson.Write(w, http.StatusOK, response)
 }
 
 func (h *Handler) completeBinding(w http.ResponseWriter, r *http.Request) {
@@ -110,7 +109,7 @@ func (h *Handler) completeBinding(w http.ResponseWriter, r *http.Request) {
 		h.writeServiceError(w, err, "绑定失败")
 		return
 	}
-	writeJSON(w, http.StatusOK, response)
+	httpjson.Write(w, http.StatusOK, response)
 }
 
 func (h *Handler) unbind(w http.ResponseWriter, r *http.Request) {
@@ -122,7 +121,7 @@ func (h *Handler) unbind(w http.ResponseWriter, r *http.Request) {
 		h.writeServiceError(w, err, "解绑失败")
 		return
 	}
-	writeJSON(w, http.StatusOK, xidianapp.UnbindResponse{Success: true})
+	httpjson.Write(w, http.StatusOK, xidianapp.UnbindResponse{Success: true})
 }
 
 func (h *Handler) syncClasstable(w http.ResponseWriter, r *http.Request) {
@@ -147,7 +146,7 @@ func (h *Handler) sync(w http.ResponseWriter, r *http.Request, fn func(context.C
 		h.writeServiceError(w, err, fallback)
 		return
 	}
-	writeJSON(w, http.StatusOK, response)
+	httpjson.Write(w, http.StatusOK, response)
 }
 
 func (h *Handler) snapshot(w http.ResponseWriter, r *http.Request) {
@@ -160,7 +159,7 @@ func (h *Handler) snapshot(w http.ResponseWriter, r *http.Request) {
 		h.writeServiceError(w, err, "获取缓存失败")
 		return
 	}
-	writeJSON(w, http.StatusOK, response)
+	httpjson.Write(w, http.StatusOK, response)
 }
 
 func (h *Handler) requirePrincipal(w http.ResponseWriter, r *http.Request) (authapp.Principal, bool) {
@@ -201,12 +200,6 @@ func decodeRequest(w http.ResponseWriter, r *http.Request, target any) bool {
 	return true
 }
 
-func writeJSON(w http.ResponseWriter, status int, payload any) {
-	w.Header().Set("Content-Type", "application/json; charset=utf-8")
-	w.WriteHeader(status)
-	_ = json.NewEncoder(w).Encode(payload)
-}
-
 func writeXidianError(w http.ResponseWriter, status int, code, message string) {
-	writeJSON(w, status, errorResponse{Code: code, Message: message})
+	httpjson.Write(w, status, errorResponse{Code: code, Message: message})
 }
