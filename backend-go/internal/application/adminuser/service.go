@@ -323,7 +323,11 @@ func (s *Service) ImportUsers(ctx context.Context, rows []ImportUser) (ImportRes
 			response.Details = append(response.Details, ImportResult{Row: rowNumber, Username: emptyUsername(normalized.Username), Message: "用户名、邮箱和密码为必填项"})
 			continue
 		}
-		role, err := user.ParseRole(defaultString(normalized.Role, string(user.RoleStudent)))
+		roleValue := normalized.Role
+		if roleValue == "" {
+			roleValue = string(user.RoleStudent)
+		}
+		role, err := user.ParseRole(roleValue)
 		if err != nil {
 			response.Failed++
 			response.Details = append(response.Details, ImportResult{Row: rowNumber, Username: normalized.Username, Message: "无效的角色: " + normalized.Role})
@@ -414,7 +418,10 @@ func normalizeCreate(input Create) (Create, user.Role, error) {
 	input.Username = strings.TrimSpace(input.Username)
 	input.Email = strings.TrimSpace(input.Email)
 	input.Password = strings.TrimSpace(input.Password)
-	input.Role = defaultString(strings.TrimSpace(input.Role), string(user.RoleStudent))
+	input.Role = strings.TrimSpace(input.Role)
+	if input.Role == "" {
+		input.Role = string(user.RoleStudent)
+	}
 	if input.DisplayName != nil {
 		trimmed := strings.TrimSpace(*input.DisplayName)
 		input.DisplayName = &trimmed
@@ -503,13 +510,6 @@ func normalizeAllFilter(value string) string {
 	value = strings.ToLower(strings.TrimSpace(value))
 	if value == "all" {
 		return ""
-	}
-	return value
-}
-
-func defaultString(value string, fallback string) string {
-	if strings.TrimSpace(value) == "" {
-		return fallback
 	}
 	return value
 }

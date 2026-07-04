@@ -71,6 +71,14 @@ func TestCreateUserHandlesDuplicateAndSuccess(t *testing.T) {
 	if len(repo.created) != 1 || !authapp.VerifyPassword("Strong1!", repo.created[0].HashedPassword) {
 		t.Fatalf("created input = %#v", repo.created)
 	}
+
+	response, err = service.CreateUser(context.Background(), Create{Username: "default-role", Email: "default-role@example.com", Password: "Strong1!", Role: "   "})
+	if err != nil {
+		t.Fatalf("CreateUser(default role) error = %v", err)
+	}
+	if !response.Success || response.User == nil || response.User.Role != user.RoleStudent || len(repo.created) != 2 || repo.created[1].Role != user.RoleStudent {
+		t.Fatalf("default role response=%#v created=%#v", response, repo.created)
+	}
 }
 
 func TestUpdateUserStatusMapsMessages(t *testing.T) {
@@ -103,14 +111,17 @@ func TestImportUsersRecordsCreatedSkippedAndFailedRows(t *testing.T) {
 		{Username: "taken", Email: "other@example.com", Password: "Strong1!", Role: "student"},
 		{Username: "badrole", Email: "bad@example.com", Password: "Strong1!", Role: "guest"},
 		{Username: "new", Email: "new@example.com", Password: "Strong1!", Role: "teacher", DisplayName: &displayName},
+		{Username: "defaulted", Email: "defaulted@example.com", Password: "Strong1!", Role: "   "},
 	})
 	if err != nil {
 		t.Fatalf("ImportUsers() error = %v", err)
 	}
-	if response.Success || response.Total != 4 || response.Created != 1 || response.Skipped != 1 || response.Failed != 2 {
+	if response.Success || response.Total != 5 || response.Created != 2 || response.Skipped != 1 || response.Failed != 2 {
 		t.Fatalf("response = %#v", response)
 	}
-	if len(repo.created) != 1 || repo.created[0].Username != "new" || repo.created[0].Role != user.RoleTeacher {
+	if len(repo.created) != 2 ||
+		repo.created[0].Username != "new" || repo.created[0].Role != user.RoleTeacher ||
+		repo.created[1].Username != "defaulted" || repo.created[1].Role != user.RoleStudent {
 		t.Fatalf("created = %#v", repo.created)
 	}
 }
