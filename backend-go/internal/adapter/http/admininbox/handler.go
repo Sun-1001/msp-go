@@ -64,12 +64,6 @@ type pendingCountResponse struct {
 	PendingCount int `json:"pending_count"`
 }
 
-type errorResponse struct {
-	Detail  string `json:"detail"`
-	Code    string `json:"code,omitempty"`
-	Message string `json:"message,omitempty"`
-}
-
 func (h *Handler) listRequests(w http.ResponseWriter, r *http.Request) {
 	if _, ok := h.requireAdmin(w, r); !ok {
 		return
@@ -191,5 +185,5 @@ func decodeRequest(w http.ResponseWriter, r *http.Request, target any) bool {
 }
 
 func writeAdminInboxError(w http.ResponseWriter, status int, code, message string) {
-	httpjson.Write(w, status, errorResponse{Detail: message, Code: code, Message: message})
+	httpjson.WriteDetailError(w, status, code, message)
 }
