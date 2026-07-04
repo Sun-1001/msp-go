@@ -642,14 +642,8 @@ func scanResource(scanner rowScanner) (resourceapp.Resource, map[string]any, err
 	if err != nil {
 		return resourceapp.Resource{}, nil, fmt.Errorf("decode resource meta: %w", err)
 	}
-	if ownerName.Valid {
-		value := ownerName.String
-		resource.OwnerName = &value
-	}
-	if url.Valid {
-		value := url.String
-		resource.URL = &value
-	}
+	resource.OwnerName = textPtr(ownerName)
+	resource.URL = textPtr(url)
 	resource.Type = resourceTypeFromDB(dbType)
 	resource.Tags = tags
 	resource.Chapter = metautil.StringPointer(meta, "chapter")

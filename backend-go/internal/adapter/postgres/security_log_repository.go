@@ -363,18 +363,9 @@ func scanSecurityLog(row rowScanner) (securitylogapp.LogItem, error) {
 	}
 	item.EventType = securitylogapp.EventType(eventType)
 	item.Severity = securitylogapp.Severity(severity)
-	if ipAddress.Valid {
-		value := ipAddress.String
-		item.IPAddress = &value
-	}
-	if userID.Valid {
-		value := userID.String
-		item.UserID = &value
-	}
-	if username.Valid {
-		value := username.String
-		item.Username = &value
-	}
+	item.IPAddress = textPtr(ipAddress)
+	item.UserID = textPtr(userID)
+	item.Username = textPtr(username)
 	item.ExtraData = map[string]any{}
 	if len(metadata) > 0 {
 		_ = json.Unmarshal(metadata, &item.ExtraData)

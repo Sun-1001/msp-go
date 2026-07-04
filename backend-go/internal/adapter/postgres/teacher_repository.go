@@ -128,10 +128,7 @@ func (r TeacherRepository) ListTeacherStudents(ctx context.Context, teacherID st
 		if err := rows.Scan(&item.ID, &item.Username, &item.Email, &displayName, &item.ClassID, &item.ClassName); err != nil {
 			return nil, 0, err
 		}
-		if displayName.Valid {
-			value := displayName.String
-			item.DisplayName = &value
-		}
+		item.DisplayName = textPtr(displayName)
 		items = append(items, item)
 	}
 	return items, total, rows.Err()
@@ -514,10 +511,7 @@ func (r TeacherRepository) GetUser(ctx context.Context, userID string) (teachera
 		}
 		return teacherapp.UserInfo{}, false, err
 	}
-	if displayName.Valid {
-		value := displayName.String
-		user.DisplayName = &value
-	}
+	user.DisplayName = textPtr(displayName)
 	return user, true, nil
 }
 
@@ -751,10 +745,7 @@ func (r TeacherRepository) RecentMistakes(ctx context.Context, studentID string,
 		if errorType.Valid {
 			item.ErrorType = errorType.String
 		}
-		if explanation.Valid {
-			value := explanation.String
-			item.Explanation = &value
-		}
+		item.Explanation = textPtr(explanation)
 		mistakes = append(mistakes, item)
 	}
 	return mistakes, rows.Err()

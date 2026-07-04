@@ -137,10 +137,7 @@ func (r AdminStatsRepository) RecentUsers(ctx context.Context, limit int) ([]adm
 		if err := rows.Scan(&account.ID, &account.Username, &displayName, &account.Role, &account.CreatedAt); err != nil {
 			return nil, err
 		}
-		if displayName.Valid {
-			value := displayName.String
-			account.DisplayName = &value
-		}
+		account.DisplayName = textPtr(displayName)
 		users = append(users, account)
 	}
 	return users, rows.Err()

@@ -311,10 +311,7 @@ func scanSession(scanner rowScanner) (sessionapp.LearningSession, error) {
 	if err := scanner.Scan(&session.ID, &session.StudentID, &session.IsActive, &topic, &session.StartedAt, &endedAt); err != nil {
 		return sessionapp.LearningSession{}, err
 	}
-	if topic.Valid {
-		value := topic.String
-		session.CurrentTopic = &value
-	}
+	session.CurrentTopic = textPtr(topic)
 	if endedAt.Valid {
 		value := endedAt.Time
 		session.EndedAt = &value
@@ -330,10 +327,7 @@ func scanSessionListItem(rows pgx.Rows) (sessionapp.LearningSession, int, error)
 	if err := rows.Scan(&session.ID, &session.StudentID, &session.IsActive, &topic, &session.StartedAt, &endedAt, &count); err != nil {
 		return sessionapp.LearningSession{}, 0, err
 	}
-	if topic.Valid {
-		value := topic.String
-		session.CurrentTopic = &value
-	}
+	session.CurrentTopic = textPtr(topic)
 	if endedAt.Valid {
 		value := endedAt.Time
 		session.EndedAt = &value
