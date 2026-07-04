@@ -113,7 +113,7 @@ func (h *Handler) start(w http.ResponseWriter, r *http.Request) {
 		writeSessionError(w, http.StatusInternalServerError, "INTERNAL_ERROR", "创建会话失败")
 		return
 	}
-	writeJSON(w, http.StatusOK, response)
+	httpjson.Write(w, http.StatusOK, response)
 }
 
 func (h *Handler) chat(w http.ResponseWriter, r *http.Request) {
@@ -165,7 +165,7 @@ func (h *Handler) history(w http.ResponseWriter, r *http.Request) {
 		writeSessionError(w, http.StatusInternalServerError, "INTERNAL_ERROR", "获取会话历史失败")
 		return
 	}
-	writeJSON(w, http.StatusOK, response)
+	httpjson.Write(w, http.StatusOK, response)
 }
 
 func (h *Handler) list(w http.ResponseWriter, r *http.Request) {
@@ -187,7 +187,7 @@ func (h *Handler) list(w http.ResponseWriter, r *http.Request) {
 		writeSessionError(w, http.StatusInternalServerError, "INTERNAL_ERROR", "获取会话列表失败")
 		return
 	}
-	writeJSON(w, http.StatusOK, response)
+	httpjson.Write(w, http.StatusOK, response)
 }
 
 func (h *Handler) end(w http.ResponseWriter, r *http.Request) {
@@ -205,7 +205,7 @@ func (h *Handler) end(w http.ResponseWriter, r *http.Request) {
 		writeSessionError(w, http.StatusInternalServerError, "INTERNAL_ERROR", "结束会话失败")
 		return
 	}
-	writeJSON(w, http.StatusOK, response)
+	httpjson.Write(w, http.StatusOK, response)
 }
 
 func (h *Handler) updateMode(w http.ResponseWriter, r *http.Request) {
@@ -227,7 +227,7 @@ func (h *Handler) updateMode(w http.ResponseWriter, r *http.Request) {
 		writeSessionError(w, http.StatusInternalServerError, "INTERNAL_ERROR", "更新会话模式失败")
 		return
 	}
-	writeJSON(w, http.StatusOK, response)
+	httpjson.Write(w, http.StatusOK, response)
 }
 
 func (h *Handler) delete(w http.ResponseWriter, r *http.Request) {
@@ -241,7 +241,7 @@ func (h *Handler) delete(w http.ResponseWriter, r *http.Request) {
 		writeSessionError(w, http.StatusInternalServerError, "INTERNAL_ERROR", "删除会话失败")
 		return
 	}
-	writeJSON(w, http.StatusOK, response)
+	httpjson.Write(w, http.StatusOK, response)
 }
 
 func (h *Handler) batchDelete(w http.ResponseWriter, r *http.Request) {
@@ -259,7 +259,7 @@ func (h *Handler) batchDelete(w http.ResponseWriter, r *http.Request) {
 		writeSessionError(w, http.StatusInternalServerError, "INTERNAL_ERROR", "批量删除会话失败")
 		return
 	}
-	writeJSON(w, http.StatusOK, response)
+	httpjson.Write(w, http.StatusOK, response)
 }
 
 func (h *Handler) cancelTask(w http.ResponseWriter, r *http.Request) {
@@ -273,7 +273,7 @@ func (h *Handler) cancelTask(w http.ResponseWriter, r *http.Request) {
 		writeSessionError(w, http.StatusInternalServerError, "INTERNAL_ERROR", "任务取消失败")
 		return
 	}
-	writeJSON(w, http.StatusOK, response)
+	httpjson.Write(w, http.StatusOK, response)
 }
 
 func (h *Handler) requirePrincipal(w http.ResponseWriter, r *http.Request) (authapp.Principal, bool) {
@@ -348,12 +348,6 @@ func writeSSEEvent(w http.ResponseWriter, event string, payload any) {
 	_, _ = fmt.Fprintf(w, "event: %s\ndata: %s\n\n", event, raw)
 }
 
-func writeJSON(w http.ResponseWriter, status int, payload any) {
-	w.Header().Set("Content-Type", "application/json; charset=utf-8")
-	w.WriteHeader(status)
-	_ = json.NewEncoder(w).Encode(payload)
-}
-
 func writeSessionError(w http.ResponseWriter, status int, code, message string) {
-	writeJSON(w, status, errorResponse{Detail: message, Code: code, Message: message})
+	httpjson.Write(w, status, errorResponse{Detail: message, Code: code, Message: message})
 }

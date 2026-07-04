@@ -3,7 +3,6 @@ package authhttp
 import (
 	"context"
 	"crypto/subtle"
-	"encoding/json"
 	"errors"
 	"log/slog"
 	"net/http"
@@ -170,7 +169,7 @@ func (h *Handler) login(w http.ResponseWriter, r *http.Request) {
 		writeAuthError(w, http.StatusInternalServerError, "INTERNAL_ERROR", "登录成功但未能生成安全凭证，请稍后重试")
 		return
 	}
-	writeJSON(w, http.StatusOK, loginResponse{
+	httpjson.Write(w, http.StatusOK, loginResponse{
 		AccessToken: result.AccessToken,
 		TokenType:   "bearer",
 		User:        toUserResponse(result.User),
@@ -203,7 +202,7 @@ func (h *Handler) register(w http.ResponseWriter, r *http.Request) {
 		writeAuthError(w, http.StatusInternalServerError, "INTERNAL_ERROR", "注册成功但未能生成安全凭证，请稍后重试")
 		return
 	}
-	writeJSON(w, http.StatusOK, loginResponse{
+	httpjson.Write(w, http.StatusOK, loginResponse{
 		AccessToken: result.AccessToken,
 		TokenType:   "bearer",
 		User:        toUserResponse(result.User),
@@ -229,7 +228,7 @@ func (h *Handler) changePassword(w http.ResponseWriter, r *http.Request) {
 		writeAuthError(w, http.StatusBadRequest, "BAD_REQUEST", message)
 		return
 	}
-	writeJSON(w, http.StatusOK, messageResponse{Message: message})
+	httpjson.Write(w, http.StatusOK, messageResponse{Message: message})
 }
 
 func (h *Handler) refresh(w http.ResponseWriter, r *http.Request) {
@@ -268,7 +267,7 @@ func (h *Handler) refresh(w http.ResponseWriter, r *http.Request) {
 		writeAuthError(w, http.StatusInternalServerError, "INTERNAL_ERROR", "Token 刷新失败，请稍后重试")
 		return
 	}
-	writeJSON(w, http.StatusOK, refreshResponse{AccessToken: accessToken, TokenType: "bearer"})
+	httpjson.Write(w, http.StatusOK, refreshResponse{AccessToken: accessToken, TokenType: "bearer"})
 }
 
 func (h *Handler) logout(w http.ResponseWriter, r *http.Request) {
@@ -281,7 +280,7 @@ func (h *Handler) logout(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	h.clearAuthCookies(w)
-	writeJSON(w, http.StatusOK, messageResponse{Message: "登出成功"})
+	httpjson.Write(w, http.StatusOK, messageResponse{Message: "登出成功"})
 }
 
 func (h *Handler) me(w http.ResponseWriter, r *http.Request) {
@@ -299,7 +298,7 @@ func (h *Handler) me(w http.ResponseWriter, r *http.Request) {
 		writeAuthError(w, http.StatusNotFound, "NOT_FOUND", "用户不存在")
 		return
 	}
-	writeJSON(w, http.StatusOK, toUserResponse(account))
+	httpjson.Write(w, http.StatusOK, toUserResponse(account))
 }
 
 func (h *Handler) registrationStatus(w http.ResponseWriter, r *http.Request) {
@@ -309,7 +308,7 @@ func (h *Handler) registrationStatus(w http.ResponseWriter, r *http.Request) {
 		writeAuthError(w, http.StatusInternalServerError, "INTERNAL_ERROR", "获取注册状态失败")
 		return
 	}
-	writeJSON(w, http.StatusOK, registrationStatusResponse{
+	httpjson.Write(w, http.StatusOK, registrationStatusResponse{
 		AllowStudent: settings.AllowStudent,
 		AllowTeacher: settings.AllowTeacher,
 	})
@@ -326,7 +325,7 @@ func (h *Handler) forgotPassword(w http.ResponseWriter, r *http.Request) {
 		writeAuthError(w, http.StatusInternalServerError, "INTERNAL_ERROR", "提交失败，请稍后重试")
 		return
 	}
-	writeJSON(w, http.StatusOK, forgotPasswordResponse{
+	httpjson.Write(w, http.StatusOK, forgotPasswordResponse{
 		Success:   result.Success,
 		Message:   result.Message,
 		RequestID: result.RequestID,
@@ -351,7 +350,7 @@ func (h *Handler) forgotPasswordStatus(w http.ResponseWriter, r *http.Request) {
 		value := status.CreatedAt.Format("2006-01-02T15:04:05.999999")
 		createdAt = &value
 	}
-	writeJSON(w, http.StatusOK, forgotPasswordStatusResponse{
+	httpjson.Write(w, http.StatusOK, forgotPasswordStatusResponse{
 		HasPending: status.HasPending,
 		Status:     status.Status,
 		CreatedAt:  createdAt,
@@ -465,12 +464,6 @@ func toUserResponse(account user.User) userResponse {
 	}
 }
 
-func writeJSON(w http.ResponseWriter, status int, payload any) {
-	w.Header().Set("Content-Type", "application/json; charset=utf-8")
-	w.WriteHeader(status)
-	_ = json.NewEncoder(w).Encode(payload)
-}
-
 func writeAuthError(w http.ResponseWriter, status int, code, message string) {
-	writeJSON(w, status, errorResponse{Detail: message, Code: code, Message: message})
+	httpjson.Write(w, status, errorResponse{Detail: message, Code: code, Message: message})
 }

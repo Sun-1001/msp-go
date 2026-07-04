@@ -2,7 +2,6 @@ package questionhttp
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"log/slog"
 	"net/http"
@@ -151,7 +150,7 @@ func (h *Handler) list(w http.ResponseWriter, r *http.Request) {
 		writeQuestionError(w, http.StatusInternalServerError, "INTERNAL_ERROR", "获取题目列表失败")
 		return
 	}
-	writeJSON(w, http.StatusOK, response)
+	httpjson.Write(w, http.StatusOK, response)
 }
 
 func (h *Handler) groups(w http.ResponseWriter, r *http.Request) {
@@ -165,7 +164,7 @@ func (h *Handler) groups(w http.ResponseWriter, r *http.Request) {
 		writeQuestionError(w, http.StatusInternalServerError, "INTERNAL_ERROR", "获取题目分组失败")
 		return
 	}
-	writeJSON(w, http.StatusOK, response)
+	httpjson.Write(w, http.StatusOK, response)
 }
 
 func (h *Handler) stats(w http.ResponseWriter, r *http.Request) {
@@ -179,7 +178,7 @@ func (h *Handler) stats(w http.ResponseWriter, r *http.Request) {
 		writeQuestionError(w, http.StatusInternalServerError, "INTERNAL_ERROR", "获取题目统计失败")
 		return
 	}
-	writeJSON(w, http.StatusOK, response)
+	httpjson.Write(w, http.StatusOK, response)
 }
 
 func (h *Handler) detail(w http.ResponseWriter, r *http.Request) {
@@ -205,7 +204,7 @@ func (h *Handler) detail(w http.ResponseWriter, r *http.Request) {
 		writeQuestionError(w, http.StatusInternalServerError, "INTERNAL_ERROR", "获取题目详情失败")
 		return
 	}
-	writeJSON(w, http.StatusOK, response)
+	httpjson.Write(w, http.StatusOK, response)
 }
 
 func (h *Handler) create(w http.ResponseWriter, r *http.Request) {
@@ -231,7 +230,7 @@ func (h *Handler) create(w http.ResponseWriter, r *http.Request) {
 		writeQuestionError(w, http.StatusInternalServerError, "INTERNAL_ERROR", "创建题目失败")
 		return
 	}
-	writeJSON(w, http.StatusCreated, response)
+	httpjson.Write(w, http.StatusCreated, response)
 }
 
 func (h *Handler) update(w http.ResponseWriter, r *http.Request) {
@@ -265,7 +264,7 @@ func (h *Handler) update(w http.ResponseWriter, r *http.Request) {
 		writeQuestionError(w, http.StatusInternalServerError, "INTERNAL_ERROR", "更新失败")
 		return
 	}
-	writeJSON(w, http.StatusOK, response)
+	httpjson.Write(w, http.StatusOK, response)
 }
 
 func (h *Handler) delete(w http.ResponseWriter, r *http.Request) {
@@ -325,7 +324,7 @@ func (h *Handler) batchOperation(w http.ResponseWriter, r *http.Request, fn func
 		writeQuestionError(w, http.StatusInternalServerError, "INTERNAL_ERROR", fallback)
 		return
 	}
-	writeJSON(w, http.StatusOK, response)
+	httpjson.Write(w, http.StatusOK, response)
 }
 
 func (h *Handler) batchImport(w http.ResponseWriter, r *http.Request) {
@@ -359,7 +358,7 @@ func (h *Handler) batchImport(w http.ResponseWriter, r *http.Request) {
 		writeQuestionError(w, http.StatusInternalServerError, "INTERNAL_ERROR", "批量导入失败")
 		return
 	}
-	writeJSON(w, http.StatusOK, response)
+	httpjson.Write(w, http.StatusOK, response)
 }
 
 func (h *Handler) aiParse(w http.ResponseWriter, r *http.Request) {
@@ -396,7 +395,7 @@ func (h *Handler) aiParse(w http.ResponseWriter, r *http.Request) {
 		writeQuestionError(w, http.StatusInternalServerError, "INTERNAL_ERROR", "AI 题目识别失败")
 		return
 	}
-	writeJSON(w, http.StatusOK, response)
+	httpjson.Write(w, http.StatusOK, response)
 }
 
 func (h *Handler) generateIsomorphic(w http.ResponseWriter, r *http.Request) {
@@ -434,7 +433,7 @@ func (h *Handler) generateIsomorphic(w http.ResponseWriter, r *http.Request) {
 		writeQuestionError(w, http.StatusInternalServerError, "INTERNAL_ERROR", "生成变式题失败")
 		return
 	}
-	writeJSON(w, http.StatusOK, response)
+	httpjson.Write(w, http.StatusOK, response)
 }
 
 func (h *Handler) requireTeacher(w http.ResponseWriter, r *http.Request) (authapp.Principal, bool) {
@@ -670,12 +669,6 @@ func decodeRequest(w http.ResponseWriter, r *http.Request, target any) bool {
 	return true
 }
 
-func writeJSON(w http.ResponseWriter, status int, payload any) {
-	w.Header().Set("Content-Type", "application/json; charset=utf-8")
-	w.WriteHeader(status)
-	_ = json.NewEncoder(w).Encode(payload)
-}
-
 func writeQuestionError(w http.ResponseWriter, status int, code, message string) {
-	writeJSON(w, status, errorResponse{Detail: message, Code: code, Message: message})
+	httpjson.Write(w, status, errorResponse{Detail: message, Code: code, Message: message})
 }

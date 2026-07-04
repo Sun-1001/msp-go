@@ -2,7 +2,6 @@ package knowledgehttp
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"log/slog"
 	"net/http"
@@ -132,7 +131,7 @@ func (h *Handler) stats(w http.ResponseWriter, r *http.Request) {
 		writeKnowledgeError(w, http.StatusInternalServerError, "INTERNAL_ERROR", "获取知识点统计失败")
 		return
 	}
-	writeJSON(w, http.StatusOK, response)
+	httpjson.Write(w, http.StatusOK, response)
 }
 
 func (h *Handler) chapters(w http.ResponseWriter, r *http.Request) {
@@ -145,7 +144,7 @@ func (h *Handler) chapters(w http.ResponseWriter, r *http.Request) {
 		writeKnowledgeError(w, http.StatusInternalServerError, "INTERNAL_ERROR", "获取章节列表失败")
 		return
 	}
-	writeJSON(w, http.StatusOK, chaptersResponse{Chapters: chapters})
+	httpjson.Write(w, http.StatusOK, chaptersResponse{Chapters: chapters})
 }
 
 func (h *Handler) listNodes(w http.ResponseWriter, r *http.Request) {
@@ -166,7 +165,7 @@ func (h *Handler) listNodes(w http.ResponseWriter, r *http.Request) {
 		writeKnowledgeError(w, http.StatusInternalServerError, "INTERNAL_ERROR", "获取知识节点列表失败")
 		return
 	}
-	writeJSON(w, http.StatusOK, response)
+	httpjson.Write(w, http.StatusOK, response)
 }
 
 func (h *Handler) allNodes(w http.ResponseWriter, r *http.Request) {
@@ -179,7 +178,7 @@ func (h *Handler) allNodes(w http.ResponseWriter, r *http.Request) {
 		writeKnowledgeError(w, http.StatusInternalServerError, "INTERNAL_ERROR", "获取节点简要信息失败")
 		return
 	}
-	writeJSON(w, http.StatusOK, response)
+	httpjson.Write(w, http.StatusOK, response)
 }
 
 func (h *Handler) getNode(w http.ResponseWriter, r *http.Request) {
@@ -196,7 +195,7 @@ func (h *Handler) getNode(w http.ResponseWriter, r *http.Request) {
 		writeKnowledgeError(w, http.StatusInternalServerError, "INTERNAL_ERROR", "获取知识节点失败")
 		return
 	}
-	writeJSON(w, http.StatusOK, response)
+	httpjson.Write(w, http.StatusOK, response)
 }
 
 func (h *Handler) createNode(w http.ResponseWriter, r *http.Request) {
@@ -221,7 +220,7 @@ func (h *Handler) createNode(w http.ResponseWriter, r *http.Request) {
 		writeKnowledgeError(w, http.StatusInternalServerError, "INTERNAL_ERROR", "创建知识节点失败")
 		return
 	}
-	writeJSON(w, http.StatusCreated, response)
+	httpjson.Write(w, http.StatusCreated, response)
 }
 
 func (h *Handler) updateNode(w http.ResponseWriter, r *http.Request) {
@@ -246,7 +245,7 @@ func (h *Handler) updateNode(w http.ResponseWriter, r *http.Request) {
 		writeKnowledgeError(w, http.StatusInternalServerError, "INTERNAL_ERROR", "更新知识节点失败")
 		return
 	}
-	writeJSON(w, http.StatusOK, response)
+	httpjson.Write(w, http.StatusOK, response)
 }
 
 func (h *Handler) deleteNode(w http.ResponseWriter, r *http.Request) {
@@ -267,7 +266,7 @@ func (h *Handler) deleteNode(w http.ResponseWriter, r *http.Request) {
 		writeKnowledgeError(w, http.StatusInternalServerError, "INTERNAL_ERROR", "删除知识节点失败")
 		return
 	}
-	writeJSON(w, http.StatusOK, response)
+	httpjson.Write(w, http.StatusOK, response)
 }
 
 func (h *Handler) listRelations(w http.ResponseWriter, r *http.Request) {
@@ -280,7 +279,7 @@ func (h *Handler) listRelations(w http.ResponseWriter, r *http.Request) {
 		writeKnowledgeError(w, http.StatusInternalServerError, "INTERNAL_ERROR", "获取知识关系列表失败")
 		return
 	}
-	writeJSON(w, http.StatusOK, response)
+	httpjson.Write(w, http.StatusOK, response)
 }
 
 func (h *Handler) createRelation(w http.ResponseWriter, r *http.Request) {
@@ -305,7 +304,7 @@ func (h *Handler) createRelation(w http.ResponseWriter, r *http.Request) {
 		writeKnowledgeError(w, http.StatusInternalServerError, "INTERNAL_ERROR", "创建知识关系失败")
 		return
 	}
-	writeJSON(w, http.StatusCreated, response)
+	httpjson.Write(w, http.StatusCreated, response)
 }
 
 func (h *Handler) updateRelation(w http.ResponseWriter, r *http.Request) {
@@ -330,7 +329,7 @@ func (h *Handler) updateRelation(w http.ResponseWriter, r *http.Request) {
 		writeKnowledgeError(w, http.StatusInternalServerError, "INTERNAL_ERROR", "更新知识关系失败")
 		return
 	}
-	writeJSON(w, http.StatusOK, response)
+	httpjson.Write(w, http.StatusOK, response)
 }
 
 func (h *Handler) deleteRelation(w http.ResponseWriter, r *http.Request) {
@@ -347,7 +346,7 @@ func (h *Handler) deleteRelation(w http.ResponseWriter, r *http.Request) {
 		writeKnowledgeError(w, http.StatusInternalServerError, "INTERNAL_ERROR", "删除知识关系失败")
 		return
 	}
-	writeJSON(w, http.StatusOK, response)
+	httpjson.Write(w, http.StatusOK, response)
 }
 
 func (h *Handler) requireAdmin(w http.ResponseWriter, r *http.Request) (authapp.Principal, bool) {
@@ -612,12 +611,6 @@ func decodeRequest(w http.ResponseWriter, r *http.Request, target any) bool {
 	return true
 }
 
-func writeJSON(w http.ResponseWriter, status int, payload any) {
-	w.Header().Set("Content-Type", "application/json; charset=utf-8")
-	w.WriteHeader(status)
-	_ = json.NewEncoder(w).Encode(payload)
-}
-
 func writeKnowledgeError(w http.ResponseWriter, status int, code, message string) {
-	writeJSON(w, status, errorResponse{Detail: message, Code: code, Message: message})
+	httpjson.Write(w, status, errorResponse{Detail: message, Code: code, Message: message})
 }

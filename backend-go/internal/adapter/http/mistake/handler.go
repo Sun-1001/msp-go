@@ -2,7 +2,6 @@ package mistakehttp
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"log/slog"
 	"net/http"
@@ -13,6 +12,7 @@ import (
 	authapp "mathstudy/backend-go/internal/application/auth"
 	mistakeapp "mathstudy/backend-go/internal/application/mistake"
 	"mathstudy/backend-go/internal/platform/httpauth"
+	"mathstudy/backend-go/internal/platform/httpjson"
 	"mathstudy/backend-go/internal/platform/httpquery"
 	"mathstudy/backend-go/internal/platform/redact"
 )
@@ -84,7 +84,7 @@ func (h *Handler) list(w http.ResponseWriter, r *http.Request) {
 		writeMistakeError(w, http.StatusInternalServerError, "INTERNAL_ERROR", "查询错题列表失败")
 		return
 	}
-	writeJSON(w, http.StatusOK, response)
+	httpjson.Write(w, http.StatusOK, response)
 }
 
 func (h *Handler) statistics(w http.ResponseWriter, r *http.Request) {
@@ -102,7 +102,7 @@ func (h *Handler) statistics(w http.ResponseWriter, r *http.Request) {
 		writeMistakeError(w, http.StatusInternalServerError, "INTERNAL_ERROR", "查询错题统计失败")
 		return
 	}
-	writeJSON(w, http.StatusOK, response)
+	httpjson.Write(w, http.StatusOK, response)
 }
 
 func (h *Handler) detail(w http.ResponseWriter, r *http.Request) {
@@ -120,7 +120,7 @@ func (h *Handler) detail(w http.ResponseWriter, r *http.Request) {
 		writeMistakeError(w, http.StatusInternalServerError, "INTERNAL_ERROR", "查询错题详情失败")
 		return
 	}
-	writeJSON(w, http.StatusOK, response)
+	httpjson.Write(w, http.StatusOK, response)
 }
 
 func (h *Handler) markAsMastered(w http.ResponseWriter, r *http.Request) {
@@ -142,7 +142,7 @@ func (h *Handler) markAsMastered(w http.ResponseWriter, r *http.Request) {
 		writeMistakeError(w, http.StatusInternalServerError, "INTERNAL_ERROR", "标记已掌握失败")
 		return
 	}
-	writeJSON(w, http.StatusOK, response)
+	httpjson.Write(w, http.StatusOK, response)
 }
 
 func (h *Handler) delete(w http.ResponseWriter, r *http.Request) {
@@ -160,7 +160,7 @@ func (h *Handler) delete(w http.ResponseWriter, r *http.Request) {
 		writeMistakeError(w, http.StatusInternalServerError, "INTERNAL_ERROR", "删除错题失败")
 		return
 	}
-	writeJSON(w, http.StatusOK, response)
+	httpjson.Write(w, http.StatusOK, response)
 }
 
 func (h *Handler) reviewNext(w http.ResponseWriter, r *http.Request) {
@@ -179,7 +179,7 @@ func (h *Handler) reviewNext(w http.ResponseWriter, r *http.Request) {
 		writeMistakeError(w, http.StatusInternalServerError, "INTERNAL_ERROR", "获取复习题目失败")
 		return
 	}
-	writeJSON(w, http.StatusOK, response)
+	httpjson.Write(w, http.StatusOK, response)
 }
 
 func (h *Handler) requirePrincipal(w http.ResponseWriter, r *http.Request) (authapp.Principal, bool) {
@@ -316,12 +316,6 @@ func parseISOTime(value string) (time.Time, error) {
 	return time.Time{}, lastErr
 }
 
-func writeJSON(w http.ResponseWriter, status int, payload any) {
-	w.Header().Set("Content-Type", "application/json; charset=utf-8")
-	w.WriteHeader(status)
-	_ = json.NewEncoder(w).Encode(payload)
-}
-
 func writeMistakeError(w http.ResponseWriter, status int, code, message string) {
-	writeJSON(w, status, errorResponse{Detail: message, Code: code, Message: message})
+	httpjson.Write(w, status, errorResponse{Detail: message, Code: code, Message: message})
 }

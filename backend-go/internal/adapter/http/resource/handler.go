@@ -2,7 +2,6 @@ package resourcehttp
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"log/slog"
 	"net/http"
@@ -120,7 +119,7 @@ func (h *Handler) list(w http.ResponseWriter, r *http.Request) {
 		writeResourceError(w, http.StatusInternalServerError, "INTERNAL_ERROR", "获取资源列表失败")
 		return
 	}
-	writeJSON(w, http.StatusOK, response)
+	httpjson.Write(w, http.StatusOK, response)
 }
 
 func (h *Handler) stats(w http.ResponseWriter, r *http.Request) {
@@ -134,7 +133,7 @@ func (h *Handler) stats(w http.ResponseWriter, r *http.Request) {
 		writeResourceError(w, http.StatusInternalServerError, "INTERNAL_ERROR", "获取资源统计失败")
 		return
 	}
-	writeJSON(w, http.StatusOK, response)
+	httpjson.Write(w, http.StatusOK, response)
 }
 
 func (h *Handler) favorites(w http.ResponseWriter, r *http.Request) {
@@ -152,7 +151,7 @@ func (h *Handler) favorites(w http.ResponseWriter, r *http.Request) {
 		writeResourceError(w, http.StatusInternalServerError, "INTERNAL_ERROR", "获取收藏列表失败")
 		return
 	}
-	writeJSON(w, http.StatusOK, response)
+	httpjson.Write(w, http.StatusOK, response)
 }
 
 func (h *Handler) detail(w http.ResponseWriter, r *http.Request) {
@@ -170,7 +169,7 @@ func (h *Handler) detail(w http.ResponseWriter, r *http.Request) {
 		writeResourceError(w, http.StatusInternalServerError, "INTERNAL_ERROR", "获取资源详情失败")
 		return
 	}
-	writeJSON(w, http.StatusOK, response)
+	httpjson.Write(w, http.StatusOK, response)
 }
 
 func (h *Handler) create(w http.ResponseWriter, r *http.Request) {
@@ -196,7 +195,7 @@ func (h *Handler) create(w http.ResponseWriter, r *http.Request) {
 		writeResourceError(w, http.StatusInternalServerError, "INTERNAL_ERROR", "创建资源失败")
 		return
 	}
-	writeJSON(w, http.StatusCreated, response)
+	httpjson.Write(w, http.StatusCreated, response)
 }
 
 func (h *Handler) update(w http.ResponseWriter, r *http.Request) {
@@ -226,7 +225,7 @@ func (h *Handler) update(w http.ResponseWriter, r *http.Request) {
 		writeResourceError(w, http.StatusInternalServerError, "INTERNAL_ERROR", "更新资源失败")
 		return
 	}
-	writeJSON(w, http.StatusOK, response)
+	httpjson.Write(w, http.StatusOK, response)
 }
 
 func (h *Handler) delete(w http.ResponseWriter, r *http.Request) {
@@ -262,7 +261,7 @@ func (h *Handler) toggleFavorite(w http.ResponseWriter, r *http.Request) {
 		writeResourceError(w, http.StatusInternalServerError, "INTERNAL_ERROR", "切换收藏状态失败")
 		return
 	}
-	writeJSON(w, http.StatusOK, response)
+	httpjson.Write(w, http.StatusOK, response)
 }
 
 func (h *Handler) requirePrincipal(w http.ResponseWriter, r *http.Request) (authapp.Principal, bool) {
@@ -509,12 +508,6 @@ func decodeRequest(w http.ResponseWriter, r *http.Request, target any) bool {
 	return true
 }
 
-func writeJSON(w http.ResponseWriter, status int, payload any) {
-	w.Header().Set("Content-Type", "application/json; charset=utf-8")
-	w.WriteHeader(status)
-	_ = json.NewEncoder(w).Encode(payload)
-}
-
 func writeResourceError(w http.ResponseWriter, status int, code, message string) {
-	writeJSON(w, status, errorResponse{Detail: message, Code: code, Message: message})
+	httpjson.Write(w, status, errorResponse{Detail: message, Code: code, Message: message})
 }
