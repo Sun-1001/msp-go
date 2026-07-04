@@ -2,7 +2,6 @@ package adminaiconfighthttp
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"log/slog"
 	"net/http"
@@ -106,7 +105,7 @@ func (h *Handler) listProviders(w http.ResponseWriter, r *http.Request) {
 		h.writeServiceError(w, err, "获取 AI 渠道列表失败")
 		return
 	}
-	writeJSON(w, http.StatusOK, response)
+	httpjson.Write(w, http.StatusOK, response)
 }
 
 func (h *Handler) getProvider(w http.ResponseWriter, r *http.Request) {
@@ -118,7 +117,7 @@ func (h *Handler) getProvider(w http.ResponseWriter, r *http.Request) {
 		h.writeServiceError(w, err, "获取 AI 渠道失败")
 		return
 	}
-	writeJSON(w, http.StatusOK, response)
+	httpjson.Write(w, http.StatusOK, response)
 }
 
 func (h *Handler) createProvider(w http.ResponseWriter, r *http.Request) {
@@ -134,7 +133,7 @@ func (h *Handler) createProvider(w http.ResponseWriter, r *http.Request) {
 		h.writeServiceError(w, err, "创建 AI 渠道失败")
 		return
 	}
-	writeJSON(w, http.StatusCreated, response)
+	httpjson.Write(w, http.StatusCreated, response)
 }
 
 func (h *Handler) createProviderWithModels(w http.ResponseWriter, r *http.Request) {
@@ -150,7 +149,7 @@ func (h *Handler) createProviderWithModels(w http.ResponseWriter, r *http.Reques
 		h.writeServiceError(w, err, "创建 AI 渠道失败")
 		return
 	}
-	writeJSON(w, http.StatusCreated, response)
+	httpjson.Write(w, http.StatusCreated, response)
 }
 
 func (h *Handler) updateProvider(w http.ResponseWriter, r *http.Request) {
@@ -166,7 +165,7 @@ func (h *Handler) updateProvider(w http.ResponseWriter, r *http.Request) {
 		h.writeServiceError(w, err, "更新 AI 渠道失败")
 		return
 	}
-	writeJSON(w, http.StatusOK, response)
+	httpjson.Write(w, http.StatusOK, response)
 }
 
 func (h *Handler) deleteProvider(w http.ResponseWriter, r *http.Request) {
@@ -178,7 +177,7 @@ func (h *Handler) deleteProvider(w http.ResponseWriter, r *http.Request) {
 		h.writeServiceError(w, err, "删除 AI 渠道失败")
 		return
 	}
-	writeJSON(w, http.StatusOK, response)
+	httpjson.Write(w, http.StatusOK, response)
 }
 
 func (h *Handler) testProvider(w http.ResponseWriter, r *http.Request) {
@@ -190,7 +189,7 @@ func (h *Handler) testProvider(w http.ResponseWriter, r *http.Request) {
 		h.writeServiceError(w, err, "测试 AI 渠道失败")
 		return
 	}
-	writeJSON(w, http.StatusOK, response)
+	httpjson.Write(w, http.StatusOK, response)
 }
 
 func (h *Handler) fetchProviderModels(w http.ResponseWriter, r *http.Request) {
@@ -202,7 +201,7 @@ func (h *Handler) fetchProviderModels(w http.ResponseWriter, r *http.Request) {
 		h.writeServiceError(w, err, "获取模型列表失败")
 		return
 	}
-	writeJSON(w, http.StatusOK, response)
+	httpjson.Write(w, http.StatusOK, response)
 }
 
 func (h *Handler) fetchModelsByCredentials(w http.ResponseWriter, r *http.Request) {
@@ -218,7 +217,7 @@ func (h *Handler) fetchModelsByCredentials(w http.ResponseWriter, r *http.Reques
 		h.writeServiceError(w, err, "获取模型列表失败")
 		return
 	}
-	writeJSON(w, http.StatusOK, response)
+	httpjson.Write(w, http.StatusOK, response)
 }
 
 func (h *Handler) updateProviderModels(w http.ResponseWriter, r *http.Request) {
@@ -234,7 +233,7 @@ func (h *Handler) updateProviderModels(w http.ResponseWriter, r *http.Request) {
 		h.writeServiceError(w, err, "更新模型列表失败")
 		return
 	}
-	writeJSON(w, http.StatusOK, response)
+	httpjson.Write(w, http.StatusOK, response)
 }
 
 func (h *Handler) listModels(w http.ResponseWriter, r *http.Request) {
@@ -246,7 +245,7 @@ func (h *Handler) listModels(w http.ResponseWriter, r *http.Request) {
 		h.writeServiceError(w, err, "获取模型列表失败")
 		return
 	}
-	writeJSON(w, http.StatusOK, response)
+	httpjson.Write(w, http.StatusOK, response)
 }
 
 func (h *Handler) getModel(w http.ResponseWriter, r *http.Request) {
@@ -258,7 +257,7 @@ func (h *Handler) getModel(w http.ResponseWriter, r *http.Request) {
 		h.writeServiceError(w, err, "获取模型失败")
 		return
 	}
-	writeJSON(w, http.StatusOK, response)
+	httpjson.Write(w, http.StatusOK, response)
 }
 
 func (h *Handler) createModel(w http.ResponseWriter, r *http.Request) {
@@ -274,7 +273,7 @@ func (h *Handler) createModel(w http.ResponseWriter, r *http.Request) {
 		h.writeServiceError(w, err, "创建模型失败")
 		return
 	}
-	writeJSON(w, http.StatusCreated, response)
+	httpjson.Write(w, http.StatusCreated, response)
 }
 
 func (h *Handler) updateModel(w http.ResponseWriter, r *http.Request) {
@@ -290,7 +289,7 @@ func (h *Handler) updateModel(w http.ResponseWriter, r *http.Request) {
 		h.writeServiceError(w, err, "更新模型失败")
 		return
 	}
-	writeJSON(w, http.StatusOK, response)
+	httpjson.Write(w, http.StatusOK, response)
 }
 
 func (h *Handler) deleteModel(w http.ResponseWriter, r *http.Request) {
@@ -302,7 +301,7 @@ func (h *Handler) deleteModel(w http.ResponseWriter, r *http.Request) {
 		h.writeServiceError(w, err, "删除模型失败")
 		return
 	}
-	writeJSON(w, http.StatusOK, response)
+	httpjson.Write(w, http.StatusOK, response)
 }
 
 func (h *Handler) setDefaultModel(w http.ResponseWriter, r *http.Request) {
@@ -314,7 +313,7 @@ func (h *Handler) setDefaultModel(w http.ResponseWriter, r *http.Request) {
 		h.writeServiceError(w, err, "设置默认模型失败")
 		return
 	}
-	writeJSON(w, http.StatusOK, response)
+	httpjson.Write(w, http.StatusOK, response)
 }
 
 func (h *Handler) listAgentConfigs(w http.ResponseWriter, r *http.Request) {
@@ -326,7 +325,7 @@ func (h *Handler) listAgentConfigs(w http.ResponseWriter, r *http.Request) {
 		h.writeServiceError(w, err, "获取智能体配置失败")
 		return
 	}
-	writeJSON(w, http.StatusOK, response)
+	httpjson.Write(w, http.StatusOK, response)
 }
 
 func (h *Handler) listAgentTypes(w http.ResponseWriter, r *http.Request) {
@@ -338,7 +337,7 @@ func (h *Handler) listAgentTypes(w http.ResponseWriter, r *http.Request) {
 		h.writeServiceError(w, err, "获取智能体类型失败")
 		return
 	}
-	writeJSON(w, http.StatusOK, response)
+	httpjson.Write(w, http.StatusOK, response)
 }
 
 func (h *Handler) getAgentConfig(w http.ResponseWriter, r *http.Request) {
@@ -350,7 +349,7 @@ func (h *Handler) getAgentConfig(w http.ResponseWriter, r *http.Request) {
 		h.writeServiceError(w, err, "获取智能体配置失败")
 		return
 	}
-	writeJSON(w, http.StatusOK, response)
+	httpjson.Write(w, http.StatusOK, response)
 }
 
 func (h *Handler) updateAgentConfig(w http.ResponseWriter, r *http.Request) {
@@ -366,7 +365,7 @@ func (h *Handler) updateAgentConfig(w http.ResponseWriter, r *http.Request) {
 		h.writeServiceError(w, err, "更新智能体配置失败")
 		return
 	}
-	writeJSON(w, http.StatusOK, response)
+	httpjson.Write(w, http.StatusOK, response)
 }
 
 func (h *Handler) deleteAgentConfig(w http.ResponseWriter, r *http.Request) {
@@ -378,7 +377,7 @@ func (h *Handler) deleteAgentConfig(w http.ResponseWriter, r *http.Request) {
 		h.writeServiceError(w, err, "重置智能体配置失败")
 		return
 	}
-	writeJSON(w, http.StatusOK, response)
+	httpjson.Write(w, http.StatusOK, response)
 }
 
 func (h *Handler) requireAdmin(w http.ResponseWriter, r *http.Request) (authapp.Principal, bool) {
@@ -428,12 +427,6 @@ func parseBoolQuery(r *http.Request, name string) bool {
 	return strings.EqualFold(value, "true") || value == "1"
 }
 
-func writeJSON(w http.ResponseWriter, status int, payload any) {
-	w.Header().Set("Content-Type", "application/json; charset=utf-8")
-	w.WriteHeader(status)
-	_ = json.NewEncoder(w).Encode(payload)
-}
-
 func writeAIConfigError(w http.ResponseWriter, status int, code string, message string) {
-	writeJSON(w, status, errorResponse{Detail: message, Code: code, Message: message})
+	httpjson.Write(w, status, errorResponse{Detail: message, Code: code, Message: message})
 }

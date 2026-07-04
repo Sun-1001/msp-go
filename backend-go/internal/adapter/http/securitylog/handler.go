@@ -2,7 +2,6 @@ package securityloghttp
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"log/slog"
 	"net/http"
@@ -90,7 +89,7 @@ func (h *Handler) listLogs(w http.ResponseWriter, r *http.Request) {
 		h.writeServiceError(w, err, "获取安全日志列表失败")
 		return
 	}
-	writeJSON(w, http.StatusOK, response)
+	httpjson.Write(w, http.StatusOK, response)
 }
 
 func (h *Handler) stats(w http.ResponseWriter, r *http.Request) {
@@ -102,7 +101,7 @@ func (h *Handler) stats(w http.ResponseWriter, r *http.Request) {
 		h.writeServiceError(w, err, "获取安全日志统计失败")
 		return
 	}
-	writeJSON(w, http.StatusOK, response)
+	httpjson.Write(w, http.StatusOK, response)
 }
 
 func (h *Handler) deleteLogs(w http.ResponseWriter, r *http.Request) {
@@ -118,7 +117,7 @@ func (h *Handler) deleteLogs(w http.ResponseWriter, r *http.Request) {
 		h.writeServiceError(w, err, "删除安全日志失败")
 		return
 	}
-	writeJSON(w, http.StatusOK, response)
+	httpjson.Write(w, http.StatusOK, response)
 }
 
 func (h *Handler) exportLogs(w http.ResponseWriter, r *http.Request) {
@@ -134,7 +133,7 @@ func (h *Handler) exportLogs(w http.ResponseWriter, r *http.Request) {
 		h.writeServiceError(w, err, "导出安全日志失败")
 		return
 	}
-	writeJSON(w, http.StatusOK, response)
+	httpjson.Write(w, http.StatusOK, response)
 }
 
 func (h *Handler) archiveLogs(w http.ResponseWriter, r *http.Request) {
@@ -150,7 +149,7 @@ func (h *Handler) archiveLogs(w http.ResponseWriter, r *http.Request) {
 		h.writeServiceError(w, err, "归档安全日志失败")
 		return
 	}
-	writeJSON(w, http.StatusOK, response)
+	httpjson.Write(w, http.StatusOK, response)
 }
 
 func (h *Handler) generateDailyReport(w http.ResponseWriter, r *http.Request) {
@@ -162,7 +161,7 @@ func (h *Handler) generateDailyReport(w http.ResponseWriter, r *http.Request) {
 		h.writeServiceError(w, err, "生成每日安全报告失败")
 		return
 	}
-	writeJSON(w, http.StatusOK, response)
+	httpjson.Write(w, http.StatusOK, response)
 }
 
 func (h *Handler) cleanup(w http.ResponseWriter, r *http.Request) {
@@ -174,7 +173,7 @@ func (h *Handler) cleanup(w http.ResponseWriter, r *http.Request) {
 		h.writeServiceError(w, err, "清理安全日志失败")
 		return
 	}
-	writeJSON(w, http.StatusOK, response)
+	httpjson.Write(w, http.StatusOK, response)
 }
 
 func (h *Handler) volume(w http.ResponseWriter, r *http.Request) {
@@ -186,7 +185,7 @@ func (h *Handler) volume(w http.ResponseWriter, r *http.Request) {
 		h.writeServiceError(w, err, "获取日志总量失败")
 		return
 	}
-	writeJSON(w, http.StatusOK, response)
+	httpjson.Write(w, http.StatusOK, response)
 }
 
 func (h *Handler) requireAdmin(w http.ResponseWriter, r *http.Request) (authapp.Principal, bool) {
@@ -303,12 +302,6 @@ func decodeRequest(w http.ResponseWriter, r *http.Request, target any) bool {
 	return true
 }
 
-func writeJSON(w http.ResponseWriter, status int, payload any) {
-	w.Header().Set("Content-Type", "application/json; charset=utf-8")
-	w.WriteHeader(status)
-	_ = json.NewEncoder(w).Encode(payload)
-}
-
 func writeSecurityLogError(w http.ResponseWriter, status int, code, message string) {
-	writeJSON(w, status, errorResponse{Detail: message, Code: code, Message: message})
+	httpjson.Write(w, status, errorResponse{Detail: message, Code: code, Message: message})
 }

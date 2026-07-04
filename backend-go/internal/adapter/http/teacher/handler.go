@@ -2,7 +2,6 @@ package teacherhttp
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"log/slog"
 	"net/http"
@@ -11,6 +10,7 @@ import (
 	authapp "mathstudy/backend-go/internal/application/auth"
 	teacherapp "mathstudy/backend-go/internal/application/teacher"
 	"mathstudy/backend-go/internal/platform/httpauth"
+	"mathstudy/backend-go/internal/platform/httpjson"
 	"mathstudy/backend-go/internal/platform/httpquery"
 	"mathstudy/backend-go/internal/platform/redact"
 )
@@ -78,7 +78,7 @@ func (h *Handler) dashboardStats(w http.ResponseWriter, r *http.Request) {
 		writeTeacherError(w, http.StatusInternalServerError, "INTERNAL_ERROR", "获取教师工作台统计失败")
 		return
 	}
-	writeJSON(w, http.StatusOK, response)
+	httpjson.Write(w, http.StatusOK, response)
 }
 
 func (h *Handler) studentsStats(w http.ResponseWriter, r *http.Request) {
@@ -92,7 +92,7 @@ func (h *Handler) studentsStats(w http.ResponseWriter, r *http.Request) {
 		writeTeacherError(w, http.StatusInternalServerError, "INTERNAL_ERROR", "获取学生管理统计失败")
 		return
 	}
-	writeJSON(w, http.StatusOK, response)
+	httpjson.Write(w, http.StatusOK, response)
 }
 
 func (h *Handler) students(w http.ResponseWriter, r *http.Request) {
@@ -124,7 +124,7 @@ func (h *Handler) students(w http.ResponseWriter, r *http.Request) {
 		writeTeacherError(w, http.StatusInternalServerError, "INTERNAL_ERROR", "获取学生列表失败")
 		return
 	}
-	writeJSON(w, http.StatusOK, response)
+	httpjson.Write(w, http.StatusOK, response)
 }
 
 func (h *Handler) analytics(w http.ResponseWriter, r *http.Request) {
@@ -150,7 +150,7 @@ func (h *Handler) analytics(w http.ResponseWriter, r *http.Request) {
 		writeTeacherError(w, http.StatusInternalServerError, "INTERNAL_ERROR", "获取教师数据分析失败")
 		return
 	}
-	writeJSON(w, http.StatusOK, response)
+	httpjson.Write(w, http.StatusOK, response)
 }
 
 func (h *Handler) classAnalytics(w http.ResponseWriter, r *http.Request) {
@@ -168,7 +168,7 @@ func (h *Handler) classAnalytics(w http.ResponseWriter, r *http.Request) {
 		writeTeacherError(w, http.StatusInternalServerError, "INTERNAL_ERROR", "获取班级分析失败")
 		return
 	}
-	writeJSON(w, http.StatusOK, response)
+	httpjson.Write(w, http.StatusOK, response)
 }
 
 func (h *Handler) studentDetail(w http.ResponseWriter, r *http.Request) {
@@ -190,7 +190,7 @@ func (h *Handler) studentDetail(w http.ResponseWriter, r *http.Request) {
 		writeTeacherError(w, http.StatusInternalServerError, "INTERNAL_ERROR", "获取学生详情失败")
 		return
 	}
-	writeJSON(w, http.StatusOK, response)
+	httpjson.Write(w, http.StatusOK, response)
 }
 
 func (h *Handler) requireTeacher(w http.ResponseWriter, r *http.Request) (authapp.Principal, bool) {
@@ -242,12 +242,6 @@ func validTimeRange(value string) bool {
 	}
 }
 
-func writeJSON(w http.ResponseWriter, status int, payload any) {
-	w.Header().Set("Content-Type", "application/json; charset=utf-8")
-	w.WriteHeader(status)
-	_ = json.NewEncoder(w).Encode(payload)
-}
-
 func writeTeacherError(w http.ResponseWriter, status int, code, message string) {
-	writeJSON(w, status, errorResponse{Detail: message, Code: code, Message: message})
+	httpjson.Write(w, status, errorResponse{Detail: message, Code: code, Message: message})
 }

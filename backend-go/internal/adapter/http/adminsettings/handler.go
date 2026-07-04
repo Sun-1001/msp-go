@@ -2,7 +2,6 @@ package adminsettingshttp
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"io"
 	"log/slog"
@@ -97,7 +96,7 @@ func (h *Handler) getRegistration(w http.ResponseWriter, r *http.Request) {
 		h.writeServiceError(w, err, "获取注册配置失败")
 		return
 	}
-	writeJSON(w, http.StatusOK, response)
+	httpjson.Write(w, http.StatusOK, response)
 }
 
 func (h *Handler) updateRegistration(w http.ResponseWriter, r *http.Request) {
@@ -113,7 +112,7 @@ func (h *Handler) updateRegistration(w http.ResponseWriter, r *http.Request) {
 		h.writeServiceError(w, err, "更新注册配置失败")
 		return
 	}
-	writeJSON(w, http.StatusOK, response)
+	httpjson.Write(w, http.StatusOK, response)
 }
 
 func (h *Handler) getGeneral(w http.ResponseWriter, r *http.Request) {
@@ -125,7 +124,7 @@ func (h *Handler) getGeneral(w http.ResponseWriter, r *http.Request) {
 		h.writeServiceError(w, err, "获取系统基本信息失败")
 		return
 	}
-	writeJSON(w, http.StatusOK, response)
+	httpjson.Write(w, http.StatusOK, response)
 }
 
 func (h *Handler) updateGeneral(w http.ResponseWriter, r *http.Request) {
@@ -141,7 +140,7 @@ func (h *Handler) updateGeneral(w http.ResponseWriter, r *http.Request) {
 		h.writeServiceError(w, err, "更新系统基本信息失败")
 		return
 	}
-	writeJSON(w, http.StatusOK, response)
+	httpjson.Write(w, http.StatusOK, response)
 }
 
 func (h *Handler) exportableTables(w http.ResponseWriter, r *http.Request) {
@@ -153,7 +152,7 @@ func (h *Handler) exportableTables(w http.ResponseWriter, r *http.Request) {
 		h.writeServiceError(w, err, "获取可导出表列表失败")
 		return
 	}
-	writeJSON(w, http.StatusOK, response)
+	httpjson.Write(w, http.StatusOK, response)
 }
 
 func (h *Handler) exportDatabase(w http.ResponseWriter, r *http.Request) {
@@ -170,7 +169,7 @@ func (h *Handler) exportDatabase(w http.ResponseWriter, r *http.Request) {
 		h.writeServiceError(w, err, "导出数据库数据失败")
 		return
 	}
-	writeJSON(w, http.StatusOK, response)
+	httpjson.Write(w, http.StatusOK, response)
 }
 
 func (h *Handler) importDatabase(w http.ResponseWriter, r *http.Request) {
@@ -211,7 +210,7 @@ func (h *Handler) importDatabase(w http.ResponseWriter, r *http.Request) {
 		h.writeServiceError(w, err, "导入数据库数据失败")
 		return
 	}
-	writeJSON(w, http.StatusOK, response)
+	httpjson.Write(w, http.StatusOK, response)
 }
 
 func isRequestTooLarge(err error) bool {
@@ -228,7 +227,7 @@ func (h *Handler) databaseMonitor(w http.ResponseWriter, r *http.Request) {
 		h.writeServiceError(w, err, "获取数据库监控数据失败")
 		return
 	}
-	writeJSON(w, http.StatusOK, response)
+	httpjson.Write(w, http.StatusOK, response)
 }
 
 func (h *Handler) requireAdmin(w http.ResponseWriter, r *http.Request) (authapp.Principal, bool) {
@@ -269,12 +268,6 @@ func decodeRequest(w http.ResponseWriter, r *http.Request, target any) bool {
 	return true
 }
 
-func writeJSON(w http.ResponseWriter, status int, payload any) {
-	w.Header().Set("Content-Type", "application/json; charset=utf-8")
-	w.WriteHeader(status)
-	_ = json.NewEncoder(w).Encode(payload)
-}
-
 func writeAdminSettingsError(w http.ResponseWriter, status int, code, message string) {
-	writeJSON(w, status, errorResponse{Detail: message, Code: code, Message: message})
+	httpjson.Write(w, status, errorResponse{Detail: message, Code: code, Message: message})
 }

@@ -2,7 +2,6 @@ package classroomhttp
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"log/slog"
 	"net/http"
@@ -110,7 +109,7 @@ func (h *Handler) create(w http.ResponseWriter, r *http.Request) {
 		writeClassError(w, http.StatusInternalServerError, "INTERNAL_ERROR", "创建班级失败")
 		return
 	}
-	writeJSON(w, http.StatusOK, response)
+	httpjson.Write(w, http.StatusOK, response)
 }
 
 func (h *Handler) listTeacherClasses(w http.ResponseWriter, r *http.Request) {
@@ -124,7 +123,7 @@ func (h *Handler) listTeacherClasses(w http.ResponseWriter, r *http.Request) {
 		writeClassError(w, http.StatusInternalServerError, "INTERNAL_ERROR", "获取班级列表失败")
 		return
 	}
-	writeJSON(w, http.StatusOK, response)
+	httpjson.Write(w, http.StatusOK, response)
 }
 
 func (h *Handler) teacherClassDetail(w http.ResponseWriter, r *http.Request) {
@@ -142,7 +141,7 @@ func (h *Handler) teacherClassDetail(w http.ResponseWriter, r *http.Request) {
 		writeClassError(w, http.StatusInternalServerError, "INTERNAL_ERROR", "获取班级详情失败")
 		return
 	}
-	writeJSON(w, http.StatusOK, response)
+	httpjson.Write(w, http.StatusOK, response)
 }
 
 func (h *Handler) removeStudent(w http.ResponseWriter, r *http.Request) {
@@ -160,7 +159,7 @@ func (h *Handler) removeStudent(w http.ResponseWriter, r *http.Request) {
 		writeClassError(w, http.StatusInternalServerError, "INTERNAL_ERROR", "移除学生失败")
 		return
 	}
-	writeJSON(w, http.StatusOK, response)
+	httpjson.Write(w, http.StatusOK, response)
 }
 
 func (h *Handler) disbandClass(w http.ResponseWriter, r *http.Request) {
@@ -178,7 +177,7 @@ func (h *Handler) disbandClass(w http.ResponseWriter, r *http.Request) {
 		writeClassError(w, http.StatusInternalServerError, "INTERNAL_ERROR", "解散班级失败")
 		return
 	}
-	writeJSON(w, http.StatusOK, response)
+	httpjson.Write(w, http.StatusOK, response)
 }
 
 func (h *Handler) lookupClass(w http.ResponseWriter, r *http.Request) {
@@ -195,7 +194,7 @@ func (h *Handler) lookupClass(w http.ResponseWriter, r *http.Request) {
 		writeClassError(w, http.StatusInternalServerError, "INTERNAL_ERROR", "查询班级失败")
 		return
 	}
-	writeJSON(w, http.StatusOK, response)
+	httpjson.Write(w, http.StatusOK, response)
 }
 
 func (h *Handler) joinClass(w http.ResponseWriter, r *http.Request) {
@@ -225,7 +224,7 @@ func (h *Handler) joinClass(w http.ResponseWriter, r *http.Request) {
 		writeClassError(w, http.StatusInternalServerError, "INTERNAL_ERROR", "加入班级失败")
 		return
 	}
-	writeJSON(w, http.StatusOK, response)
+	httpjson.Write(w, http.StatusOK, response)
 }
 
 func (h *Handler) leaveClass(w http.ResponseWriter, r *http.Request) {
@@ -243,7 +242,7 @@ func (h *Handler) leaveClass(w http.ResponseWriter, r *http.Request) {
 		writeClassError(w, http.StatusInternalServerError, "INTERNAL_ERROR", "退出班级失败")
 		return
 	}
-	writeJSON(w, http.StatusOK, response)
+	httpjson.Write(w, http.StatusOK, response)
 }
 
 func (h *Handler) myClass(w http.ResponseWriter, r *http.Request) {
@@ -257,7 +256,7 @@ func (h *Handler) myClass(w http.ResponseWriter, r *http.Request) {
 		writeClassError(w, http.StatusInternalServerError, "INTERNAL_ERROR", "获取当前班级失败")
 		return
 	}
-	writeJSON(w, http.StatusOK, response)
+	httpjson.Write(w, http.StatusOK, response)
 }
 
 func (h *Handler) requirePrincipal(w http.ResponseWriter, r *http.Request) (authapp.Principal, bool) {
@@ -338,12 +337,6 @@ func decodeRequest(w http.ResponseWriter, r *http.Request, target any) bool {
 	return true
 }
 
-func writeJSON(w http.ResponseWriter, status int, payload any) {
-	w.Header().Set("Content-Type", "application/json; charset=utf-8")
-	w.WriteHeader(status)
-	_ = json.NewEncoder(w).Encode(payload)
-}
-
 func writeClassError(w http.ResponseWriter, status int, code, message string) {
-	writeJSON(w, status, errorResponse{Detail: message, Code: code, Message: message})
+	httpjson.Write(w, status, errorResponse{Detail: message, Code: code, Message: message})
 }

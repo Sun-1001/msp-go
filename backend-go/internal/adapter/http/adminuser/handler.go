@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"encoding/csv"
-	"encoding/json"
 	"errors"
 	"io"
 	"log/slog"
@@ -114,7 +113,7 @@ func (h *Handler) stats(w http.ResponseWriter, r *http.Request) {
 		writeAdminUserError(w, http.StatusInternalServerError, "INTERNAL_ERROR", "获取账户统计失败")
 		return
 	}
-	writeJSON(w, http.StatusOK, response)
+	httpjson.Write(w, http.StatusOK, response)
 }
 
 func (h *Handler) listUsers(w http.ResponseWriter, r *http.Request) {
@@ -130,7 +129,7 @@ func (h *Handler) listUsers(w http.ResponseWriter, r *http.Request) {
 		h.writeServiceError(w, err, "获取用户列表失败")
 		return
 	}
-	writeJSON(w, http.StatusOK, response)
+	httpjson.Write(w, http.StatusOK, response)
 }
 
 func (h *Handler) createUser(w http.ResponseWriter, r *http.Request) {
@@ -152,7 +151,7 @@ func (h *Handler) createUser(w http.ResponseWriter, r *http.Request) {
 		h.writeServiceError(w, err, "创建用户失败")
 		return
 	}
-	writeJSON(w, http.StatusOK, response)
+	httpjson.Write(w, http.StatusOK, response)
 }
 
 func (h *Handler) updateUserStatus(w http.ResponseWriter, r *http.Request) {
@@ -168,7 +167,7 @@ func (h *Handler) updateUserStatus(w http.ResponseWriter, r *http.Request) {
 		h.writeServiceError(w, err, "更新用户状态失败")
 		return
 	}
-	writeJSON(w, http.StatusOK, response)
+	httpjson.Write(w, http.StatusOK, response)
 }
 
 func (h *Handler) updateUser(w http.ResponseWriter, r *http.Request) {
@@ -187,7 +186,7 @@ func (h *Handler) updateUser(w http.ResponseWriter, r *http.Request) {
 		h.writeServiceError(w, err, "更新用户信息失败")
 		return
 	}
-	writeJSON(w, http.StatusOK, response)
+	httpjson.Write(w, http.StatusOK, response)
 }
 
 func (h *Handler) deleteUser(w http.ResponseWriter, r *http.Request) {
@@ -199,7 +198,7 @@ func (h *Handler) deleteUser(w http.ResponseWriter, r *http.Request) {
 		h.writeServiceError(w, err, "删除用户失败")
 		return
 	}
-	writeJSON(w, http.StatusOK, response)
+	httpjson.Write(w, http.StatusOK, response)
 }
 
 func (h *Handler) exportUsers(w http.ResponseWriter, r *http.Request) {
@@ -278,7 +277,7 @@ func (h *Handler) importUsers(w http.ResponseWriter, r *http.Request) {
 		h.writeServiceError(w, err, "导入用户失败")
 		return
 	}
-	writeJSON(w, http.StatusOK, response)
+	httpjson.Write(w, http.StatusOK, response)
 }
 
 func (h *Handler) requireAdmin(w http.ResponseWriter, r *http.Request) (authapp.Principal, bool) {
@@ -467,12 +466,6 @@ func importFieldName(value string) string {
 	}
 }
 
-func writeJSON(w http.ResponseWriter, status int, payload any) {
-	w.Header().Set("Content-Type", "application/json; charset=utf-8")
-	w.WriteHeader(status)
-	_ = json.NewEncoder(w).Encode(payload)
-}
-
 func writeAdminUserError(w http.ResponseWriter, status int, code, message string) {
-	writeJSON(w, status, errorResponse{Detail: message, Code: code, Message: message})
+	httpjson.Write(w, status, errorResponse{Detail: message, Code: code, Message: message})
 }
