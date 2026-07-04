@@ -190,14 +190,14 @@ func toPortraitResponse(profile Profile) PortraitResponse {
 		PortraitGeneratedAt:   timefmt.OptionalDateTimeMicros(profile.PortraitGeneratedAt),
 		PortraitVersion:       profile.PortraitVersion,
 		TotalExercises:        profile.TotalExercises,
-		CorrectRate:           numutil.RoundPlaces(ratio(profile.CorrectCount, profile.TotalExercises), 2),
+		CorrectRate:           numutil.RoundPlaces(numutil.Ratio(profile.TotalExercises, profile.CorrectCount), 2),
 		TotalStudyTimeMinutes: profile.TotalStudyTimeMinutes,
 		HasContent:            profile.PortraitContent != nil,
 	}
 }
 
 func buildPortraitContent(profile Profile) string {
-	correctRate := ratio(profile.CorrectCount, profile.TotalExercises)
+	correctRate := numutil.Ratio(profile.TotalExercises, profile.CorrectCount)
 	var builder strings.Builder
 	builder.WriteString("# 学生画像分析报告\n\n")
 	builder.WriteString("## 学习概况\n")
@@ -260,13 +260,6 @@ func valueOrEmpty(value *string) string {
 		return ""
 	}
 	return *value
-}
-
-func ratio(count int, total int) float64 {
-	if total <= 0 {
-		return 0
-	}
-	return float64(count) / float64(total)
 }
 
 func formatNumber(value float64) string {
