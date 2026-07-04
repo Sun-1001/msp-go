@@ -823,7 +823,7 @@ func toExerciseResponse(exercise Exercise) *ExerciseResponse {
 		Type:                 metaStringDefault(exercise.Meta, "type", "short_answer"),
 		KnowledgePoints:      sliceutil.CloneStrings(exercise.ConceptIDs),
 		HintsAvailable:       len(metautil.StringSlice(exercise.Meta, "hints")) > 0,
-		EstimatedTimeSeconds: metaIntDefault(exercise.Meta, "estimated_time_seconds", 300),
+		EstimatedTimeSeconds: metautil.IntDefault(exercise.Meta, "estimated_time_seconds", 300),
 		Options:              metautil.OptionalStringSlice(exercise.Meta, "options"),
 	}
 }
@@ -984,20 +984,6 @@ func metaStringDefault(meta map[string]any, key string, fallback string) string 
 		return fallback
 	}
 	return value
-}
-
-func metaIntDefault(meta map[string]any, key string, fallback int) int {
-	if meta == nil {
-		return fallback
-	}
-	switch value := meta[key].(type) {
-	case int:
-		return value
-	case float64:
-		return int(value)
-	default:
-		return fallback
-	}
 }
 
 func appendUnique(values []string, value string) []string {

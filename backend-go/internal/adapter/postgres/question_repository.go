@@ -436,7 +436,7 @@ func (r QuestionRepository) BatchDuplicate(ctx context.Context, ownerID string, 
 				Hints:                metautil.StringSlice(source.Meta, "hints"),
 				SolutionSteps:        metautil.StringSlice(source.Meta, "solution_steps"),
 				Options:              optionsFromMeta(source.Meta),
-				EstimatedTimeSeconds: intFromMeta(source.Meta, "estimated_time_seconds"),
+				EstimatedTimeSeconds: metautil.Int(source.Meta, "estimated_time_seconds"),
 			}
 			if input.EstimatedTimeSeconds == 0 {
 				input.EstimatedTimeSeconds = 300

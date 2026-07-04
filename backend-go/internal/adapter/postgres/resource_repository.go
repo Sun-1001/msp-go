@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"strconv"
 	"strings"
 	"time"
 
@@ -93,7 +92,7 @@ func (r ResourceRepository) GetResourceByID(ctx context.Context, resourceID stri
 	if err != nil || !ok {
 		return resourceapp.Resource{}, ok, err
 	}
-	resource.Views = intFromMeta(meta, "views") + 1
+	resource.Views = metautil.Int(meta, "views") + 1
 	meta["views"] = resource.Views
 	raw, err := json.Marshal(meta)
 	if err != nil {
@@ -256,7 +255,7 @@ func (r ResourceRepository) updateResource(ctx context.Context, resourceID strin
 			resourceTypeFromDB(currentType),
 			metaStringDefault(meta, "storage_type", "external"),
 			metautil.StringPointer(meta, "duration"),
-			metaIntPointer(meta, "pages"),
+			metautil.IntPointer(meta, "pages"),
 			input,
 			now,
 		); err != nil {
@@ -657,9 +656,9 @@ func scanResource(scanner rowScanner) (resourceapp.Resource, map[string]any, err
 	resource.Source = metautil.StringPointer(meta, "source")
 	resource.StorageType = metautil.StringPointer(meta, "storage_type")
 	resource.Duration = metautil.StringPointer(meta, "duration")
-	resource.Pages = metaIntPointer(meta, "pages")
-	resource.Views = intFromMeta(meta, "views")
-	resource.Likes = intFromMeta(meta, "likes")
+	resource.Pages = metautil.IntPointer(meta, "pages")
+	resource.Views = metautil.Int(meta, "views")
+	resource.Likes = metautil.Int(meta, "likes")
 	return resource, meta, nil
 }
 
@@ -700,53 +699,4 @@ func metaStringDefault(meta map[string]any, key string, fallback string) string 
 		return fallback
 	}
 	return *value
-}
-
-func metaIntPointer(meta map[string]any, key string) *int {
-	value, ok := meta[key]
-	if !ok || value == nil {
-		return nil
-	}
-	parsed, ok := intFromAny(value)
-	if !ok {
-		return nil
-	}
-	return &parsed
-}
-
-func intFromMeta(meta map[string]any, key string) int {
-	value, ok := meta[key]
-	if !ok || value == nil {
-		return 0
-	}
-	parsed, ok := intFromAny(value)
-	if !ok {
-		return 0
-	}
-	return parsed
-}
-
-func intFromAny(value any) (int, bool) {
-	switch typed := value.(type) {
-	case int:
-		return typed, true
-	case int32:
-		return int(typed), true
-	case int64:
-		return int(typed), true
-	case float64:
-		return int(typed), true
-	case json.Number:
-		parsed, err := typed.Int64()
-		if err == nil {
-			return int(parsed), true
-		}
-		asFloat, err := strconv.ParseFloat(typed.String(), 64)
-		if err != nil {
-			return 0, false
-		}
-		return int(asFloat), true
-	default:
-		return 0, false
-	}
 }

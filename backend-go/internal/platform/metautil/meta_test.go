@@ -1,6 +1,9 @@
 package metautil
 
-import "testing"
+import (
+	"encoding/json"
+	"testing"
+)
 
 func TestLookupString(t *testing.T) {
 	tests := []struct {
@@ -97,6 +100,58 @@ func TestOptionalStringSlice(t *testing.T) {
 	got := OptionalStringSlice(map[string]any{"items": []any{}}, "items")
 	if got == nil || len(got) != 0 {
 		t.Fatalf("OptionalStringSlice() = %#v, want non-nil empty slice for present value", got)
+	}
+}
+
+func TestLookupInt(t *testing.T) {
+	tests := []struct {
+		name   string
+		meta   map[string]any
+		want   int
+		wantOK bool
+	}{
+		{name: "nil meta", meta: nil},
+		{name: "missing key", meta: map[string]any{}},
+		{name: "nil value", meta: map[string]any{"field": nil}},
+		{name: "non numeric", meta: map[string]any{"field": "7"}},
+		{name: "int", meta: map[string]any{"field": 7}, want: 7, wantOK: true},
+		{name: "int32", meta: map[string]any{"field": int32(8)}, want: 8, wantOK: true},
+		{name: "int64", meta: map[string]any{"field": int64(9)}, want: 9, wantOK: true},
+		{name: "float64 truncates", meta: map[string]any{"field": 10.9}, want: 10, wantOK: true},
+		{name: "json integer number", meta: map[string]any{"field": json.Number("11")}, want: 11, wantOK: true},
+		{name: "json float number truncates", meta: map[string]any{"field": json.Number("12.8")}, want: 12, wantOK: true},
+		{name: "invalid json number", meta: map[string]any{"field": json.Number("bad")}},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, ok := LookupInt(tt.meta, "field")
+			if got != tt.want || ok != tt.wantOK {
+				t.Fatalf("LookupInt() = %d, %v; want %d, %v", got, ok, tt.want, tt.wantOK)
+			}
+		})
+	}
+}
+
+func TestIntAndIntDefault(t *testing.T) {
+	if got := Int(map[string]any{"field": int64(42)}, "field"); got != 42 {
+		t.Fatalf("Int() = %d, want 42", got)
+	}
+	if got := Int(map[string]any{"field": "42"}, "field"); got != 0 {
+		t.Fatalf("Int(non numeric) = %d, want 0", got)
+	}
+	if got := IntDefault(map[string]any{"field": "42"}, "field", 7); got != 7 {
+		t.Fatalf("IntDefault(non numeric) = %d, want 7", got)
+	}
+}
+
+func TestIntPointer(t *testing.T) {
+	if got := IntPointer(map[string]any{}, "field"); got != nil {
+		t.Fatalf("IntPointer() = %v, want nil", got)
+	}
+	got := IntPointer(map[string]any{"field": 13.9}, "field")
+	if got == nil || *got != 13 {
+		t.Fatalf("IntPointer() = %v, want 13", got)
 	}
 }
 

@@ -1,6 +1,11 @@
 package metautil
 
-import "mathstudy/backend-go/internal/platform/sliceutil"
+import (
+	"encoding/json"
+	"strconv"
+
+	"mathstudy/backend-go/internal/platform/sliceutil"
+)
 
 // LookupString returns a string metadata value and whether it was present as a string.
 func LookupString(meta map[string]any, key string) (string, bool) {
@@ -77,4 +82,64 @@ func OptionalStringSlice(meta map[string]any, key string) []string {
 		return nil
 	}
 	return values
+}
+
+// LookupInt returns an integer metadata value and whether it could be parsed.
+func LookupInt(meta map[string]any, key string) (int, bool) {
+	if meta == nil {
+		return 0, false
+	}
+	value, ok := meta[key]
+	if !ok || value == nil {
+		return 0, false
+	}
+	return intFromAny(value)
+}
+
+// Int returns an integer metadata value, or 0 when missing or not numeric.
+func Int(meta map[string]any, key string) int {
+	return IntDefault(meta, key, 0)
+}
+
+// IntDefault returns an integer metadata value, or fallback when missing or not numeric.
+func IntDefault(meta map[string]any, key string, fallback int) int {
+	value, ok := LookupInt(meta, key)
+	if !ok {
+		return fallback
+	}
+	return value
+}
+
+// IntPointer returns a pointer to an integer metadata value when present.
+func IntPointer(meta map[string]any, key string) *int {
+	value, ok := LookupInt(meta, key)
+	if !ok {
+		return nil
+	}
+	return &value
+}
+
+func intFromAny(value any) (int, bool) {
+	switch typed := value.(type) {
+	case int:
+		return typed, true
+	case int32:
+		return int(typed), true
+	case int64:
+		return int(typed), true
+	case float64:
+		return int(typed), true
+	case json.Number:
+		parsed, err := typed.Int64()
+		if err == nil {
+			return int(parsed), true
+		}
+		asFloat, err := strconv.ParseFloat(typed.String(), 64)
+		if err != nil {
+			return 0, false
+		}
+		return int(asFloat), true
+	default:
+		return 0, false
+	}
 }
