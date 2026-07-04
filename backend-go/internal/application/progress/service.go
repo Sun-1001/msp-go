@@ -639,7 +639,7 @@ func (s *Service) GetChapters(ctx context.Context) ([]string, error) {
 }
 
 func (s *Service) masteryDetails(ctx context.Context, userID string, fallback map[string]float64, conceptIDs []string) (map[string]float64, map[string]float64, map[string]int, error) {
-	mastery := copyFloatMap(fallback)
+	mastery := maputil.CloneFloatMap(fallback)
 	confidence := map[string]float64{}
 	attempts := map[string]int{}
 
@@ -937,14 +937,6 @@ func clampProbability(value float64) float64 {
 		return 0.999
 	}
 	return value
-}
-
-func copyFloatMap(source map[string]float64) map[string]float64 {
-	result := make(map[string]float64, len(source))
-	for key, value := range source {
-		result[key] = value
-	}
-	return result
 }
 
 func percent(total int, count int) float64 {

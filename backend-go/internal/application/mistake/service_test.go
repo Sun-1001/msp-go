@@ -5,6 +5,8 @@ import (
 	"errors"
 	"testing"
 	"time"
+
+	"mathstudy/backend-go/internal/platform/maputil"
 )
 
 func TestGetMistakesSortsPaginatesAndBuildsPythonResponse(t *testing.T) {
@@ -299,7 +301,7 @@ func (r *fakeMistakeRepo) ListMistakes(_ context.Context, _ string, filter ListF
 
 func (r *fakeMistakeRepo) ListMistakePage(_ context.Context, _ string, query ListQuery) ([]MistakeListRow, int, error) {
 	r.lastListQuery = query
-	mastery := normalizeMastery(r.profile.MasteryVector)
+	mastery := maputil.CloneFloatMap(r.profile.MasteryVector)
 	items := make([]listItemData, 0, len(r.rows))
 	for _, row := range r.rows {
 		avgMastery := averageMastery(row.Content.ConceptIDs, mastery)

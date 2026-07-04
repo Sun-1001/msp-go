@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"mathstudy/backend-go/internal/platform/maputil"
 	"mathstudy/backend-go/internal/platform/ptrutil"
 	"mathstudy/backend-go/internal/platform/sliceutil"
 )
@@ -334,7 +335,7 @@ func (s *Service) GetMistakes(ctx context.Context, userID string, query ListQuer
 	if err != nil {
 		return MistakeListResponse{}, err
 	}
-	mastery := normalizeMastery(profile.MasteryVector)
+	mastery := maputil.CloneFloatMap(profile.MasteryVector)
 
 	responseItems := make([]MistakeItem, 0, len(rows))
 	for _, row := range rows {
@@ -372,7 +373,7 @@ func (s *Service) GetStatistics(ctx context.Context, userID string, timeRange st
 	if err != nil {
 		return StatisticsResponse{}, err
 	}
-	mastery := normalizeMastery(profile.MasteryVector)
+	mastery := maputil.CloneFloatMap(profile.MasteryVector)
 	totalExercises, err := s.repo.CountSubmittedAttempts(ctx, userID, start, end)
 	if err != nil {
 		return StatisticsResponse{}, err
@@ -435,7 +436,7 @@ func (s *Service) MarkAsMastered(ctx context.Context, userID string, attemptID s
 		return MarkAsMasteredResponse{}, ErrProfileNotFound
 	}
 
-	mastery := normalizeMastery(profile.MasteryVector)
+	mastery := maputil.CloneFloatMap(profile.MasteryVector)
 	update := map[string]float64{}
 	for _, conceptID := range attemptContent.Content.ConceptIDs {
 		current := mastery[conceptID]
@@ -480,7 +481,7 @@ func (s *Service) GetReviewExercise(ctx context.Context, userID string, focusCon
 	if err != nil {
 		return ReviewExerciseResponse{}, err
 	}
-	mastery := normalizeMastery(profile.MasteryVector)
+	mastery := maputil.CloneFloatMap(profile.MasteryVector)
 	rows, err := s.repo.ListMistakes(ctx, userID, ListFilter{
 		ErrorType:     focusErrorType,
 		ConceptID:     focusConcept,
@@ -772,17 +773,6 @@ func masteryValue(conceptID string, mastery map[string]float64) float64 {
 		return 0.5
 	}
 	return value
-}
-
-func normalizeMastery(values map[string]float64) map[string]float64 {
-	if values == nil {
-		return map[string]float64{}
-	}
-	result := make(map[string]float64, len(values))
-	for key, value := range values {
-		result[key] = value
-	}
-	return result
 }
 
 func masteryTrend(avgMastery float64) string {

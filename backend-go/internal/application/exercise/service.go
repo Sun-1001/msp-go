@@ -620,8 +620,8 @@ func (s *Service) updateTracking(ctx context.Context, repo Repository, userID st
 	concepts := uniqueNonEmpty(exercise.ConceptIDs)
 	if len(concepts) == 0 {
 		return map[string]float64{}, repo.UpdateProfileTracking(ctx, userID, ProfileTrackingUpdate{
-			MasteryVector:  normalizeFloatMap(profile.MasteryVector),
-			ErrorTendency:  normalizeFloatMap(profile.ErrorTendency),
+			MasteryVector:  maputil.CloneFloatMap(profile.MasteryVector),
+			ErrorTendency:  maputil.CloneFloatMap(profile.ErrorTendency),
 			TotalExercises: profile.TotalExercises + 1,
 			CorrectCount:   profile.CorrectCount + boolInt(isCorrect),
 			UpdatedAt:      now,
@@ -645,8 +645,8 @@ func (s *Service) updateTracking(ctx context.Context, repo Repository, userID st
 	}
 	sequence := buildDKTSequence(history, current)
 
-	mastery := normalizeFloatMap(profile.MasteryVector)
-	tendency := normalizeFloatMap(profile.ErrorTendency)
+	mastery := maputil.CloneFloatMap(profile.MasteryVector)
+	tendency := maputil.CloneFloatMap(profile.ErrorTendency)
 	if errorType != nil && !isCorrect {
 		tendency[*errorType] += 1
 	}
@@ -1079,17 +1079,6 @@ func uniqueNonEmpty(values []string) []string {
 		result = append(result, value)
 	}
 	sort.Strings(result)
-	return result
-}
-
-func normalizeFloatMap(values map[string]float64) map[string]float64 {
-	if values == nil {
-		return map[string]float64{}
-	}
-	result := make(map[string]float64, len(values))
-	for key, value := range values {
-		result[key] = value
-	}
 	return result
 }
 
