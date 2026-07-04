@@ -63,6 +63,28 @@ func TestListUsersParsesFilters(t *testing.T) {
 	}
 }
 
+func TestListUsersRejectsInvalidPagination(t *testing.T) {
+	service := &fakeAdminUserService{}
+	handler := newAdminUserTestHandler(t, service, adminAuthenticator())
+	mux := http.NewServeMux()
+	handler.Register(mux, "/api/v1/admin/users")
+
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodGet, "/api/v1/admin/users?page=bad", nil)
+	request.Header.Set("Authorization", "Bearer token")
+	mux.ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("status = %d body=%s", recorder.Code, recorder.Body.String())
+	}
+	if !strings.Contains(recorder.Body.String(), "page 必须是整数") || !strings.Contains(recorder.Body.String(), "VALIDATION_ERROR") {
+		t.Fatalf("body = %s", recorder.Body.String())
+	}
+	if service.lastFilter.Page != 0 {
+		t.Fatalf("service was called for invalid pagination: %#v", service.lastFilter)
+	}
+}
+
 func TestCreateUpdateStatusAndDeleteForwardToService(t *testing.T) {
 	service := &fakeAdminUserService{
 		createResponse: adminuserapp.CreateResponse{Success: true, Message: "用户创建成功"},

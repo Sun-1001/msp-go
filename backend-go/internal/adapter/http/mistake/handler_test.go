@@ -78,6 +78,33 @@ func TestListForwardsQueryParameters(t *testing.T) {
 	}
 }
 
+func TestListRejectsInvalidPagination(t *testing.T) {
+	service := &fakeMistakeService{}
+	auth := &fakeAuthenticator{principal: authapp.Principal{UserID: "student-1", Role: user.RoleStudent}}
+	handler := newTestHandler(t, service, auth)
+	mux := http.NewServeMux()
+	handler.Register(mux, "/api/v1/mistakes")
+
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodGet, "/api/v1/mistakes?page_size=bad", nil)
+	request.Header.Set("Authorization", "Bearer token")
+	mux.ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("status = %d body=%s", recorder.Code, recorder.Body.String())
+	}
+	var body map[string]string
+	if err := json.Unmarshal(recorder.Body.Bytes(), &body); err != nil {
+		t.Fatalf("invalid JSON: %v", err)
+	}
+	if body["detail"] != "page_size 必须是整数" || body["code"] != "VALIDATION_ERROR" {
+		t.Fatalf("body = %#v", body)
+	}
+	if service.lastUserID != "" {
+		t.Fatalf("service was called for invalid pagination: user=%q query=%#v", service.lastUserID, service.lastListQuery)
+	}
+}
+
 func TestListRejectsInvalidDate(t *testing.T) {
 	service := &fakeMistakeService{}
 	auth := &fakeAuthenticator{principal: authapp.Principal{UserID: "student-1", Role: user.RoleStudent}}

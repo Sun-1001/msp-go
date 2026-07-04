@@ -379,44 +379,42 @@ func writeKnowledgeAppError(w http.ResponseWriter, status int, code string, err 
 }
 
 func parseNodeFilter(w http.ResponseWriter, r *http.Request) (knowledgeapp.NodeFilter, bool) {
-	page, ok := parseIntQuery(w, r.URL.Query().Get("page"), 1, "page")
-	if !ok {
-		return knowledgeapp.NodeFilter{}, false
-	}
-	pageSize, ok := parseIntQuery(w, r.URL.Query().Get("page_size"), 20, "page_size")
-	if !ok {
-		return knowledgeapp.NodeFilter{}, false
-	}
-	if page < 1 {
-		writeKnowledgeError(w, http.StatusUnprocessableEntity, "VALIDATION_ERROR", "page 必须大于等于 1")
-		return knowledgeapp.NodeFilter{}, false
-	}
-	if pageSize < 1 || pageSize > 100 {
-		writeKnowledgeError(w, http.StatusUnprocessableEntity, "VALIDATION_ERROR", "page_size 必须在 1 到 100 之间")
-		return knowledgeapp.NodeFilter{}, false
-	}
 	query := r.URL.Query()
+	pagination, err := httpquery.Pagination(query, 20, 100)
+	if err != nil {
+		writeKnowledgePaginationError(w, err)
+		return knowledgeapp.NodeFilter{}, false
+	}
 	nodeType := query.Get("type")
 	if nodeType != "" && !validNodeType(nodeType) {
 		writeKnowledgeError(w, http.StatusUnprocessableEntity, "VALIDATION_ERROR", "type 节点类型无效")
 		return knowledgeapp.NodeFilter{}, false
 	}
 	return knowledgeapp.NodeFilter{
-		Page:     page,
-		PageSize: pageSize,
+		Page:     pagination.Page,
+		PageSize: pagination.PageSize,
 		Chapter:  query.Get("chapter"),
 		NodeType: nodeType,
 		Search:   query.Get("search"),
 	}, true
 }
 
-func parseIntQuery(w http.ResponseWriter, value string, fallback int, name string) (int, bool) {
-	parsed, err := httpquery.Int(value, fallback)
-	if err != nil {
-		writeKnowledgeError(w, http.StatusUnprocessableEntity, "VALIDATION_ERROR", name+" 必须是整数")
-		return 0, false
+func writeKnowledgePaginationError(w http.ResponseWriter, err error) {
+	writeKnowledgeError(w, http.StatusUnprocessableEntity, "VALIDATION_ERROR", paginationErrorMessage(err))
+}
+
+func paginationErrorMessage(err error) string {
+	var paginationErr httpquery.PaginationError
+	if !errors.As(err, &paginationErr) {
+		return "分页参数无效"
 	}
-	return parsed, true
+	if errors.Is(err, httpquery.ErrInvalidInt) {
+		return paginationErr.Field + " 必须是整数"
+	}
+	if paginationErr.Field == httpquery.PageField {
+		return "page 必须大于等于 1"
+	}
+	return "page_size 必须在 1 到 100 之间"
 }
 
 func (r nodeCreateRequest) toInput(w http.ResponseWriter) (knowledgeapp.NodeInput, bool) {

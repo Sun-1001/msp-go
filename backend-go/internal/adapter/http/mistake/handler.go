@@ -204,12 +204,9 @@ func (h *Handler) logMistakeError(message string, err error) {
 
 func parseListQuery(w http.ResponseWriter, r *http.Request) (mistakeapp.ListQuery, bool) {
 	query := r.URL.Query()
-	page, ok := parseIntQuery(w, query.Get("page"), 1, "page")
-	if !ok {
-		return mistakeapp.ListQuery{}, false
-	}
-	pageSize, ok := parseIntQuery(w, query.Get("page_size"), 20, "page_size")
-	if !ok {
+	pagination, err := httpquery.Pagination(query, 20, 100)
+	if err != nil {
+		writeMistakePaginationError(w, err)
 		return mistakeapp.ListQuery{}, false
 	}
 	difficultyMin, ok := parseFloatQuery(w, query.Get("difficulty_min"), 0.0, "difficulty_min")
@@ -226,14 +223,6 @@ func parseListQuery(w http.ResponseWriter, r *http.Request) (mistakeapp.ListQuer
 	}
 	dateTo, ok := parseOptionalTimeQuery(w, query.Get("date_to"), "结束时间格式错误，请使用 ISO 8601 格式")
 	if !ok {
-		return mistakeapp.ListQuery{}, false
-	}
-	if page < 1 {
-		writeMistakeError(w, http.StatusUnprocessableEntity, "VALIDATION_ERROR", "page 必须大于等于 1")
-		return mistakeapp.ListQuery{}, false
-	}
-	if pageSize < 1 || pageSize > 100 {
-		writeMistakeError(w, http.StatusUnprocessableEntity, "VALIDATION_ERROR", "page_size 必须在 1 到 100 之间")
 		return mistakeapp.ListQuery{}, false
 	}
 	if difficultyMin < 0 || difficultyMin > 1 || difficultyMax < 0 || difficultyMax > 1 {
@@ -253,8 +242,8 @@ func parseListQuery(w http.ResponseWriter, r *http.Request) (mistakeapp.ListQuer
 		sortOrder = "desc"
 	}
 	return mistakeapp.ListQuery{
-		Page:          page,
-		PageSize:      pageSize,
+		Page:          pagination.Page,
+		PageSize:      pagination.PageSize,
 		ErrorType:     query.Get("error_type"),
 		ConceptID:     query.Get("concept_id"),
 		DifficultyMin: difficultyMin,
@@ -267,13 +256,22 @@ func parseListQuery(w http.ResponseWriter, r *http.Request) (mistakeapp.ListQuer
 	}, true
 }
 
-func parseIntQuery(w http.ResponseWriter, value string, fallback int, name string) (int, bool) {
-	parsed, err := httpquery.Int(value, fallback)
-	if err != nil {
-		writeMistakeError(w, http.StatusUnprocessableEntity, "VALIDATION_ERROR", name+" 必须是整数")
-		return 0, false
+func writeMistakePaginationError(w http.ResponseWriter, err error) {
+	writeMistakeError(w, http.StatusUnprocessableEntity, "VALIDATION_ERROR", paginationErrorMessage(err))
+}
+
+func paginationErrorMessage(err error) string {
+	var paginationErr httpquery.PaginationError
+	if !errors.As(err, &paginationErr) {
+		return "分页参数无效"
 	}
-	return parsed, true
+	if errors.Is(err, httpquery.ErrInvalidInt) {
+		return paginationErr.Field + " 必须是整数"
+	}
+	if paginationErr.Field == httpquery.PageField {
+		return "page 必须大于等于 1"
+	}
+	return "page_size 必须在 1 到 100 之间"
 }
 
 func parseFloatQuery(w http.ResponseWriter, value string, fallback float64, name string) (float64, bool) {

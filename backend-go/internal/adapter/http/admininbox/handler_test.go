@@ -62,6 +62,28 @@ func TestListRequestsParsesFilter(t *testing.T) {
 	}
 }
 
+func TestListRequestsRejectsInvalidPagination(t *testing.T) {
+	service := &fakeInboxService{}
+	handler := newAdminInboxTestHandler(t, service, adminAuthenticator())
+	mux := http.NewServeMux()
+	handler.Register(mux, "/api/v1/admin/inbox")
+
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodGet, "/api/v1/admin/inbox?page_size=101", nil)
+	request.Header.Set("Authorization", "Bearer token")
+	mux.ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("status = %d body=%s", recorder.Code, recorder.Body.String())
+	}
+	if !strings.Contains(recorder.Body.String(), "page_size 必须在 1 到 100 之间") || !strings.Contains(recorder.Body.String(), "VALIDATION_ERROR") {
+		t.Fatalf("body = %s", recorder.Body.String())
+	}
+	if service.lastFilter.Page != 0 {
+		t.Fatalf("service was called for invalid pagination: %#v", service.lastFilter)
+	}
+}
+
 func TestPendingCountRoute(t *testing.T) {
 	service := &fakeInboxService{pendingCount: 4}
 	handler := newAdminInboxTestHandler(t, service, adminAuthenticator())

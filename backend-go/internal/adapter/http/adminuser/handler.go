@@ -314,28 +314,17 @@ func (h *Handler) writeServiceError(w http.ResponseWriter, err error, fallback s
 }
 
 func parseListFilter(w http.ResponseWriter, r *http.Request) (adminuserapp.ListFilter, bool) {
-	page, ok := parseIntQuery(w, r.URL.Query().Get("page"), 1, "page")
-	if !ok {
-		return adminuserapp.ListFilter{}, false
-	}
-	pageSize, ok := parseIntQuery(w, r.URL.Query().Get("page_size"), 10, "page_size")
-	if !ok {
-		return adminuserapp.ListFilter{}, false
-	}
-	if page < 1 {
-		writeAdminUserError(w, http.StatusUnprocessableEntity, "VALIDATION_ERROR", "page 必须大于等于 1")
-		return adminuserapp.ListFilter{}, false
-	}
-	if pageSize < 1 || pageSize > 100 {
-		writeAdminUserError(w, http.StatusUnprocessableEntity, "VALIDATION_ERROR", "page_size 必须在 1 到 100 之间")
+	pagination, err := httpquery.Pagination(r.URL.Query(), 10, 100)
+	if err != nil {
+		writeAdminUserPaginationError(w, err)
 		return adminuserapp.ListFilter{}, false
 	}
 	filter, ok := parseExportFilter(w, r)
 	if !ok {
 		return adminuserapp.ListFilter{}, false
 	}
-	filter.Page = page
-	filter.PageSize = pageSize
+	filter.Page = pagination.Page
+	filter.PageSize = pagination.PageSize
 	return filter, true
 }
 
@@ -349,13 +338,22 @@ func parseExportFilter(w http.ResponseWriter, r *http.Request) (adminuserapp.Lis
 	return filter, true
 }
 
-func parseIntQuery(w http.ResponseWriter, value string, fallback int, name string) (int, bool) {
-	parsed, err := httpquery.Int(value, fallback)
-	if err != nil {
-		writeAdminUserError(w, http.StatusUnprocessableEntity, "VALIDATION_ERROR", name+" 必须是整数")
-		return 0, false
+func writeAdminUserPaginationError(w http.ResponseWriter, err error) {
+	writeAdminUserError(w, http.StatusUnprocessableEntity, "VALIDATION_ERROR", paginationErrorMessage(err))
+}
+
+func paginationErrorMessage(err error) string {
+	var paginationErr httpquery.PaginationError
+	if !errors.As(err, &paginationErr) {
+		return "分页参数无效"
 	}
-	return parsed, true
+	if errors.Is(err, httpquery.ErrInvalidInt) {
+		return paginationErr.Field + " 必须是整数"
+	}
+	if paginationErr.Field == httpquery.PageField {
+		return "page 必须大于等于 1"
+	}
+	return "page_size 必须在 1 到 100 之间"
 }
 
 func decodeRequest(w http.ResponseWriter, r *http.Request, target any) bool {
