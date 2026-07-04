@@ -156,6 +156,40 @@ func TestParseEnvList(t *testing.T) {
 	}
 }
 
+func TestEnvDuration(t *testing.T) {
+	fallback := 42 * time.Second
+
+	t.Setenv("TEST_DURATION_SECONDS_NUMBER", "2.5")
+	if got := envSeconds("TEST_DURATION_SECONDS_NUMBER", fallback); got != 2500*time.Millisecond {
+		t.Fatalf("envSeconds(number) = %s, want 2.5s", got)
+	}
+
+	t.Setenv("TEST_DURATION_SECONDS_TEXT", "1500ms")
+	if got := envSeconds("TEST_DURATION_SECONDS_TEXT", fallback); got != 1500*time.Millisecond {
+		t.Fatalf("envSeconds(duration) = %s, want 1.5s", got)
+	}
+
+	t.Setenv("TEST_DURATION_MILLISECONDS_NUMBER", "1500")
+	if got := envMilliseconds("TEST_DURATION_MILLISECONDS_NUMBER", fallback); got != 1500*time.Millisecond {
+		t.Fatalf("envMilliseconds(number) = %s, want 1.5s", got)
+	}
+
+	t.Setenv("TEST_DURATION_MILLISECONDS_TEXT", "2s")
+	if got := envMilliseconds("TEST_DURATION_MILLISECONDS_TEXT", fallback); got != 2*time.Second {
+		t.Fatalf("envMilliseconds(duration) = %s, want 2s", got)
+	}
+
+	t.Setenv("TEST_DURATION_BAD", "bad")
+	if got := envSeconds("TEST_DURATION_BAD", fallback); got != fallback {
+		t.Fatalf("envSeconds(bad) = %s, want fallback %s", got, fallback)
+	}
+
+	t.Setenv("TEST_DURATION_EMPTY", "")
+	if got := envMilliseconds("TEST_DURATION_EMPTY", fallback); got != fallback {
+		t.Fatalf("envMilliseconds(empty) = %s, want fallback %s", got, fallback)
+	}
+}
+
 func TestLoadRejectsInvalidPort(t *testing.T) {
 	t.Setenv("GO_API_PORT", "70000")
 

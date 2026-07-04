@@ -421,24 +421,14 @@ func envFloat(key string, fallback float64) float64 {
 }
 
 func envSeconds(key string, fallback time.Duration) time.Duration {
-	value := strings.TrimSpace(os.Getenv(key))
-	if value == "" {
-		return fallback
-	}
-	if strings.ContainsAny(value, "hms") {
-		parsed, err := time.ParseDuration(value)
-		if err == nil {
-			return parsed
-		}
-	}
-	seconds, err := strconv.ParseFloat(value, 64)
-	if err != nil {
-		return fallback
-	}
-	return time.Duration(seconds * float64(time.Second))
+	return envDuration(key, fallback, time.Second)
 }
 
 func envMilliseconds(key string, fallback time.Duration) time.Duration {
+	return envDuration(key, fallback, time.Millisecond)
+}
+
+func envDuration(key string, fallback time.Duration, unit time.Duration) time.Duration {
 	value := strings.TrimSpace(os.Getenv(key))
 	if value == "" {
 		return fallback
@@ -449,11 +439,11 @@ func envMilliseconds(key string, fallback time.Duration) time.Duration {
 			return parsed
 		}
 	}
-	milliseconds, err := strconv.ParseFloat(value, 64)
+	amount, err := strconv.ParseFloat(value, 64)
 	if err != nil {
 		return fallback
 	}
-	return time.Duration(milliseconds * float64(time.Millisecond))
+	return time.Duration(amount * float64(unit))
 }
 
 func envList(key string, fallback []string) []string {
