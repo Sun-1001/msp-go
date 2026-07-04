@@ -3,6 +3,7 @@ package session
 import (
 	"context"
 	"errors"
+	"strconv"
 	"strings"
 	"time"
 
@@ -469,7 +470,7 @@ func (s *Service) BatchDeleteSessions(ctx context.Context, sessionIDs []string, 
 	if count == 0 {
 		return BatchDeleteResponse{Success: false, DeletedCount: 0, Message: "没有找到可删除的会话"}, nil
 	}
-	return BatchDeleteResponse{Success: true, DeletedCount: count, Message: "成功删除 " + intString(count) + " 个会话"}, nil
+	return BatchDeleteResponse{Success: true, DeletedCount: count, Message: "成功删除 " + strconv.Itoa(count) + " 个会话"}, nil
 }
 
 // CancelTask returns a compatible response for non-resident Go task state.
@@ -551,17 +552,4 @@ func clampInt(value int, minValue int, maxValue int, fallback int) int {
 		return maxValue
 	}
 	return value
-}
-
-func intString(value int) string {
-	if value == 0 {
-		return "0"
-	}
-	digits := []byte{}
-	current := value
-	for current > 0 {
-		digits = append([]byte{byte('0' + current%10)}, digits...)
-		current /= 10
-	}
-	return string(digits)
 }
