@@ -316,33 +316,30 @@ func parseListFilter(w http.ResponseWriter, r *http.Request) (resourceapp.ListFi
 }
 
 func parsePage(w http.ResponseWriter, r *http.Request) (int, int, bool) {
-	query := r.URL.Query()
-	page, ok := parseIntQuery(w, query.Get("page"), 1, "page")
-	if !ok {
+	pagination, err := httpquery.Pagination(r.URL.Query(), 20, 100)
+	if err != nil {
+		writeResourcePaginationError(w, err)
 		return 0, 0, false
 	}
-	pageSize, ok := parseIntQuery(w, query.Get("page_size"), 20, "page_size")
-	if !ok {
-		return 0, 0, false
-	}
-	if page < 1 {
-		writeResourceError(w, http.StatusUnprocessableEntity, "VALIDATION_ERROR", "page 必须大于等于 1")
-		return 0, 0, false
-	}
-	if pageSize < 1 || pageSize > 100 {
-		writeResourceError(w, http.StatusUnprocessableEntity, "VALIDATION_ERROR", "page_size 必须在 1 到 100 之间")
-		return 0, 0, false
-	}
-	return page, pageSize, true
+	return pagination.Page, pagination.PageSize, true
 }
 
-func parseIntQuery(w http.ResponseWriter, value string, fallback int, name string) (int, bool) {
-	parsed, err := httpquery.Int(value, fallback)
-	if err != nil {
-		writeResourceError(w, http.StatusUnprocessableEntity, "VALIDATION_ERROR", name+" 必须是整数")
-		return 0, false
+func writeResourcePaginationError(w http.ResponseWriter, err error) {
+	writeResourceError(w, http.StatusUnprocessableEntity, "VALIDATION_ERROR", paginationErrorMessage(err))
+}
+
+func paginationErrorMessage(err error) string {
+	var paginationErr httpquery.PaginationError
+	if !errors.As(err, &paginationErr) {
+		return "分页参数无效"
 	}
-	return parsed, true
+	if errors.Is(err, httpquery.ErrInvalidInt) {
+		return paginationErr.Field + " 必须是整数"
+	}
+	if paginationErr.Field == httpquery.PageField {
+		return "page 必须大于等于 1"
+	}
+	return "page_size 必须在 1 到 100 之间"
 }
 
 func parseBool(value string) bool {

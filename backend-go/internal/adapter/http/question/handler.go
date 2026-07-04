@@ -462,26 +462,15 @@ func (h *Handler) logQuestionError(message string, err error) {
 }
 
 func parseListFilter(w http.ResponseWriter, r *http.Request) (questionapp.ListFilter, bool) {
-	page, ok := parseIntQuery(w, r.URL.Query().Get("page"), 1, "page")
-	if !ok {
-		return questionapp.ListFilter{}, false
-	}
-	pageSize, ok := parseIntQuery(w, r.URL.Query().Get("page_size"), 20, "page_size")
-	if !ok {
-		return questionapp.ListFilter{}, false
-	}
-	if page < 1 {
-		writeQuestionError(w, http.StatusUnprocessableEntity, "VALIDATION_ERROR", "page 必须大于等于 1")
-		return questionapp.ListFilter{}, false
-	}
-	if pageSize < 1 || pageSize > 100 {
-		writeQuestionError(w, http.StatusUnprocessableEntity, "VALIDATION_ERROR", "page_size 必须在 1 到 100 之间")
-		return questionapp.ListFilter{}, false
-	}
 	query := r.URL.Query()
+	pagination, err := httpquery.Pagination(query, 20, 100)
+	if err != nil {
+		writeQuestionPaginationError(w, err)
+		return questionapp.ListFilter{}, false
+	}
 	return questionapp.ListFilter{
-		Page:       page,
-		PageSize:   pageSize,
+		Page:       pagination.Page,
+		PageSize:   pagination.PageSize,
 		Search:     query.Get("search"),
 		Difficulty: query.Get("difficulty"),
 		Type:       query.Get("type"),
@@ -493,13 +482,22 @@ func parseListFilter(w http.ResponseWriter, r *http.Request) (questionapp.ListFi
 	}, true
 }
 
-func parseIntQuery(w http.ResponseWriter, value string, fallback int, name string) (int, bool) {
-	parsed, err := httpquery.Int(value, fallback)
-	if err != nil {
-		writeQuestionError(w, http.StatusUnprocessableEntity, "VALIDATION_ERROR", name+" 必须是整数")
-		return 0, false
+func writeQuestionPaginationError(w http.ResponseWriter, err error) {
+	writeQuestionError(w, http.StatusUnprocessableEntity, "VALIDATION_ERROR", paginationErrorMessage(err))
+}
+
+func paginationErrorMessage(err error) string {
+	var paginationErr httpquery.PaginationError
+	if !errors.As(err, &paginationErr) {
+		return "分页参数无效"
 	}
-	return parsed, true
+	if errors.Is(err, httpquery.ErrInvalidInt) {
+		return paginationErr.Field + " 必须是整数"
+	}
+	if paginationErr.Field == httpquery.PageField {
+		return "page 必须大于等于 1"
+	}
+	return "page_size 必须在 1 到 100 之间"
 }
 
 func (r createRequest) toInput(w http.ResponseWriter) (questionapp.QuestionInput, bool) {

@@ -59,6 +59,33 @@ func TestListForwardsFilters(t *testing.T) {
 	}
 }
 
+func TestListRejectsInvalidPagination(t *testing.T) {
+	service := &fakeQuestionService{}
+	auth := &fakeAuthenticator{principal: authapp.Principal{UserID: "teacher-1", Role: user.RoleTeacher}}
+	handler := newTestHandler(t, service, auth)
+	mux := http.NewServeMux()
+	handler.Register(mux, "/api/v1/questions")
+
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodGet, "/api/v1/questions?page=0", nil)
+	request.Header.Set("Authorization", "Bearer token")
+	mux.ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("status = %d, body = %s", recorder.Code, recorder.Body.String())
+	}
+	var body map[string]string
+	if err := json.Unmarshal(recorder.Body.Bytes(), &body); err != nil {
+		t.Fatalf("invalid JSON: %v", err)
+	}
+	if body["detail"] != "page 必须大于等于 1" || body["code"] != "VALIDATION_ERROR" {
+		t.Fatalf("body = %#v", body)
+	}
+	if service.lastOwnerID != "" {
+		t.Fatalf("service was called for invalid pagination: owner=%q filter=%#v", service.lastOwnerID, service.lastFilter)
+	}
+}
+
 func TestCreateRequiresTeacherRole(t *testing.T) {
 	auth := &fakeAuthenticator{principal: authapp.Principal{UserID: "student-1", Role: user.RoleStudent}}
 	handler := newTestHandler(t, &fakeQuestionService{}, auth)
