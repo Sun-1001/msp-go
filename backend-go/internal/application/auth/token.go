@@ -3,12 +3,10 @@ package auth
 import (
 	"bytes"
 	"crypto/hmac"
-	"crypto/rand"
 	"crypto/sha256"
 	"crypto/sha512"
 	"crypto/subtle"
 	"encoding/base64"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -18,6 +16,7 @@ import (
 	"time"
 
 	"mathstudy/backend-go/internal/domain/user"
+	"mathstudy/backend-go/internal/platform/securerand"
 )
 
 const (
@@ -157,7 +156,7 @@ func (s TokenService) Decode(token string) (TokenClaims, error) {
 
 func (s TokenService) createToken(subject string, tokenType string, ttl time.Duration, extra map[string]any) (string, error) {
 	now := s.now().UTC()
-	jti, err := randomHex(16)
+	jti, err := securerand.Hex(16)
 	if err != nil {
 		return "", err
 	}
@@ -231,14 +230,6 @@ func decodeSegment(segment string, target any) error {
 		return err
 	}
 	return nil
-}
-
-func randomHex(size int) (string, error) {
-	data := make([]byte, size)
-	if _, err := rand.Read(data); err != nil {
-		return "", err
-	}
-	return hex.EncodeToString(data), nil
 }
 
 func claimMatches(value any, want string) bool {

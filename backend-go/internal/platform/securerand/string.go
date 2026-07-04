@@ -2,12 +2,34 @@ package securerand
 
 import (
 	"crypto/rand"
+	"encoding/hex"
 	"errors"
 	"io"
 	"strings"
 )
 
 var randomReader io.Reader = rand.Reader
+
+// Bytes returns length cryptographically secure random bytes.
+func Bytes(length int) ([]byte, error) {
+	if length < 0 {
+		return nil, errors.New("secure random byte length is negative")
+	}
+	data := make([]byte, length)
+	if _, err := io.ReadFull(randomReader, data); err != nil {
+		return nil, err
+	}
+	return data, nil
+}
+
+// Hex returns length random bytes encoded as lower-case hexadecimal text.
+func Hex(length int) (string, error) {
+	data, err := Bytes(length)
+	if err != nil {
+		return "", err
+	}
+	return hex.EncodeToString(data), nil
+}
 
 // Byte returns one byte selected uniformly from an ASCII alphabet.
 func Byte(alphabet string) (byte, error) {

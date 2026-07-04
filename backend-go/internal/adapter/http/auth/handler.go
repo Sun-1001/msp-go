@@ -2,9 +2,7 @@ package authhttp
 
 import (
 	"context"
-	"crypto/rand"
 	"crypto/subtle"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"log/slog"
@@ -17,6 +15,7 @@ import (
 	"mathstudy/backend-go/internal/platform/config"
 	"mathstudy/backend-go/internal/platform/httpjson"
 	"mathstudy/backend-go/internal/platform/redact"
+	"mathstudy/backend-go/internal/platform/securerand"
 )
 
 const (
@@ -446,11 +445,7 @@ func (h *Handler) requireCSRF(w http.ResponseWriter, r *http.Request) bool {
 }
 
 func newCSRFToken() (string, error) {
-	data := make([]byte, csrfTokenBytes)
-	if _, err := rand.Read(data); err != nil {
-		return "", err
-	}
-	return hex.EncodeToString(data), nil
+	return securerand.Hex(csrfTokenBytes)
 }
 
 func decodeRequest(w http.ResponseWriter, r *http.Request, target any) bool {

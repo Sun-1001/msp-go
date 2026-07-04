@@ -21,6 +21,50 @@ func TestStringUsesUniformAlphabetIndexes(t *testing.T) {
 	}
 }
 
+func TestBytesAndHexUseRandomReader(t *testing.T) {
+	restore := replaceRandomReader(bytes.NewReader([]byte{0x00, 0x0f, 0x10, 0xff}))
+	defer restore()
+
+	data, err := Bytes(2)
+	if err != nil {
+		t.Fatalf("Bytes() error = %v", err)
+	}
+	if !bytes.Equal(data, []byte{0x00, 0x0f}) {
+		t.Fatalf("Bytes() = %x", data)
+	}
+
+	encoded, err := Hex(2)
+	if err != nil {
+		t.Fatalf("Hex() error = %v", err)
+	}
+	if encoded != "10ff" {
+		t.Fatalf("Hex() = %q", encoded)
+	}
+}
+
+func TestBytesRejectsNegativeLength(t *testing.T) {
+	if _, err := Bytes(-1); err == nil {
+		t.Fatal("Bytes() error = nil for negative length")
+	}
+	if _, err := Hex(-1); err == nil {
+		t.Fatal("Hex() error = nil for negative length")
+	}
+}
+
+func TestBytesReturnsReaderErrors(t *testing.T) {
+	want := errors.New("entropy unavailable")
+	restore := replaceRandomReader(errReader{err: want})
+	defer restore()
+
+	got, err := Bytes(1)
+	if !errors.Is(err, want) {
+		t.Fatalf("Bytes() error = %v, want %v", err, want)
+	}
+	if got != nil {
+		t.Fatalf("Bytes() = %x, want nil", got)
+	}
+}
+
 func TestStringRejectsInvalidInputs(t *testing.T) {
 	if _, err := String(-1, "ABC"); err == nil {
 		t.Fatal("String() error = nil for negative length")

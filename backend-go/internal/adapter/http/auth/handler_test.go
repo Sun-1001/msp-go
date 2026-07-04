@@ -58,7 +58,7 @@ func TestLoginSetsRefreshCookieAndReturnsAccessToken(t *testing.T) {
 		t.Fatalf("cookie flags = %#v", refreshCookie)
 	}
 	csrfCookie := cookieByName(t, recorder.Result().Cookies(), csrfCookieName)
-	if csrfCookie.Value == "" || csrfCookie.Path != "/" || csrfCookie.HttpOnly || csrfCookie.Secure {
+	if len(csrfCookie.Value) != csrfTokenBytes*2 || csrfCookie.Path != "/" || csrfCookie.HttpOnly || csrfCookie.Secure {
 		t.Fatalf("csrf cookie = %#v", csrfCookie)
 	}
 }
@@ -226,7 +226,7 @@ func TestRefreshRotatesRefreshAndCSRFCookies(t *testing.T) {
 	if cookieByName(t, cookies, refreshCookieName).Value != "new-refresh-token" {
 		t.Fatalf("cookies = %#v", cookies)
 	}
-	if csrfCookie := cookieByName(t, cookies, csrfCookieName); csrfCookie.Value == "" || csrfCookie.Value == "csrf-token" {
+	if csrfCookie := cookieByName(t, cookies, csrfCookieName); len(csrfCookie.Value) != csrfTokenBytes*2 || csrfCookie.Value == "csrf-token" {
 		t.Fatalf("csrf cookie was not rotated: %#v", csrfCookie)
 	}
 }
