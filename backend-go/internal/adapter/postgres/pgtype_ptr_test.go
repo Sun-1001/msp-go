@@ -17,6 +17,20 @@ func TestTextPtr(t *testing.T) {
 	}
 }
 
+func TestBoolPtr(t *testing.T) {
+	got := boolPtr(pgtype.Bool{Bool: true, Valid: true})
+	if got == nil || *got != true {
+		t.Fatalf("boolPtr(valid true) = %#v, want true", got)
+	}
+	got = boolPtr(pgtype.Bool{Bool: false, Valid: true})
+	if got == nil || *got != false {
+		t.Fatalf("boolPtr(valid false) = %#v, want false", got)
+	}
+	if got := boolPtr(pgtype.Bool{}); got != nil {
+		t.Fatalf("boolPtr(invalid) = %#v, want nil", got)
+	}
+}
+
 func TestIntPtr(t *testing.T) {
 	got := intPtr(pgtype.Int4{Int32: 42, Valid: true})
 	if got == nil || *got != 42 {

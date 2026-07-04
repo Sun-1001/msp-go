@@ -13,6 +13,13 @@ func textPtr(value pgtype.Text) *string {
 	return &value.String
 }
 
+func boolPtr(value pgtype.Bool) *bool {
+	if !value.Valid {
+		return nil
+	}
+	return &value.Bool
+}
+
 func intPtr(value pgtype.Int4) *int {
 	if !value.Valid {
 		return nil

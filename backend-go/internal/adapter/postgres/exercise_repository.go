@@ -351,14 +351,8 @@ func (r ExerciseRepository) ListDKTStates(ctx context.Context, userID string, co
 		); err != nil {
 			return nil, err
 		}
-		if lastOutcome.Valid {
-			value := lastOutcome.Bool
-			state.LastOutcome = &value
-		}
-		if lastExerciseID.Valid {
-			value := lastExerciseID.String
-			state.LastExerciseID = &value
-		}
+		state.LastOutcome = boolPtr(lastOutcome)
+		state.LastExerciseID = textPtr(lastExerciseID)
 		state.LastAttemptAt = timestampPtr(lastAttemptAt)
 		states[state.ConceptID] = state
 	}
@@ -594,10 +588,7 @@ func scanOptionalExerciseSession(row pgx.Row) (exerciseapp.LearningSession, bool
 		}
 		return exerciseapp.LearningSession{}, false, err
 	}
-	if currentContent.Valid {
-		value := currentContent.String
-		session.CurrentContentID = &value
-	}
+	session.CurrentContentID = textPtr(currentContent)
 	attempted, err := decodeStringSlice(attemptedRaw)
 	if err != nil {
 		return exerciseapp.LearningSession{}, false, fmt.Errorf("decode contents attempted: %w", err)
