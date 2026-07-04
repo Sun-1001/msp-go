@@ -7,6 +7,7 @@ import (
 	"time"
 
 	uploadapp "mathstudy/backend-go/internal/application/upload"
+	"mathstudy/backend-go/internal/platform/sliceutil"
 )
 
 // ErrNotFound is returned when the session is absent or not owned by the user.
@@ -483,7 +484,7 @@ func toMessageResponses(messages []Message) []MessageResponse {
 			Content:     message.Content,
 			Agent:       copyOptionalString(message.Agent),
 			Timestamp:   formatTime(message.CreatedAt),
-			Attachments: copyStrings(message.Attachments),
+			Attachments: sliceutil.CloneStrings(message.Attachments),
 		})
 	}
 	return responses
@@ -555,15 +556,6 @@ func copyOptionalString(value *string) *string {
 	}
 	copied := *value
 	return &copied
-}
-
-func copyStrings(values []string) []string {
-	if values == nil {
-		return []string{}
-	}
-	result := make([]string, len(values))
-	copy(result, values)
-	return result
 }
 
 func clampInt(value int, minValue int, maxValue int, fallback int) int {

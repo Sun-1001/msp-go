@@ -9,6 +9,7 @@ import (
 	"time"
 
 	uploadapp "mathstudy/backend-go/internal/application/upload"
+	"mathstudy/backend-go/internal/platform/sliceutil"
 )
 
 // Public exercise errors mapped by the HTTP layer.
@@ -542,7 +543,7 @@ func (s *Service) GetExercise(ctx context.Context, userID string, exerciseID str
 		Content:         exercise.Body,
 		Difficulty:      exercise.Difficulty,
 		Type:            metaStringDefault(exercise.Meta, "type", "short_answer"),
-		KnowledgePoints: copyStrings(exercise.ConceptIDs),
+		KnowledgePoints: sliceutil.CloneStrings(exercise.ConceptIDs),
 		Hints:           metaStringSlice(exercise.Meta, "hints"),
 		Options:         metaOptionalStringSlice(exercise.Meta, "options"),
 	}, nil
@@ -816,7 +817,7 @@ func toExerciseResponse(exercise Exercise) *ExerciseResponse {
 		Content:              exercise.Body,
 		Difficulty:           exercise.Difficulty,
 		Type:                 metaStringDefault(exercise.Meta, "type", "short_answer"),
-		KnowledgePoints:      copyStrings(exercise.ConceptIDs),
+		KnowledgePoints:      sliceutil.CloneStrings(exercise.ConceptIDs),
 		HintsAvailable:       len(metaStringSlice(exercise.Meta, "hints")) > 0,
 		EstimatedTimeSeconds: metaIntDefault(exercise.Meta, "estimated_time_seconds", 300),
 		Options:              metaOptionalStringSlice(exercise.Meta, "options"),
@@ -880,7 +881,7 @@ func basicDiagnosis(reason string, imageOnly bool, concepts []string) *Diagnosis
 		ErrorStepIndex:   nil,
 		Severity:         taxonomy.Severity,
 		Suggestion:       nonEmptyString(taxonomy.Suggestion, suggestion),
-		RelatedConcepts:  copyStrings(concepts),
+		RelatedConcepts:  sliceutil.CloneStrings(concepts),
 	}
 }
 
@@ -1017,7 +1018,7 @@ func readStringSlice(meta map[string]any, key string) ([]string, bool) {
 	}
 	switch typed := value.(type) {
 	case []string:
-		return copyStrings(typed), true
+		return sliceutil.CloneStrings(typed), true
 	case []any:
 		result := make([]string, 0, len(typed))
 		for _, item := range typed {
@@ -1046,7 +1047,7 @@ func metaIntDefault(meta map[string]any, key string, fallback int) int {
 }
 
 func appendUnique(values []string, value string) []string {
-	result := copyStrings(values)
+	result := sliceutil.CloneStrings(values)
 	if !containsString(result, value) {
 		result = append(result, value)
 	}
@@ -1060,15 +1061,6 @@ func containsString(values []string, value string) bool {
 		}
 	}
 	return false
-}
-
-func copyStrings(values []string) []string {
-	if values == nil {
-		return []string{}
-	}
-	result := make([]string, len(values))
-	copy(result, values)
-	return result
 }
 
 func uniqueNonEmpty(values []string) []string {

@@ -12,6 +12,7 @@ import (
 	"github.com/jackc/pgx/v5"
 
 	questionapp "mathstudy/backend-go/internal/application/question"
+	"mathstudy/backend-go/internal/platform/sliceutil"
 )
 
 // QuestionRepository persists teacher question bank data in PostgreSQL.
@@ -192,10 +193,10 @@ func (r QuestionRepository) UpdateQuestion(ctx context.Context, ownerID string, 
 		current.Difficulty = *update.Difficulty
 	}
 	if update.ConceptIDs != nil {
-		current.ConceptIDs = copyStringSlice(*update.ConceptIDs)
+		current.ConceptIDs = sliceutil.CloneStrings(*update.ConceptIDs)
 	}
 	if update.Tags != nil {
-		current.Tags = copyStringSlice(*update.Tags)
+		current.Tags = sliceutil.CloneStrings(*update.Tags)
 	}
 	if update.Status != nil {
 		status, ok := questionStatusToDB(*update.Status)
@@ -959,7 +960,7 @@ func stringSliceFromMeta(meta map[string]any, key string) []string {
 	values, ok := value.([]any)
 	if !ok {
 		if typed, ok := value.([]string); ok {
-			return copyStringSlice(typed)
+			return sliceutil.CloneStrings(typed)
 		}
 		return []string{}
 	}

@@ -7,6 +7,8 @@ import (
 	"sort"
 	"strings"
 	"time"
+
+	"mathstudy/backend-go/internal/platform/sliceutil"
 )
 
 var (
@@ -583,7 +585,7 @@ func toMistakeItem(item listItemData) MistakeItem {
 			Title:           nonEmpty(row.Content.Title, "无标题"),
 			Content:         row.Content.Body,
 			Difficulty:      row.Content.Difficulty,
-			KnowledgePoints: copyStrings(row.Content.ConceptIDs),
+			KnowledgePoints: sliceutil.CloneStrings(row.Content.ConceptIDs),
 		},
 		Attempt: MistakeAttempt{
 			StudentAnswer:    row.Attempt.StudentAnswer,
@@ -599,7 +601,7 @@ func toMistakeItem(item listItemData) MistakeItem {
 			Severity:        row.Diagnosis.Severity,
 			Explanation:     row.Diagnosis.Explanation,
 			Suggestion:      row.Diagnosis.Suggestion,
-			RelatedConcepts: copyStrings(row.Diagnosis.RelatedConceptIDs),
+			RelatedConcepts: sliceutil.CloneStrings(row.Diagnosis.RelatedConceptIDs),
 		},
 		Mastery: MistakeMastery{
 			Current:  item.avgMastery,
@@ -623,12 +625,12 @@ func toDetailResponse(row MistakeRow, history []MistakeHistory) DetailResponse {
 			Title:           nonEmpty(row.Content.Title, "无标题"),
 			Content:         row.Content.Body,
 			Difficulty:      row.Content.Difficulty,
-			KnowledgePoints: copyStrings(row.Content.ConceptIDs),
+			KnowledgePoints: sliceutil.CloneStrings(row.Content.ConceptIDs),
 			Hints:           metaStringSlice(row.Content.Meta, "hints"),
 		},
 		Attempt: MistakeDetailAttempt{
 			StudentAnswer:    row.Attempt.StudentAnswer,
-			StudentSteps:     copyStrings(row.Attempt.StudentSteps),
+			StudentSteps:     sliceutil.CloneStrings(row.Attempt.StudentSteps),
 			CorrectAnswer:    metaString(row.Content.Meta, "answer"),
 			SubmittedAt:      optionalTimeString(row.Attempt.SubmittedAt),
 			TimeSpentSeconds: row.Attempt.TimeSpentSeconds,
@@ -638,7 +640,7 @@ func toDetailResponse(row MistakeRow, history []MistakeHistory) DetailResponse {
 			ErrorStepIndex:  copyOptionalInt(row.Diagnosis.ErrorStepIndex),
 			Explanation:     row.Diagnosis.Explanation,
 			Suggestion:      row.Diagnosis.Suggestion,
-			RelatedConcepts: copyStrings(row.Diagnosis.RelatedConceptIDs),
+			RelatedConcepts: sliceutil.CloneStrings(row.Diagnosis.RelatedConceptIDs),
 		},
 		Solution: MistakeSolution{
 			Answer: metaString(row.Content.Meta, "answer"),
@@ -658,7 +660,7 @@ func toReviewResponse(candidate reviewCandidate) ReviewExerciseResponse {
 			Content:         row.Content.Body,
 			Difficulty:      row.Content.Difficulty,
 			Type:            contentTypeValue(row.Content.Type),
-			KnowledgePoints: copyStrings(row.Content.ConceptIDs),
+			KnowledgePoints: sliceutil.CloneStrings(row.Content.ConceptIDs),
 			HintsAvailable:  len(metaStringSlice(row.Content.Meta, "hints")) > 0,
 		},
 		Context: ReviewContext{
@@ -908,7 +910,7 @@ func metaStringSlice(meta map[string]any, key string) []string {
 	}
 	switch typed := value.(type) {
 	case []string:
-		return copyStrings(typed)
+		return sliceutil.CloneStrings(typed)
 	case []any:
 		result := make([]string, 0, len(typed))
 		for _, item := range typed {
@@ -945,15 +947,6 @@ func nonEmpty(value string, fallback string) string {
 		return fallback
 	}
 	return value
-}
-
-func copyStrings(values []string) []string {
-	if values == nil {
-		return []string{}
-	}
-	result := make([]string, len(values))
-	copy(result, values)
-	return result
 }
 
 func copyOptionalString(value *string) *string {

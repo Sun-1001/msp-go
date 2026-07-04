@@ -13,6 +13,7 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 
 	resourceapp "mathstudy/backend-go/internal/application/resource"
+	"mathstudy/backend-go/internal/platform/sliceutil"
 )
 
 // ResourceRepository persists resource center data in PostgreSQL.
@@ -191,7 +192,7 @@ func (r ResourceRepository) updateResource(ctx context.Context, resourceID strin
 		difficulty = *input.Difficulty
 	}
 	if input.TagsSet {
-		tags = copyStringSlice(input.Tags)
+		tags = sliceutil.CloneStrings(input.Tags)
 	}
 	for key, value := range map[string]any{
 		"chapter":      input.Chapter,
@@ -759,13 +760,4 @@ func intFromAny(value any) (int, bool) {
 	default:
 		return 0, false
 	}
-}
-
-func copyStringSlice(values []string) []string {
-	if values == nil {
-		return []string{}
-	}
-	result := make([]string, len(values))
-	copy(result, values)
-	return result
 }
