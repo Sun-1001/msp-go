@@ -5,6 +5,8 @@ import (
 	"math"
 	"sort"
 	"strings"
+
+	"mathstudy/backend-go/internal/platform/numutil"
 )
 
 const (
@@ -33,7 +35,7 @@ func buildDKTSequence(history []LearningInteraction, current LearningInteraction
 		if len(item.ConceptIDs) == 0 {
 			continue
 		}
-		item.Difficulty = clamp(item.Difficulty, 0, 1)
+		item.Difficulty = numutil.ClampFloat(item.Difficulty, 0, 1)
 		if item.ExerciseID == current.ExerciseID && item.SubmittedAt.Equal(current.SubmittedAt) {
 			seenCurrent = true
 		}
@@ -52,17 +54,17 @@ func buildDKTSequence(history []LearningInteraction, current LearningInteraction
 }
 
 func dktColdStartMastery(preferredDifficulty float64, learningPace float64, itemDifficulty float64) float64 {
-	preferred := clamp(preferredDifficulty, 0, 1)
-	difficulty := clamp(itemDifficulty, 0, 1)
-	pace := clamp(learningPace, 0.2, 2.0)
-	return clamp(0.45+0.12*(preferred-difficulty)+0.05*(pace-1.0), 0.15, 0.75)
+	preferred := numutil.ClampFloat(preferredDifficulty, 0, 1)
+	difficulty := numutil.ClampFloat(itemDifficulty, 0, 1)
+	pace := numutil.ClampFloat(learningPace, 0.2, 2.0)
+	return numutil.ClampFloat(0.45+0.12*(preferred-difficulty)+0.05*(pace-1.0), 0.15, 0.75)
 }
 
 func dktUpdate(priorMastery float64, targetConcept string, current LearningInteraction, sequence []LearningInteraction, profile StudentProfile, errorType string, attemptCount int) dktResult {
-	prior := clamp(priorMastery, 0.001, 0.999)
-	difficulty := clamp(current.Difficulty, 0, 1)
-	abilityGap := clamp(profile.PreferredDifficulty-difficulty, -1, 1)
-	pace := clamp(profile.LearningPace, 0.2, 2.0)
+	prior := numutil.ClampFloat(priorMastery, 0.001, 0.999)
+	difficulty := numutil.ClampFloat(current.Difficulty, 0, 1)
+	abilityGap := numutil.ClampFloat(profile.PreferredDifficulty-difficulty, -1, 1)
+	pace := numutil.ClampFloat(profile.LearningPace, 0.2, 2.0)
 
 	attentionSignal, attentionWeight := attentionSignal(targetConcept, current, sequence)
 	currentGain := 0.18 + 0.05*abilityGap + 0.03*(pace-1)
@@ -76,16 +78,16 @@ func dktUpdate(priorMastery float64, targetConcept string, current LearningInter
 
 	next := prior
 	if current.IsCorrect {
-		next += clamp(currentGain, 0.08, 0.3) * (1 - prior)
+		next += numutil.ClampFloat(currentGain, 0.08, 0.3) * (1 - prior)
 	} else {
-		next -= clamp(currentLoss, 0.12, 0.38) * prior
+		next -= numutil.ClampFloat(currentLoss, 0.12, 0.38) * prior
 	}
 	next += 0.10 * attentionSignal
-	next = clamp(next, 0.001, 0.999)
+	next = numutil.ClampFloat(next, 0.001, 0.999)
 
 	effectiveAttempts := math.Max(float64(attemptCount), 0) + 1
 	sequenceFactor := math.Log1p(float64(len(sequence))) / math.Log1p(dktMaxSequenceLength)
-	confidence := clamp(0.18+0.44*(1-math.Exp(-effectiveAttempts/5.0))+0.28*sequenceFactor+0.10*attentionWeight, 0, 1)
+	confidence := numutil.ClampFloat(0.18+0.44*(1-math.Exp(-effectiveAttempts/5.0))+0.28*sequenceFactor+0.10*attentionWeight, 0, 1)
 	return dktResult{
 		mastery:         next,
 		confidence:      confidence,
@@ -126,10 +128,10 @@ func attentionSignal(targetConcept string, current LearningInteraction, sequence
 			outcome = 1.0
 		}
 		relevance := conceptRelevance(targetConcept, current.ConceptIDs, item.ConceptIDs)
-		difficultyWeight := 0.75 + 0.25*clamp(item.Difficulty, 0, 1)
+		difficultyWeight := 0.75 + 0.25*numutil.ClampFloat(item.Difficulty, 0, 1)
 		weightedSignal += attention * outcome * relevance * difficultyWeight
 	}
-	return clamp(weightedSignal, -1, 1), clamp(maxAttention*float64(len(sequence)), 0, 1)
+	return numutil.ClampFloat(weightedSignal, -1, 1), numutil.ClampFloat(maxAttention*float64(len(sequence)), 0, 1)
 }
 
 func conceptRelevance(targetConcept string, currentConcepts []string, itemConcepts []string) float64 {
@@ -155,7 +157,7 @@ func interactionEmbedding(item LearningInteraction, position int, sequenceLength
 	} else {
 		addTokenEmbedding(vector, "response:incorrect", 0.65)
 	}
-	vector[dktEmbeddingDim-1] += clamp(item.Difficulty, 0, 1) - 0.5
+	vector[dktEmbeddingDim-1] += numutil.ClampFloat(item.Difficulty, 0, 1) - 0.5
 
 	pos := float64(position)
 	if sequenceLength > 1 {
@@ -221,5 +223,5 @@ func applyForgetting(mastery float64, daysSinceLast float64, floor float64) floa
 		return mastery
 	}
 	decayed := floor + (mastery-floor)*math.Exp(-0.025*daysSinceLast)
-	return clamp(decayed, 0.001, 0.999)
+	return numutil.ClampFloat(decayed, 0.001, 0.999)
 }

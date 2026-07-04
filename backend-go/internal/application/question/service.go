@@ -9,6 +9,7 @@ import (
 	"time"
 	"unicode"
 
+	"mathstudy/backend-go/internal/platform/numutil"
 	"mathstudy/backend-go/internal/platform/sliceutil"
 )
 
@@ -441,10 +442,10 @@ func (s *Service) GenerateIsomorphicProblem(_ context.Context, request GenerateR
 	if template != "integral_power_exp" {
 		return GeneratedQuestion{}, ErrBadRequest
 	}
-	ability := clampFloat(request.Ability, 0, 1)
+	ability := numutil.ClampFloat(request.Ability, 0, 1)
 	targetDifficulty := ability
 	if request.Difficulty != nil {
-		targetDifficulty = clampFloat(*request.Difficulty, 0, 1)
+		targetDifficulty = numutil.ClampFloat(*request.Difficulty, 0, 1)
 	}
 	complexity := int(math.Round(1 + targetDifficulty*4))
 	if complexity < 1 {
@@ -461,7 +462,7 @@ func (s *Service) GenerateIsomorphicProblem(_ context.Context, request GenerateR
 	if a > 5 {
 		a = 5
 	}
-	difficulty := clampFloat(0.18+0.13*float64(n)+0.05*float64(a-1), 0.2, 0.95)
+	difficulty := numutil.ClampFloat(0.18+0.13*float64(n)+0.05*float64(a-1), 0.2, 0.95)
 	answer := integralPowerExpAnswer(n, a)
 	body := fmt.Sprintf("计算不定积分：$\\int x^%d e^{%dx}\\,dx$。", n, a)
 	if n == 1 {
@@ -824,16 +825,6 @@ func factorial(value int) int {
 		result *= i
 	}
 	return result
-}
-
-func clampFloat(value float64, min float64, max float64) float64 {
-	if value < min {
-		return min
-	}
-	if value > max {
-		return max
-	}
-	return value
 }
 
 func firstNonEmptyLine(text string) string {

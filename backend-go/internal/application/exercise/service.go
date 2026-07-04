@@ -764,7 +764,7 @@ func chooseTarget(query NextQuery, mastery map[string]float64) (string, float64)
 		targetDifficulty = *query.Difficulty
 	}
 	if targetConcept != "" || query.Difficulty != nil || len(mastery) == 0 {
-		return targetConcept, clamp(targetDifficulty, 0, 1)
+		return targetConcept, numutil.ClampFloat(targetDifficulty, 0, 1)
 	}
 	keys := maputil.SortedFloatKeys(mastery)
 	midConcept := ""
@@ -785,7 +785,7 @@ func chooseTarget(query NextQuery, mastery map[string]float64) (string, float64)
 		return weakestConcept, math.Max(0.2, weakestMastery)
 	}
 	if midConcept != "" {
-		return midConcept, clamp(midMastery+0.1, 0, 1)
+		return midConcept, numutil.ClampFloat(midMastery+0.1, 0, 1)
 	}
 	return "", targetDifficulty
 }
@@ -1060,14 +1060,4 @@ func boolInt(value bool) int {
 		return 1
 	}
 	return 0
-}
-
-func clamp(value float64, floor float64, ceiling float64) float64 {
-	if value < floor {
-		return floor
-	}
-	if value > ceiling {
-		return ceiling
-	}
-	return value
 }
