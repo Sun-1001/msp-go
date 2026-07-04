@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"mathstudy/backend-go/internal/platform/maputil"
+	"mathstudy/backend-go/internal/platform/timefmt"
 )
 
 const (
@@ -295,7 +296,7 @@ func (s *Service) GetOverview(ctx context.Context, userID string) (Overview, err
 
 	var recent *RecentContent
 	if latest != nil {
-		recent = &RecentContent{LastAccessed: latest.Format("2006-01-02T15:04:05.999999")}
+		recent = &RecentContent{LastAccessed: timefmt.DateTimeMicros(*latest)}
 	}
 
 	return Overview{
@@ -576,8 +577,8 @@ func (s *Service) GetStatistics(ctx context.Context, userID string, rangeType st
 	return StatisticsResponse{
 		RangeDays:             rangeDays,
 		Interval:              interval,
-		StartDate:             dateString(startDate),
-		EndDate:               dateString(today),
+		StartDate:             timefmt.Date(startDate),
+		EndDate:               timefmt.Date(today),
 		Daily:                 daily,
 		ErrorTypeDistribution: distribution,
 	}, nil
@@ -677,12 +678,12 @@ func (s *Service) calculateStreakDays(ctx context.Context, userID string) (int, 
 	}
 	activeDays := make(map[string]struct{}, len(days))
 	for _, day := range days {
-		activeDays[dateString(day)] = struct{}{}
+		activeDays[timefmt.Date(day)] = struct{}{}
 	}
 	streak := 0
 	current := startOfDay(s.now())
 	for {
-		if _, ok := activeDays[dateString(current)]; !ok {
+		if _, ok := activeDays[timefmt.Date(current)]; !ok {
 			return streak, nil
 		}
 		streak++
@@ -834,7 +835,7 @@ func learningRecommendation(status string) string {
 func buildDailyStats(interval string, startDate time.Time, today time.Time, rangeDays int, rows []PeriodStat) []DailyStat {
 	statsByDate := make(map[string]PeriodStat, len(rows))
 	for _, row := range rows {
-		statsByDate[dateString(row.Date)] = row
+		statsByDate[timefmt.Date(row.Date)] = row
 	}
 
 	if interval == "day" {
@@ -844,9 +845,9 @@ func buildDailyStats(interval string, startDate time.Time, today time.Time, rang
 			if day.After(today) {
 				break
 			}
-			row := statsByDate[dateString(day)]
+			row := statsByDate[timefmt.Date(day)]
 			daily = append(daily, DailyStat{
-				Date:             dateString(day),
+				Date:             timefmt.Date(day),
 				Exercises:        row.Exercises,
 				CorrectExercises: row.CorrectExercises,
 				StudyMinutes:     row.StudySeconds / 60,
@@ -865,9 +866,9 @@ func buildDailyStats(interval string, startDate time.Time, today time.Time, rang
 		if weekStart.Before(startDate) {
 			continue
 		}
-		row := statsByDate[dateString(weekStart)]
+		row := statsByDate[timefmt.Date(weekStart)]
 		daily = append(daily, DailyStat{
-			Date:             dateString(weekStart),
+			Date:             timefmt.Date(weekStart),
 			Exercises:        row.Exercises,
 			CorrectExercises: row.CorrectExercises,
 			StudyMinutes:     row.StudySeconds / 60,
@@ -956,10 +957,6 @@ func weekdayMondayIndex(value time.Time) int {
 		return 6
 	}
 	return weekday - 1
-}
-
-func dateString(value time.Time) string {
-	return value.Format("2006-01-02")
 }
 
 func normalizeTarget(value string) string {

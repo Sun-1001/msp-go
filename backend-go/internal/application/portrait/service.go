@@ -8,6 +8,8 @@ import (
 	"sort"
 	"strings"
 	"time"
+
+	"mathstudy/backend-go/internal/platform/timefmt"
 )
 
 // Repository is the persistence surface required by student portrait use cases.
@@ -127,7 +129,7 @@ func (s *Service) GeneratePortrait(ctx context.Context, userID string) (Generate
 	}
 	return GenerateResponse{
 		PortraitContent:     valueOrEmpty(saved.PortraitContent),
-		PortraitGeneratedAt: formatTime(generatedAt),
+		PortraitGeneratedAt: timefmt.DateTimeMicros(generatedAt),
 		PortraitVersion:     saved.PortraitVersion,
 	}, nil
 }
@@ -184,7 +186,7 @@ func toPortraitResponse(profile Profile) PortraitResponse {
 	return PortraitResponse{
 		StudentID:             profile.StudentID,
 		PortraitContent:       profile.PortraitContent,
-		PortraitGeneratedAt:   optionalFormattedTime(profile.PortraitGeneratedAt),
+		PortraitGeneratedAt:   timefmt.OptionalDateTimeMicros(profile.PortraitGeneratedAt),
 		PortraitVersion:       profile.PortraitVersion,
 		TotalExercises:        profile.TotalExercises,
 		CorrectRate:           round2(ratio(profile.CorrectCount, profile.TotalExercises)),
@@ -250,18 +252,6 @@ func normalizeProfile(profile Profile) Profile {
 		profile.RecentConcepts = []string{}
 	}
 	return profile
-}
-
-func optionalFormattedTime(value *time.Time) *string {
-	if value == nil {
-		return nil
-	}
-	formatted := formatTime(*value)
-	return &formatted
-}
-
-func formatTime(value time.Time) string {
-	return value.Format("2006-01-02T15:04:05.999999")
 }
 
 func valueOrEmpty(value *string) string {

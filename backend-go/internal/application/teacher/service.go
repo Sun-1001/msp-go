@@ -12,6 +12,7 @@ import (
 	"mathstudy/backend-go/internal/platform/identifier"
 	"mathstudy/backend-go/internal/platform/maputil"
 	"mathstudy/backend-go/internal/platform/sliceutil"
+	"mathstudy/backend-go/internal/platform/timefmt"
 )
 
 var (
@@ -579,12 +580,12 @@ func (s *Service) GetStudentDetail(ctx context.Context, teacherID string, studen
 
 	var joinedAt *string
 	if enrollment.JoinedAt != nil {
-		value := formatDateTime(*enrollment.JoinedAt)
+		value := timefmt.DateTimeMicros(*enrollment.JoinedAt)
 		joinedAt = &value
 	}
 	var lastActiveText *string
 	if lastActive != nil {
-		value := formatDateTime(*lastActive)
+		value := timefmt.DateTimeMicros(*lastActive)
 		lastActiveText = &value
 	}
 	return StudentDetailResponse{
@@ -705,13 +706,13 @@ func (s *Service) weeklyActivity(ctx context.Context, studentIDs []string, total
 	items := make([]WeeklyActivityItem, 0, 7)
 	for offset := 6; offset >= 0; offset-- {
 		day := today.AddDate(0, 0, -offset)
-		count := rows[dateString(day)]
+		count := rows[timefmt.Date(day)]
 		rate := 0.0
 		if total > 0 {
 			rate = round1(float64(count) / float64(total) * 100)
 		}
 		items = append(items, WeeklyActivityItem{
-			Date:       dateString(day),
+			Date:       timefmt.Date(day),
 			DayLabel:   dayLabels[int(day.Weekday())],
 			ActiveRate: rate,
 		})
@@ -871,12 +872,12 @@ func (s *Service) streakDays(ctx context.Context, studentID string) (int, error)
 	}
 	active := make(map[string]struct{}, len(days))
 	for _, day := range days {
-		active[dateString(day)] = struct{}{}
+		active[timefmt.Date(day)] = struct{}{}
 	}
 	current := startOfDay(s.now())
 	streak := 0
 	for {
-		if _, ok := active[dateString(current)]; !ok {
+		if _, ok := active[timefmt.Date(current)]; !ok {
 			return streak, nil
 		}
 		streak++
@@ -934,7 +935,7 @@ func (s *Service) recentActivity(ctx context.Context, studentID string) ([]Stude
 				ID:      attempt.ID,
 				Type:    "exercise",
 				Content: content,
-				Time:    formatDateTime(attempt.StartedAt),
+				Time:    timefmt.DateTimeMicros(attempt.StartedAt),
 				Status:  status,
 			},
 			at: attempt.StartedAt,
@@ -951,7 +952,7 @@ func (s *Service) recentActivity(ctx context.Context, studentID string) ([]Stude
 				ID:      session.ID,
 				Type:    "session",
 				Content: content,
-				Time:    formatDateTime(session.StartedAt),
+				Time:    timefmt.DateTimeMicros(session.StartedAt),
 				Status:  "info",
 			},
 			at: session.StartedAt,
@@ -1101,14 +1102,6 @@ func nameOrUnknown(names map[string]string, id string) string {
 
 func startOfDay(value time.Time) time.Time {
 	return time.Date(value.Year(), value.Month(), value.Day(), 0, 0, 0, 0, value.Location())
-}
-
-func dateString(value time.Time) string {
-	return value.Format("2006-01-02")
-}
-
-func formatDateTime(value time.Time) string {
-	return value.Format("2006-01-02T15:04:05.999999")
 }
 
 func round1(value float64) float64 {

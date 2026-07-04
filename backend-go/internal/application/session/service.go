@@ -9,6 +9,7 @@ import (
 	uploadapp "mathstudy/backend-go/internal/application/upload"
 	"mathstudy/backend-go/internal/platform/ptrutil"
 	"mathstudy/backend-go/internal/platform/sliceutil"
+	"mathstudy/backend-go/internal/platform/timefmt"
 )
 
 // ErrNotFound is returned when the session is absent or not owned by the user.
@@ -241,13 +242,13 @@ func (s *Service) CreateSession(ctx context.Context, userID string, topic *strin
 		Topic:     topic,
 		Mode:      mode,
 		Status:    "active",
-		CreatedAt: formatTime(now),
+		CreatedAt: timefmt.DateTimeMicros(now),
 		WelcomeMessage: MessageResponse{
 			ID:          messageID,
 			Role:        "assistant",
 			Content:     welcome.Content,
 			Agent:       &agent,
-			Timestamp:   formatTime(now),
+			Timestamp:   timefmt.DateTimeMicros(now),
 			Attachments: []string{},
 		},
 	}, nil
@@ -484,7 +485,7 @@ func toMessageResponses(messages []Message) []MessageResponse {
 			Role:        message.Role,
 			Content:     message.Content,
 			Agent:       ptrutil.Clone(message.Agent),
-			Timestamp:   formatTime(message.CreatedAt),
+			Timestamp:   timefmt.DateTimeMicros(message.CreatedAt),
 			Attachments: sliceutil.CloneStrings(message.Attachments),
 		})
 	}
@@ -498,8 +499,8 @@ func toSessionResponse(row SessionListItem) SessionResponse {
 		UserID:       session.StudentID,
 		Topic:        ptrutil.Clone(session.CurrentTopic),
 		Status:       sessionStatus(session.IsActive),
-		StartedAt:    formatTime(session.StartedAt),
-		EndedAt:      optionalFormattedTime(session.EndedAt),
+		StartedAt:    timefmt.DateTimeMicros(session.StartedAt),
+		EndedAt:      timefmt.OptionalDateTimeMicros(session.EndedAt),
 		MessageCount: row.MessageCount,
 	}
 }
@@ -537,18 +538,6 @@ func modeTopic(mode string) string {
 	default:
 		return mode
 	}
-}
-
-func formatTime(value time.Time) string {
-	return value.Format("2006-01-02T15:04:05.999999")
-}
-
-func optionalFormattedTime(value *time.Time) *string {
-	if value == nil {
-		return nil
-	}
-	formatted := formatTime(*value)
-	return &formatted
 }
 
 func clampInt(value int, minValue int, maxValue int, fallback int) int {

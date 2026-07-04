@@ -12,6 +12,7 @@ import (
 	"mathstudy/backend-go/internal/platform/metautil"
 	"mathstudy/backend-go/internal/platform/ptrutil"
 	"mathstudy/backend-go/internal/platform/sliceutil"
+	"mathstudy/backend-go/internal/platform/timefmt"
 )
 
 var (
@@ -459,7 +460,7 @@ func (s *Service) MarkAsMastered(ctx context.Context, userID string, attemptID s
 	}
 	return MarkAsMasteredResponse{
 		Success:       true,
-		MasteredAt:    formatTime(now),
+		MasteredAt:    timefmt.DateTimeMicros(now),
 		MasteryUpdate: update,
 	}, nil
 }
@@ -595,7 +596,7 @@ func toMistakeItem(item listItemData) MistakeItem {
 			CorrectAnswer:    metautil.String(row.Content.Meta, "answer"),
 			IsCorrect:        row.Attempt.IsCorrect,
 			Score:            row.Attempt.Score,
-			SubmittedAt:      optionalTimeString(row.Attempt.SubmittedAt),
+			SubmittedAt:      timefmt.OptionalDateTimeMicros(row.Attempt.SubmittedAt),
 			TimeSpentSeconds: row.Attempt.TimeSpentSeconds,
 		},
 		Diagnosis: MistakeDiagnosis{
@@ -635,7 +636,7 @@ func toDetailResponse(row MistakeRow, history []MistakeHistory) DetailResponse {
 			StudentAnswer:    row.Attempt.StudentAnswer,
 			StudentSteps:     sliceutil.CloneStrings(row.Attempt.StudentSteps),
 			CorrectAnswer:    metautil.String(row.Content.Meta, "answer"),
-			SubmittedAt:      optionalTimeString(row.Attempt.SubmittedAt),
+			SubmittedAt:      timefmt.OptionalDateTimeMicros(row.Attempt.SubmittedAt),
 			TimeSpentSeconds: row.Attempt.TimeSpentSeconds,
 		},
 		Diagnosis: MistakeDetailDiagnosis{
@@ -864,18 +865,6 @@ func compareFloat(left float64, right float64) int {
 	default:
 		return 0
 	}
-}
-
-func optionalTimeString(value *time.Time) *string {
-	if value == nil {
-		return nil
-	}
-	formatted := formatTime(*value)
-	return &formatted
-}
-
-func formatTime(value time.Time) string {
-	return value.Format("2006-01-02T15:04:05.999999")
 }
 
 func contentTypeValue(value string) string {
