@@ -24,3 +24,26 @@ func TestCloneStringsNilBecomesEmptySlice(t *testing.T) {
 		t.Fatalf("CloneStrings(nil) len = %d, want 0", len(got))
 	}
 }
+
+func TestAppendUniqueNonEmptyStrings(t *testing.T) {
+	got := AppendUniqueNonEmptyStrings([]string{" a ", "", "b", "a"}, " c ", "b", " ")
+	want := []string{"a", "b", "c"}
+	if len(got) != len(want) {
+		t.Fatalf("AppendUniqueNonEmptyStrings() = %#v, want %#v", got, want)
+	}
+	for index := range want {
+		if got[index] != want[index] {
+			t.Fatalf("AppendUniqueNonEmptyStrings() = %#v, want %#v", got, want)
+		}
+	}
+}
+
+func TestAppendUniqueNonEmptyStringsNilBecomesEmptySlice(t *testing.T) {
+	got := AppendUniqueNonEmptyStrings(nil)
+	if got == nil {
+		t.Fatal("AppendUniqueNonEmptyStrings(nil) = nil, want empty slice")
+	}
+	if len(got) != 0 {
+		t.Fatalf("AppendUniqueNonEmptyStrings(nil) len = %d, want 0", len(got))
+	}
+}

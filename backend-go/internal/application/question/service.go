@@ -8,6 +8,8 @@ import (
 	"strings"
 	"time"
 	"unicode"
+
+	"mathstudy/backend-go/internal/platform/sliceutil"
 )
 
 var (
@@ -478,7 +480,7 @@ func (s *Service) GenerateIsomorphicProblem(_ context.Context, request GenerateR
 		},
 		SolutionSteps: integralPowerExpSteps(n, a, answer),
 		ConceptIDs:    normalizeStringSlice(request.ConceptIDs),
-		Tags:          appendUniqueStrings(normalizeStringSlice(request.Tags), "isomorphic", "solver_validated"),
+		Tags:          sliceutil.AppendUniqueNonEmptyStrings(normalizeStringSlice(request.Tags), "isomorphic", "solver_validated"),
 		Template:      template,
 		Parameters:    map[string]int{"n": n, "a": a},
 		Validation: GenerationValidation{
@@ -820,23 +822,6 @@ func factorial(value int) int {
 	result := 1
 	for i := 2; i <= value; i++ {
 		result *= i
-	}
-	return result
-}
-
-func appendUniqueStrings(values []string, extras ...string) []string {
-	seen := map[string]struct{}{}
-	result := make([]string, 0, len(values)+len(extras))
-	for _, value := range append(values, extras...) {
-		trimmed := strings.TrimSpace(value)
-		if trimmed == "" {
-			continue
-		}
-		if _, ok := seen[trimmed]; ok {
-			continue
-		}
-		seen[trimmed] = struct{}{}
-		result = append(result, trimmed)
 	}
 	return result
 }

@@ -10,6 +10,8 @@ import (
 	"time"
 
 	"mathstudy/backend-go/internal/platform/identifier"
+	"mathstudy/backend-go/internal/platform/maputil"
+	"mathstudy/backend-go/internal/platform/sliceutil"
 )
 
 var (
@@ -635,7 +637,7 @@ func (s *Service) teacherStudentIDs(ctx context.Context, teacherID string) ([]st
 	if err != nil {
 		return nil, err
 	}
-	return uniqueStrings(studentIDs), nil
+	return sliceutil.AppendUniqueNonEmptyStrings(studentIDs), nil
 }
 
 func (s *Service) timeRangeStart(timeRange string) (time.Time, bool) {
@@ -782,12 +784,12 @@ func (s *Service) classAlerts(ctx context.Context, studentIDs []string, weekStar
 			alertIDs = append(alertIDs, id)
 		}
 	}
-	names, err := s.repo.UserDisplayNames(ctx, uniqueStrings(alertIDs))
+	names, err := s.repo.UserDisplayNames(ctx, sliceutil.AppendUniqueNonEmptyStrings(alertIDs))
 	if err != nil {
 		return nil, err
 	}
 	alerts := []ClassAlert{}
-	lowIDs := sortedStringKeys(lowScoreStudents)
+	lowIDs := maputil.SortedFloatKeys(lowScoreStudents)
 	for _, id := range lowIDs {
 		alertID, err := s.idFactory()
 		if err != nil {
@@ -1064,32 +1066,6 @@ func sortedFloatKeysByValueDesc(values map[string]float64) []string {
 		return values[keys[i]] > values[keys[j]]
 	})
 	return keys
-}
-
-func sortedStringKeys(values map[string]float64) []string {
-	keys := make([]string, 0, len(values))
-	for key := range values {
-		keys = append(keys, key)
-	}
-	sort.Strings(keys)
-	return keys
-}
-
-func uniqueStrings(values []string) []string {
-	result := make([]string, 0, len(values))
-	seen := map[string]struct{}{}
-	for _, value := range values {
-		value = strings.TrimSpace(value)
-		if value == "" {
-			continue
-		}
-		if _, ok := seen[value]; ok {
-			continue
-		}
-		seen[value] = struct{}{}
-		result = append(result, value)
-	}
-	return result
 }
 
 func displayName(user UserInfo) string {
