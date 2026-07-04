@@ -1,6 +1,7 @@
 package config
 
 import (
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -96,6 +97,62 @@ func TestLoadUsesEnvironmentAndBuildsAddresses(t *testing.T) {
 	}
 	if cfg.EinoTimeout != 12500*time.Millisecond || cfg.EinoTemperature != 0.2 || cfg.EinoMaxTokens != 900 || cfg.EinoMaxIterations != 5 {
 		t.Fatalf("Eino tuning config = %s/%f/%d/%d", cfg.EinoTimeout, cfg.EinoTemperature, cfg.EinoMaxTokens, cfg.EinoMaxIterations)
+	}
+}
+
+func TestLoadParsesListEnvironmentFormats(t *testing.T) {
+	t.Setenv("CORS_ORIGINS", `["https://app.example.com", " https://admin.example.com ", ""]`)
+	t.Setenv("CORS_ALLOW_METHODS", `GET, POST, 'OPTIONS'`)
+	t.Setenv("MANAGEMENT_ALLOWED_CIDRS", `[]`)
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	assertStringSlice(t, cfg.CORSOrigins, []string{"https://app.example.com", "https://admin.example.com"})
+	assertStringSlice(t, cfg.CORSAllowMethods, []string{"GET", "POST", "OPTIONS"})
+	assertStringSlice(t, cfg.ManagementAllowedCIDRs, []string{"127.0.0.1/32", "::1/128", "10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16"})
+}
+
+func TestParseEnvList(t *testing.T) {
+	fallback := []string{"fallback"}
+	tests := []struct {
+		name  string
+		value string
+		want  []string
+	}{
+		{
+			name:  "strict JSON list",
+			value: `["GET", " POST ", ""]`,
+			want:  []string{"GET", "POST"},
+		},
+		{
+			name:  "comma list",
+			value: `GET, POST, 'OPTIONS', [PATCH]`,
+			want:  []string{"GET", "POST", "OPTIONS", "PATCH"},
+		},
+		{
+			name:  "empty JSON list uses fallback",
+			value: `["", " "]`,
+			want:  fallback,
+		},
+		{
+			name:  "malformed JSON list keeps legacy comma fallback",
+			value: `["GET", "POST"`,
+			want:  []string{"GET", "POST"},
+		},
+		{
+			name:  "trailing JSON data uses fallback",
+			value: `["GET"] {"extra": true}`,
+			want:  fallback,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := parseEnvList(tt.value, fallback)
+			assertStringSlice(t, got, tt.want)
+		})
 	}
 }
 
@@ -222,5 +279,12 @@ func TestLoadRejectsEnabledEinoWithoutRequiredModelConfig(t *testing.T) {
 
 	if _, err := Load(); err == nil {
 		t.Fatal("Load() error = nil, want missing Eino model error")
+	}
+}
+
+func assertStringSlice(t *testing.T, got, want []string) {
+	t.Helper()
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("slice = %#v, want %#v", got, want)
 	}
 }

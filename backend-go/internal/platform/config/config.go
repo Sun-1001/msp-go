@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"net/url"
 	"os"
@@ -460,25 +461,66 @@ func envList(key string, fallback []string) []string {
 	if value == "" {
 		return fallback
 	}
-	var jsonValues []string
-	if strings.HasPrefix(value, "[") && json.Unmarshal([]byte(value), &jsonValues) == nil {
-		if len(jsonValues) > 0 {
-			return jsonValues
+	return parseEnvList(value, fallback)
+}
+
+func parseEnvList(value string, fallback []string) []string {
+	if strings.HasPrefix(value, "[") {
+		jsonValues, ok, hasTrailingData := decodeStrictJSONList(value)
+		if ok {
+			return listOrFallback(cleanEnvListItems(jsonValues), fallback)
 		}
-		return fallback
+		if hasTrailingData {
+			return fallback
+		}
 	}
+	return listOrFallback(splitEnvList(value), fallback)
+}
+
+func decodeStrictJSONList(value string) ([]string, bool, bool) {
+	var target []string
+	decoder := json.NewDecoder(strings.NewReader(value))
+	if err := decoder.Decode(&target); err != nil {
+		return nil, false, false
+	}
+	if err := decoder.Decode(&struct{}{}); err != io.EOF {
+		return nil, false, true
+	}
+	return target, true, false
+}
+
+func splitEnvList(value string) []string {
 	parts := strings.Split(value, ",")
 	result := make([]string, 0, len(parts))
 	for _, part := range parts {
-		item := strings.TrimSpace(strings.Trim(part, `"'[]`))
+		item := cleanEnvListItem(strings.Trim(strings.TrimSpace(part), `"'[]`))
 		if item != "" {
 			result = append(result, item)
 		}
 	}
-	if len(result) == 0 {
-		return fallback
+	return result
+}
+
+func cleanEnvListItems(items []string) []string {
+	result := make([]string, 0, len(items))
+	for _, item := range items {
+		item = cleanEnvListItem(item)
+		if item != "" {
+			result = append(result, item)
+		}
 	}
 	return result
+}
+
+func cleanEnvListItem(item string) string {
+	return strings.TrimSpace(item)
+}
+
+func listOrFallback(values, fallback []string) []string {
+	if len(values) == 0 {
+		return fallback
+	}
+	return values
 }
 
 func cleanPrefix(prefix string) string {
