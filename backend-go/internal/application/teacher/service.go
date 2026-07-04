@@ -887,7 +887,7 @@ func (s *Service) streakDays(ctx context.Context, studentID string) (int, error)
 }
 
 func (s *Service) studentTopicMastery(ctx context.Context, studentID string, mastery map[string]float64) ([]StudentTopicMastery, error) {
-	conceptIDs := sortedFloatKeysByValueDesc(mastery)
+	conceptIDs := maputil.SortedFloatKeysByValueDesc(mastery)
 	names, err := s.repo.KnowledgeNames(ctx, conceptIDs)
 	if err != nil {
 		return nil, err
@@ -1053,20 +1053,6 @@ func sortedMasteryKeys(agg map[string]masteryAgg) []string {
 		keys = append(keys, key)
 	}
 	sort.Strings(keys)
-	return keys
-}
-
-func sortedFloatKeysByValueDesc(values map[string]float64) []string {
-	keys := make([]string, 0, len(values))
-	for key := range values {
-		keys = append(keys, key)
-	}
-	sort.Slice(keys, func(i, j int) bool {
-		if values[keys[i]] == values[keys[j]] {
-			return keys[i] < keys[j]
-		}
-		return values[keys[i]] > values[keys[j]]
-	})
 	return keys
 }
 

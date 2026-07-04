@@ -49,3 +49,26 @@ func TestSortedFloatKeysEmpty(t *testing.T) {
 		t.Fatalf("SortedFloatKeys(nil) len = %d, want 0", len(got))
 	}
 }
+
+func TestSortedFloatKeysByValueDesc(t *testing.T) {
+	got := SortedFloatKeysByValueDesc(map[string]float64{
+		"gamma": 0.3,
+		"alpha": 0.8,
+		"beta":  0.8,
+		"delta": 0.1,
+	})
+	want := []string{"alpha", "beta", "gamma", "delta"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("SortedFloatKeysByValueDesc() = %#v, want %#v", got, want)
+	}
+}
+
+func TestSortedFloatKeysByValueDescEmpty(t *testing.T) {
+	got := SortedFloatKeysByValueDesc(nil)
+	if got == nil {
+		t.Fatal("SortedFloatKeysByValueDesc(nil) = nil, want empty slice")
+	}
+	if len(got) != 0 {
+		t.Fatalf("SortedFloatKeysByValueDesc(nil) len = %d, want 0", len(got))
+	}
+}

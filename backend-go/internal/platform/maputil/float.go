@@ -20,3 +20,18 @@ func SortedFloatKeys(values map[string]float64) []string {
 	sort.Strings(keys)
 	return keys
 }
+
+// SortedFloatKeysByValueDesc returns keys ordered by descending value, then ascending key.
+func SortedFloatKeysByValueDesc(values map[string]float64) []string {
+	keys := make([]string, 0, len(values))
+	for key := range values {
+		keys = append(keys, key)
+	}
+	sort.Slice(keys, func(i, j int) bool {
+		if values[keys[i]] == values[keys[j]] {
+			return keys[i] < keys[j]
+		}
+		return values[keys[i]] > values[keys[j]]
+	})
+	return keys
+}
