@@ -90,11 +90,12 @@ func (h *Handler) recentActivities(w http.ResponseWriter, r *http.Request) {
 	if _, ok := h.requireAdmin(w, r); !ok {
 		return
 	}
-	limit, ok := parseIntQuery(w, r.URL.Query().Get("limit"), 10, "limit")
-	if !ok {
-		return
-	}
-	if limit < 1 || limit > 50 {
+	limit, err := httpquery.BoundedInt(r.URL.Query().Get("limit"), 10, 1, 50)
+	if err != nil {
+		if errors.Is(err, httpquery.ErrInvalidInt) {
+			writeAdminStatsError(w, http.StatusUnprocessableEntity, "VALIDATION_ERROR", "limit 必须是整数")
+			return
+		}
 		writeAdminStatsError(w, http.StatusUnprocessableEntity, "VALIDATION_ERROR", "limit 必须在 1 到 50 之间")
 		return
 	}
@@ -146,15 +147,6 @@ func (h *Handler) writeServiceError(w http.ResponseWriter, err error, fallback s
 		h.logger.Error("admin stats request failed", "error", redact.String(err.Error()))
 		writeAdminStatsError(w, http.StatusInternalServerError, "INTERNAL_ERROR", fallback)
 	}
-}
-
-func parseIntQuery(w http.ResponseWriter, value string, fallback int, name string) (int, bool) {
-	parsed, err := httpquery.Int(value, fallback)
-	if err != nil {
-		writeAdminStatsError(w, http.StatusUnprocessableEntity, "VALIDATION_ERROR", name+" 必须是整数")
-		return 0, false
-	}
-	return parsed, true
 }
 
 func writeJSON(w http.ResponseWriter, status int, payload any) {

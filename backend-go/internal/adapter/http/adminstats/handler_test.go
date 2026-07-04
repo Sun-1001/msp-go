@@ -106,6 +106,26 @@ func TestValidationAndServiceErrors(t *testing.T) {
 	if recorder.Code != http.StatusUnprocessableEntity {
 		t.Fatalf("status=%d body=%s", recorder.Code, recorder.Body.String())
 	}
+	if !strings.Contains(recorder.Body.String(), "limit 必须是整数") {
+		t.Fatalf("body=%s, want integer validation message", recorder.Body.String())
+	}
+	if service.recentCalls != 0 {
+		t.Fatalf("recent activities calls = %d, want 0", service.recentCalls)
+	}
+
+	request = httptest.NewRequest(http.MethodGet, "/api/v1/admin/stats/recent-activities?limit=0", nil)
+	request.Header.Set("Authorization", "Bearer token")
+	recorder = httptest.NewRecorder()
+	mux.ServeHTTP(recorder, request)
+	if recorder.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("status=%d body=%s", recorder.Code, recorder.Body.String())
+	}
+	if !strings.Contains(recorder.Body.String(), "limit 必须在 1 到 50 之间") {
+		t.Fatalf("body=%s, want range validation message", recorder.Body.String())
+	}
+	if service.recentCalls != 0 {
+		t.Fatalf("recent activities calls = %d, want 0", service.recentCalls)
+	}
 }
 
 func TestServiceErrorsRedactPublicMessages(t *testing.T) {
@@ -185,13 +205,14 @@ func (a *fakeAuthenticator) DecodeAccessToken(string) (authapp.Principal, bool) 
 }
 
 type fakeStatsService struct {
-	overview   adminstatsapp.OverviewStatsResponse
-	growth     adminstatsapp.UserGrowthResponse
-	recent     adminstatsapp.RecentActivitiesResponse
-	status     adminstatsapp.SystemStatusResponse
-	err        error
-	lastPeriod string
-	lastLimit  int
+	overview    adminstatsapp.OverviewStatsResponse
+	growth      adminstatsapp.UserGrowthResponse
+	recent      adminstatsapp.RecentActivitiesResponse
+	status      adminstatsapp.SystemStatusResponse
+	err         error
+	lastPeriod  string
+	lastLimit   int
+	recentCalls int
 }
 
 func (s *fakeStatsService) OverviewStats(context.Context) (adminstatsapp.OverviewStatsResponse, error) {
@@ -210,6 +231,7 @@ func (s *fakeStatsService) UserGrowth(_ context.Context, period string) (adminst
 }
 
 func (s *fakeStatsService) RecentActivities(_ context.Context, limit int) (adminstatsapp.RecentActivitiesResponse, error) {
+	s.recentCalls++
 	s.lastLimit = limit
 	if s.err != nil {
 		return adminstatsapp.RecentActivitiesResponse{}, s.err
