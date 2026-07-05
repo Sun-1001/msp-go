@@ -122,10 +122,7 @@ func (r ClassRepository) ListTeacherClasses(ctx context.Context, teacherID strin
 		); err != nil {
 			return nil, err
 		}
-		if description.Valid {
-			value := description.String
-			classInfo.Description = &value
-		}
+		classInfo.Description = textPtr(description)
 		classInfo.StudentCount = &count
 		classes = append(classes, classInfo)
 	}
@@ -340,10 +337,7 @@ func (r ClassRepository) listClassStudents(ctx context.Context, classID string) 
 		if err := rows.Scan(&student.ID, &student.Username, &student.Email, &displayName); err != nil {
 			return nil, err
 		}
-		if displayName.Valid {
-			value := displayName.String
-			student.DisplayName = &value
-		}
+		student.DisplayName = textPtr(displayName)
 		students = append(students, student)
 	}
 	return students, rows.Err()
@@ -412,14 +406,8 @@ func scanClassUser(scanner rowScanner) (classroomapp.UserRef, error) {
 		return classroomapp.UserRef{}, err
 	}
 	userRef.Role = role
-	if displayName.Valid {
-		value := displayName.String
-		userRef.DisplayName = &value
-	}
-	if avatarURL.Valid {
-		value := avatarURL.String
-		userRef.AvatarURL = &value
-	}
+	userRef.DisplayName = textPtr(displayName)
+	userRef.AvatarURL = textPtr(avatarURL)
 	return userRef, nil
 }
 
@@ -436,10 +424,7 @@ func scanClassBasic(scanner rowScanner) (classroomapp.ClassInfo, error) {
 	); err != nil {
 		return classroomapp.ClassInfo{}, err
 	}
-	if description.Valid {
-		value := description.String
-		classInfo.Description = &value
-	}
+	classInfo.Description = textPtr(description)
 	return classInfo, nil
 }
 
@@ -475,10 +460,7 @@ func scanClassWithTeacher(scanner rowScanner) (classroomapp.ClassInfo, error) {
 	); err != nil {
 		return classroomapp.ClassInfo{}, err
 	}
-	if description.Valid {
-		value := description.String
-		classInfo.Description = &value
-	}
+	classInfo.Description = textPtr(description)
 	if displayName.Valid && strings.TrimSpace(displayName.String) != "" {
 		value := displayName.String
 		classInfo.TeacherName = &value
@@ -486,14 +468,8 @@ func scanClassWithTeacher(scanner rowScanner) (classroomapp.ClassInfo, error) {
 		value := username.String
 		classInfo.TeacherName = &value
 	}
-	if email.Valid {
-		value := email.String
-		classInfo.TeacherEmail = &value
-	}
-	if avatarURL.Valid {
-		value := avatarURL.String
-		classInfo.TeacherAvatarURL = &value
-	}
+	classInfo.TeacherEmail = textPtr(email)
+	classInfo.TeacherAvatarURL = textPtr(avatarURL)
 	return classInfo, nil
 }
 
@@ -534,10 +510,7 @@ func scanClassLookup(scanner rowScanner) (classroomapp.ClassInfo, *classroomapp.
 	); err != nil {
 		return classroomapp.ClassInfo{}, nil, err
 	}
-	if description.Valid {
-		value := description.String
-		classInfo.Description = &value
-	}
+	classInfo.Description = textPtr(description)
 	if !teacherID.Valid {
 		return classInfo, nil, nil
 	}
@@ -548,14 +521,8 @@ func scanClassLookup(scanner rowScanner) (classroomapp.ClassInfo, *classroomapp.
 	if email.Valid {
 		teacher.Email = email.String
 	}
-	if displayName.Valid {
-		value := displayName.String
-		teacher.DisplayName = &value
-	}
-	if avatarURL.Valid {
-		value := avatarURL.String
-		teacher.AvatarURL = &value
-	}
+	teacher.DisplayName = textPtr(displayName)
+	teacher.AvatarURL = textPtr(avatarURL)
 	if roleValue.Valid {
 		role, err := user.ParseRole(roleValue.String)
 		if err != nil {
@@ -610,10 +577,7 @@ func scanClassWithTeacherAndJoined(scanner rowScanner) (classroomapp.ClassInfo, 
 	); err != nil {
 		return classroomapp.ClassInfo{}, err
 	}
-	if description.Valid {
-		value := description.String
-		classInfo.Description = &value
-	}
+	classInfo.Description = textPtr(description)
 	if displayName.Valid && strings.TrimSpace(displayName.String) != "" {
 		value := displayName.String
 		classInfo.TeacherName = &value
@@ -621,14 +585,8 @@ func scanClassWithTeacherAndJoined(scanner rowScanner) (classroomapp.ClassInfo, 
 		value := username.String
 		classInfo.TeacherName = &value
 	}
-	if email.Valid {
-		value := email.String
-		classInfo.TeacherEmail = &value
-	}
-	if avatarURL.Valid {
-		value := avatarURL.String
-		classInfo.TeacherAvatarURL = &value
-	}
+	classInfo.TeacherEmail = textPtr(email)
+	classInfo.TeacherAvatarURL = textPtr(avatarURL)
 	classInfo.JoinedAt = &joinedAt
 	classInfo.StudentCount = &studentCount
 	return classInfo, nil
