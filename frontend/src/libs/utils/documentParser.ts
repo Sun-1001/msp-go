@@ -7,6 +7,10 @@
 
 import { parseDocxFile } from '@/libs/parsers/docxParser';
 import { parseTxtFile } from '@/libs/parsers/txtParser';
+import {
+  replaceAsciiControlCharacters,
+  stripUnsafeTextControlCharacters,
+} from '@/libs/utils/controlCharacters';
 
 /** 解析后的文档 */
 export interface ParsedDocument {
@@ -48,8 +52,7 @@ function getFileExtension(filename: string): string {
 }
 
 function normalizeDocumentFilename(filename: string): string {
-  const cleaned = filename
-    .replace(/[\u0000-\u001F\u007F]+/g, ' ')
+  const cleaned = replaceAsciiControlCharacters(filename, ' ')
     .replace(/[\\/]+/g, '_')
     .replace(/\s+/g, ' ')
     .trim();
@@ -63,9 +66,7 @@ function normalizeDocumentFilename(filename: string): string {
 }
 
 function sanitizeDocumentContent(content: string): string {
-  return content
-    .replace(/\r\n?/g, '\n')
-    .replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F]/g, '');
+  return stripUnsafeTextControlCharacters(content.replace(/\r\n?/g, '\n'));
 }
 
 /**

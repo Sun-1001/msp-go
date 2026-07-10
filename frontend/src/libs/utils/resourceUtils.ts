@@ -5,7 +5,8 @@
  */
 
 import type { ResourceType } from '@/modules/resource/types/resource';
-import { normalizeSafeHttpUrl } from '@/libs/utils/safeUrl';
+import { replaceAsciiControlCharacters } from '@/libs/utils/controlCharacters';
+import { hasUnsafeUrlCharacters, normalizeSafeHttpUrl } from '@/libs/utils/safeUrl';
 
 const LOCAL_RESOURCE_PATH_PATTERN = /^\/uploads\/(?:documents|videos)\/[A-Za-z0-9._~!$&'()*+,;=:@/-]+$/;
 const MAX_RESOURCE_TITLE_LENGTH = 100;
@@ -21,7 +22,7 @@ function safeDecodeUrlComponent(value: string): string {
 }
 
 function normalizeDisplayText(value: string, maxLength: number): string {
-  return value.replace(/[\u0000-\u001f\u007f]/g, '').trim().slice(0, maxLength);
+  return replaceAsciiControlCharacters(value, '').trim().slice(0, maxLength);
 }
 
 /**
@@ -197,7 +198,7 @@ export function parseLinksFromText(text: string): string[] {
  */
 export function normalizeOpenableResourceUrl(rawUrl: string | null | undefined): string | null {
   const value = rawUrl?.trim();
-  if (!value || /[\u0000-\u001f\u007f\s\\]/.test(value)) {
+  if (!value || hasUnsafeUrlCharacters(value)) {
     return null;
   }
   if (value.startsWith('/')) {

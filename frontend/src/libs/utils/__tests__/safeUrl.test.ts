@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  hasUnsafeUrlCharacters,
   normalizeSafeExternalUrl,
   normalizeSafeHttpUrl,
   normalizeSafeImageAttachmentUrl,
@@ -7,6 +8,13 @@ import {
 } from '@/libs/utils/safeUrl';
 
 describe('safe URL utilities', () => {
+  it('detects control, whitespace, and backslash URL characters', () => {
+    expect(hasUnsafeUrlCharacters('https://example.com/path')).toBe(false);
+    expect(hasUnsafeUrlCharacters('https://example.com/line\nbreak')).toBe(true);
+    expect(hasUnsafeUrlCharacters('https://example.com/space here')).toBe(true);
+    expect(hasUnsafeUrlCharacters('https://example.com\\path')).toBe(true);
+  });
+
   it('normalizes safe external URLs and bare hosts', () => {
     expect(normalizeSafeExternalUrl(' example.com/path ')).toBe('https://example.com/path');
     expect(normalizeSafeExternalUrl('https://example.com/path')).toBe('https://example.com/path');

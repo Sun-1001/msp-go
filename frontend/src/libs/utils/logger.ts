@@ -9,6 +9,8 @@
  * - 可扩展的日志输出（控制台、远程服务器等）
  */
 
+import { hasUnsafeUrlCharacters } from '@/libs/utils/safeUrl';
+
 export const LogLevel = {
   DEBUG: 0,
   INFO: 1,
@@ -74,7 +76,7 @@ export function normalizeRemoteLogEndpoint(value: unknown): string | undefined {
   if (!endpoint.startsWith('/api/') || endpoint.startsWith('//')) {
     return undefined;
   }
-  if (endpoint.includes('\\') || /[\u0000-\u001F\u007F\s]/.test(endpoint)) {
+  if (hasUnsafeUrlCharacters(endpoint)) {
     return undefined;
   }
   try {

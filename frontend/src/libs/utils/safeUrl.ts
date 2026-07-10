@@ -1,3 +1,5 @@
+import { hasAsciiControlCharacters } from '@/libs/utils/controlCharacters';
+
 const LOCAL_IMAGE_PATH_PATTERN = /^\/uploads\/images\/[A-Za-z0-9._~!$&'()*+,;=:@/-]+$/;
 const EMAIL_ADDRESS_PATTERN = /^[A-Za-z0-9.!#$&'*+/=?^_`{|}~-]+@[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?(?:\.[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?)+$/;
 const EXTERNAL_URL_PROTOCOLS = new Set(['http:', 'https:', 'mailto:']);
@@ -11,9 +13,13 @@ export function normalizeSafeHttpUrl(rawUrl: string | null | undefined): string 
   return normalizeSafeUrl(rawUrl, HTTP_URL_PROTOCOLS);
 }
 
+export function hasUnsafeUrlCharacters(value: string): boolean {
+  return hasAsciiControlCharacters(value) || /\s/.test(value) || value.includes('\\');
+}
+
 export function normalizeSafeMailtoUrl(rawEmail: string | null | undefined): string | null {
   const value = rawEmail?.trim();
-  if (!value || value.length > 254 || /[\u0000-\u001f\u007f\s\\?&#,;:]/.test(value)) {
+  if (!value || value.length > 254 || hasUnsafeUrlCharacters(value) || /[?&#,;:]/.test(value)) {
     return null;
   }
   if (!EMAIL_ADDRESS_PATTERN.test(value)) {
@@ -24,7 +30,7 @@ export function normalizeSafeMailtoUrl(rawEmail: string | null | undefined): str
 
 function normalizeSafeUrl(rawUrl: string | null | undefined, allowedProtocols: Set<string>): string | null {
   const value = rawUrl?.trim();
-  if (!value || /[\u0000-\u001f\u007f\s\\]/.test(value)) {
+  if (!value || hasUnsafeUrlCharacters(value)) {
     return null;
   }
   const hasScheme = hasUrlScheme(value);
@@ -48,7 +54,7 @@ function normalizeSafeUrl(rawUrl: string | null | undefined, allowedProtocols: S
 
 export function normalizeSafeImageAttachmentUrl(rawUrl: string | null | undefined): string | null {
   const value = rawUrl?.trim();
-  if (!value || /[\u0000-\u001f\u007f\s\\]/.test(value)) {
+  if (!value || hasUnsafeUrlCharacters(value)) {
     return null;
   }
   if (!LOCAL_IMAGE_PATH_PATTERN.test(value) || value.includes('%')) {

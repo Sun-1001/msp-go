@@ -1,3 +1,5 @@
+import { replaceAsciiControlCharacters } from '@/libs/utils/controlCharacters';
+
 const DEFAULT_DOWNLOAD_FILENAME = 'download';
 const RESERVED_WINDOWS_NAMES = /^(con|prn|aux|nul|com[1-9]|lpt[1-9])(?:\.|$)/i;
 const MAX_BASE64_DOWNLOAD_LENGTH = 64 * 1024 * 1024;
@@ -13,8 +15,8 @@ export function sanitizeDownloadFilename(
     return fallbackName;
   }
 
-  let filename = raw
-    .replace(/[\u0000-\u001f\u007f/\\:*?"<>|\u202a-\u202e]/g, '_')
+  let filename = replaceAsciiControlCharacters(raw, '_')
+    .replace(/[/\\:*?"<>|\u202a-\u202e]/g, '_')
     .replace(/_+/g, '_')
     .replace(/\s+/g, ' ')
     .trim();
