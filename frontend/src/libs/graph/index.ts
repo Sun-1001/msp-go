@@ -8,3 +8,4 @@ export * from './graphConfig';
 export * from './createGraphInstance';
 export * from './adminGraphConfig';
 export * from './createAdminGraphInstance';
+export * from './knowledgeGraphIndex';

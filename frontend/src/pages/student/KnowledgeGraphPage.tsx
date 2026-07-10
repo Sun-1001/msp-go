@@ -10,6 +10,7 @@ import { KnowledgeGraph, KnowledgeGraphLegend, type KnowledgeNode } from '@/modu
 import { useAppDispatch, useAppSelector } from '../../store';
 import { fetchKnowledgeGraph, updateFilter, selectNode } from '@/modules/knowledge/store/knowledgeSlice';
 import { knowledgeService } from '@/modules/knowledge/services/knowledgeService';
+import { buildKnowledgeGraphIndex } from '@/libs/graph';
 import {
   Search,
   Filter,
@@ -75,11 +76,8 @@ export const KnowledgeGraphPage: React.FC = () => {
     { value: '', label: '全部章节' },
   ]);
 
-  // 组件挂载时获取数据和章节列表
+  // 组件挂载时获取章节列表；图谱数据由 filters effect 统一加载。
   useEffect(() => {
-    dispatch(fetchKnowledgeGraph());
-
-    // 动态加载章节列表
     knowledgeService.getChapters().then((chapters) => {
       setChapterOptions([
         { value: '', label: '全部章节' },
@@ -88,7 +86,7 @@ export const KnowledgeGraphPage: React.FC = () => {
     }).catch(() => {
       // 静默处理，保留默认的"全部章节"选项
     });
-  }, [dispatch]);
+  }, []);
 
   // 筛选条件变化时重新获取数据
   useEffect(() => {
@@ -118,25 +116,20 @@ export const KnowledgeGraphPage: React.FC = () => {
     dispatch(selectNode(node.id));
   }, [dispatch]);
 
-  const selectedNode = useMemo(
-    () => nodes.find((n) => n.id === selectedNodeId) || null,
-    [nodes, selectedNodeId]
+  const graphIndex = useMemo(
+    () => buildKnowledgeGraphIndex(nodes, edges),
+    [nodes, edges],
   );
 
-  // 缓存先修/后续知识点的过滤结果，避免每次渲染重复计算
-  const prerequisiteEdges = useMemo(
-    () => selectedNode
-      ? edges.filter((e) => e.target === selectedNode.id && e.relation === 'prerequisite')
-      : [],
-    [edges, selectedNode]
-  );
-
-  const successorEdges = useMemo(
-    () => selectedNode
-      ? edges.filter((e) => e.source === selectedNode.id && e.relation === 'prerequisite')
-      : [],
-    [edges, selectedNode]
-  );
+  const selectedNode = selectedNodeId
+    ? graphIndex.nodesById.get(selectedNodeId) ?? null
+    : null;
+  const prerequisiteEdges = selectedNode
+    ? graphIndex.prerequisiteEdgesByTarget.get(selectedNode.id) ?? []
+    : [];
+  const successorEdges = selectedNode
+    ? graphIndex.successorEdgesBySource.get(selectedNode.id) ?? []
+    : [];
 
   // 加载状态
   if (loadingState === 'loading') {
@@ -164,7 +157,7 @@ export const KnowledgeGraphPage: React.FC = () => {
               <AlertCircle className="h-8 w-8 text-destructive-600 mx-auto mb-4" />
               <p className="text-surface-900 dark:text-surface-100 font-medium mb-2">加载失败</p>
               <p className="text-surface-500 dark:text-surface-400 mb-4">{error}</p>
-              <Button onClick={() => dispatch(fetchKnowledgeGraph())}>重试</Button>
+              <Button onClick={() => dispatch(fetchKnowledgeGraph(filters))}>重试</Button>
             </div>
           </div>
         </div>
@@ -371,7 +364,7 @@ export const KnowledgeGraphPage: React.FC = () => {
                     </h4>
                     <div className="flex flex-wrap gap-2">
                       {prerequisiteEdges.map((edge) => {
-                          const sourceNode = nodes.find((n) => n.id === edge.source);
+                          const sourceNode = graphIndex.nodesById.get(edge.source);
                           return sourceNode ? (
                             <Badge key={edge.source} variant="outline">
                               {sourceNode.label}
@@ -389,7 +382,7 @@ export const KnowledgeGraphPage: React.FC = () => {
                     </h4>
                     <div className="flex flex-wrap gap-2">
                       {successorEdges.map((edge) => {
-                          const targetNode = nodes.find((n) => n.id === edge.target);
+                          const targetNode = graphIndex.nodesById.get(edge.target);
                           return targetNode ? (
                             <Badge key={edge.target} variant="outline">
                               {targetNode.label}

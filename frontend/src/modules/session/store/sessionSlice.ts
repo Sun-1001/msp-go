@@ -516,11 +516,11 @@ const sessionSlice = createSlice({
 
     // 批量删除会话
     builder.addCase(batchDeleteSessionsAsync.fulfilled, (state, action) => {
-      const sessionIds = action.payload;
+      const sessionIds = new Set(action.payload);
       // 从列表中移除
-      state.sessions = state.sessions.filter((s) => !sessionIds.includes(s.id));
+      state.sessions = state.sessions.filter((s) => !sessionIds.has(s.id));
       // 如果删除的包含当前会话，清空当前会话
-      if (state.currentSession && sessionIds.includes(state.currentSession.id)) {
+      if (state.currentSession && sessionIds.has(state.currentSession.id)) {
         state.currentSession = null;
         state.messages = [];
       }
