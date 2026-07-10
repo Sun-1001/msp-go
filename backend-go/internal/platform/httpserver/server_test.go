@@ -24,28 +24,7 @@ func (okPinger) Ping(context.Context) error {
 
 func testHandler(t *testing.T) http.Handler {
 	t.Helper()
-	cfg := config.Config{
-		AppVersion:             "test",
-		Environment:            "test",
-		APIV1Prefix:            "/api/v1",
-		CORSOrigins:            []string{"http://localhost:5173"},
-		CORSAllowMethods:       []string{"GET", "POST", "OPTIONS"},
-		CORSAllowHeaders:       []string{"Authorization", "Content-Type"},
-		RequestTimeout:         0,
-		MetricsEnabled:         true,
-		ManagementAllowedCIDRs: []string{"127.0.0.1/32"},
-		UploadsDir:             t.TempDir(),
-	}
-	handler, err := NewHandler(
-		cfg,
-		slog.New(slog.NewTextHandler(os.Stdout, nil)),
-		health.NewChecker("test", okPinger{}, okPinger{}),
-		metrics.NewStore("test", "test"),
-	)
-	if err != nil {
-		t.Fatalf("NewHandler() error = %v", err)
-	}
-	return handler
+	return testHandlerWithRoutes(t, nil)
 }
 
 func testHandlerWithRoutes(t *testing.T, registrar RouteRegistrar) http.Handler {
@@ -97,26 +76,45 @@ func TestHealthRoute(t *testing.T) {
 	}
 }
 
-func TestAPIV1FallbackReturnsNotImplemented(t *testing.T) {
+func TestUnknownAPIRoutesReturnNotFound(t *testing.T) {
 	handler := testHandler(t)
-	recorder := httptest.NewRecorder()
-	request := httptest.NewRequest(http.MethodPost, "/api/v1/auth/login", nil)
-
-	handler.ServeHTTP(recorder, request)
-
-	if recorder.Code != http.StatusNotImplemented {
-		t.Fatalf("status = %d", recorder.Code)
+	tests := []struct {
+		name   string
+		method string
+		target string
+	}{
+		{name: "get", method: http.MethodGet, target: "/api/v1/does-not-exist"},
+		{name: "post", method: http.MethodPost, target: "/api/v1/does-not-exist"},
+		{name: "prefix without trailing slash", method: http.MethodGet, target: "/api/v1"},
 	}
-	var body map[string]string
-	if err := json.Unmarshal(recorder.Body.Bytes(), &body); err != nil {
-		t.Fatalf("invalid JSON: %v", err)
-	}
-	if body["code"] != "NOT_IMPLEMENTED" {
-		t.Fatalf("body = %#v", body)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			recorder := httptest.NewRecorder()
+			request := httptest.NewRequest(tt.method, tt.target, nil)
+
+			handler.ServeHTTP(recorder, request)
+
+			if recorder.Code != http.StatusNotFound {
+				t.Fatalf("status = %d, body = %s", recorder.Code, recorder.Body.String())
+			}
+			if location := recorder.Header().Get("Location"); location != "" {
+				t.Fatalf("unexpected redirect to %q", location)
+			}
+			if contentType := recorder.Header().Get("Content-Type"); !strings.HasPrefix(contentType, "application/json") {
+				t.Fatalf("Content-Type = %q", contentType)
+			}
+			var body map[string]string
+			if err := json.Unmarshal(recorder.Body.Bytes(), &body); err != nil {
+				t.Fatalf("invalid JSON: %v", err)
+			}
+			if body["code"] != "NOT_FOUND" || body["message"] != "API route not found" {
+				t.Fatalf("body = %#v", body)
+			}
+		})
 	}
 }
 
-func TestMigratedRouteRunsBeforeAPIV1Fallback(t *testing.T) {
+func TestRegisteredRouteRunsBeforeNotFoundHandler(t *testing.T) {
 	handler := testHandlerWithRoutes(t, func(mux *http.ServeMux) {
 		mux.HandleFunc("GET /api/v1/auth/registration-status", func(w http.ResponseWriter, r *http.Request) {
 			writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
@@ -129,6 +127,66 @@ func TestMigratedRouteRunsBeforeAPIV1Fallback(t *testing.T) {
 
 	if recorder.Code != http.StatusOK {
 		t.Fatalf("status = %d", recorder.Code)
+	}
+}
+
+func TestRegisteredRouteWrongMethodReturnsMethodNotAllowed(t *testing.T) {
+	handler := testHandlerWithRoutes(t, func(mux *http.ServeMux) {
+		mux.HandleFunc("GET /api/v1/auth/registration-status", func(w http.ResponseWriter, r *http.Request) {
+			writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
+		})
+	})
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodPost, "/api/v1/auth/registration-status", nil)
+
+	handler.ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusMethodNotAllowed {
+		t.Fatalf("status = %d, body = %s", recorder.Code, recorder.Body.String())
+	}
+	if allow := recorder.Header().Get("Allow"); allow != "GET, HEAD" {
+		t.Fatalf("Allow = %q", allow)
+	}
+	var body map[string]string
+	if err := json.Unmarshal(recorder.Body.Bytes(), &body); err != nil {
+		t.Fatalf("invalid JSON: %v", err)
+	}
+	if body["code"] != "METHOD_NOT_ALLOWED" || body["message"] != "method not allowed" {
+		t.Fatalf("body = %#v", body)
+	}
+}
+
+func TestUnknownNonAPIRouteReturnsGenericNotFound(t *testing.T) {
+	handler := testHandler(t)
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodGet, "/does-not-exist", nil)
+
+	handler.ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusNotFound {
+		t.Fatalf("status = %d", recorder.Code)
+	}
+	var body map[string]string
+	if err := json.Unmarshal(recorder.Body.Bytes(), &body); err != nil {
+		t.Fatalf("invalid JSON: %v", err)
+	}
+	if body["code"] != "NOT_FOUND" || body["message"] != "route not found" {
+		t.Fatalf("body = %#v", body)
+	}
+}
+
+func TestServeMuxCanonicalRedirectStillRuns(t *testing.T) {
+	handler := testHandler(t)
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodGet, "/api/v1//does-not-exist", nil)
+
+	handler.ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusMovedPermanently {
+		t.Fatalf("status = %d, body = %s", recorder.Code, recorder.Body.String())
+	}
+	if location := recorder.Header().Get("Location"); location != "/api/v1/does-not-exist" {
+		t.Fatalf("Location = %q", location)
 	}
 }
 

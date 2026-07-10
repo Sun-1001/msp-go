@@ -16,7 +16,7 @@ import (
 	"mathstudy/backend-go/internal/platform/uploadpath"
 )
 
-// RouteRegistrar attaches migrated business routes to the shared mux.
+// RouteRegistrar attaches business routes to the shared mux.
 type RouteRegistrar func(*http.ServeMux)
 
 type handlerOptions struct {
@@ -26,7 +26,7 @@ type handlerOptions struct {
 // Option customizes the HTTP handler tree.
 type Option func(*handlerOptions)
 
-// WithRoutes registers migrated business routes before the API fallback handler.
+// WithRoutes registers business routes on the shared mux.
 func WithRoutes(registrar RouteRegistrar) Option {
 	return func(options *handlerOptions) {
 		if registrar != nil {
@@ -89,11 +89,10 @@ func NewHandler(cfg config.Config, logger *slog.Logger, checker health.Checker, 
 	for _, registrar := range options.registrars {
 		registrar(mux)
 	}
-	mux.HandleFunc(cfg.APIV1Prefix+"/", notMigratedHandler)
-	mux.HandleFunc("/", notFoundHandler)
+	router := muxWithFallbacks(mux)
 
 	return middleware.Chain(
-		mux,
+		router,
 		middleware.RequestID,
 		middleware.SecurityHeaders,
 		middleware.Timeout(cfg.RequestTimeout),
@@ -104,8 +103,53 @@ func NewHandler(cfg config.Config, logger *slog.Logger, checker health.Checker, 
 	), nil
 }
 
-func notMigratedHandler(w http.ResponseWriter, r *http.Request) {
-	writeError(w, http.StatusNotImplemented, "NOT_IMPLEMENTED", "Go backend route not migrated yet")
+func muxWithFallbacks(mux *http.ServeMux) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		candidate, pattern := mux.Handler(r)
+		if pattern != "" {
+			mux.ServeHTTP(w, r)
+			return
+		}
+
+		// ServeMux uses an empty pattern for both its internal 404 and 405 handlers.
+		probe := newStatusProbe()
+		candidate.ServeHTTP(probe, r)
+		switch probe.status {
+		case http.StatusNotFound:
+			notFoundHandler(w, r)
+		case http.StatusMethodNotAllowed:
+			w.Header().Set("Allow", probe.Header().Get("Allow"))
+			writeError(w, http.StatusMethodNotAllowed, "METHOD_NOT_ALLOWED", "method not allowed")
+		default:
+			mux.ServeHTTP(w, r)
+		}
+	})
+}
+
+type statusProbe struct {
+	header http.Header
+	status int
+}
+
+func newStatusProbe() *statusProbe {
+	return &statusProbe{header: make(http.Header)}
+}
+
+func (p *statusProbe) Header() http.Header {
+	return p.header
+}
+
+func (p *statusProbe) WriteHeader(status int) {
+	if p.status == 0 {
+		p.status = status
+	}
+}
+
+func (p *statusProbe) Write(body []byte) (int, error) {
+	if p.status == 0 {
+		p.status = http.StatusOK
+	}
+	return len(body), nil
 }
 
 func notFoundHandler(w http.ResponseWriter, r *http.Request) {

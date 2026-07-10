@@ -24,7 +24,6 @@ echo   启动完成!
 echo   前端: http://localhost:5173
 echo   后端: http://localhost:8000
 echo   健康检查: http://localhost:8000/health
-echo   注意: 未迁移的 /api/v1/* 接口会返回 501 占位响应
 echo ========================================
 echo.
 echo 关闭此窗口不会影响已启动的服务。
