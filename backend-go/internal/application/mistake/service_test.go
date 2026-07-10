@@ -217,6 +217,31 @@ func TestGetReviewExerciseSelectsHighestPriorityCandidate(t *testing.T) {
 	}
 }
 
+func TestGetReviewExerciseUsesNewestAttemptToBreakPriorityTie(t *testing.T) {
+	now := time.Date(2026, time.April, 25, 10, 0, 0, 0, time.UTC)
+	older := now.Add(-time.Hour)
+	repo := &fakeMistakeRepo{
+		rows: []MistakeRow{
+			newMistakeRow("attempt-old", "content-old", []string{"algebra"}, "conceptual", older, nil),
+			newMistakeRow("attempt-new", "content-new", []string{"geometry"}, "logical", now, nil),
+		},
+		profile: StudentProfile{MasteryVector: map[string]float64{"algebra": 0.25, "geometry": 0.25}},
+		errorCounts: map[string]int{
+			"content-old": 2,
+			"content-new": 2,
+		},
+	}
+	service := newTestService(repo, now)
+
+	response, err := service.GetReviewExercise(context.Background(), "student-1", "", "")
+	if err != nil {
+		t.Fatalf("GetReviewExercise() error = %v", err)
+	}
+	if response.Exercise.ID != "content-new" || response.Context.OriginalAttemptID != "attempt-new" {
+		t.Fatalf("response = %#v", response)
+	}
+}
+
 func TestGetReviewExerciseReturnsNotFoundWithoutCandidates(t *testing.T) {
 	now := time.Date(2026, time.April, 25, 10, 0, 0, 0, time.UTC)
 	repo := &fakeMistakeRepo{

@@ -499,7 +499,8 @@ func (s *Service) GetReviewExercise(ctx context.Context, userID string, focusCon
 		return ReviewExerciseResponse{}, err
 	}
 
-	candidates := make([]reviewCandidate, 0, len(rows))
+	var best reviewCandidate
+	hasCandidate := false
 	for _, row := range rows {
 		avgMastery := averageMastery(row.Content.ConceptIDs, mastery)
 		errorCount := errorCounts[row.Content.ID]
@@ -509,23 +510,21 @@ func (s *Service) GetReviewExercise(ctx context.Context, userID string, focusCon
 		if avgMastery >= 0.5 || errorCount < 2 {
 			continue
 		}
-		candidates = append(candidates, reviewCandidate{
+		candidate := reviewCandidate{
 			row:        row,
 			avgMastery: avgMastery,
 			errorCount: errorCount,
 			priority:   (1 - avgMastery) * float64(errorCount),
-		})
+		}
+		if !hasCandidate || reviewCandidateBefore(candidate, best) {
+			best = candidate
+			hasCandidate = true
+		}
 	}
-	if len(candidates) == 0 {
+	if !hasCandidate {
 		return ReviewExerciseResponse{}, ErrNotFound
 	}
-	sort.Slice(candidates, func(i, j int) bool {
-		if candidates[i].priority == candidates[j].priority {
-			return compareOptionalTimeDesc(candidates[i].row.Attempt.SubmittedAt, candidates[j].row.Attempt.SubmittedAt)
-		}
-		return candidates[i].priority > candidates[j].priority
-	})
-	return toReviewResponse(candidates[0]), nil
+	return toReviewResponse(best), nil
 }
 
 func normalizeListQuery(query ListQuery) ListQuery {
@@ -819,6 +818,13 @@ func compareOptionalTime(left *time.Time, right *time.Time) int {
 
 func compareOptionalTimeDesc(left *time.Time, right *time.Time) bool {
 	return compareOptionalTime(left, right) > 0
+}
+
+func reviewCandidateBefore(left reviewCandidate, right reviewCandidate) bool {
+	if left.priority != right.priority {
+		return left.priority > right.priority
+	}
+	return compareOptionalTimeDesc(left.row.Attempt.SubmittedAt, right.row.Attempt.SubmittedAt)
 }
 
 func compareInt(left int, right int) int {

@@ -1,7 +1,7 @@
 # 后端 Python 到 Go 重构迁移文档
 
 **Document status**: P4 in progress; P5 done; P6 AI/Agent in progress (Eino Tutor/Portrait/Diagnostician/Math Solver/Question Parser Agent and admin LLM/Agent config loop wired; OCR and broader math tools pending); P7 in progress; P8 static contract handoff done; P9 Python backend removed by user confirmation
-**Last updated**: 2026-07-04
+**Last updated**: 2026-07-10
 **适用范围**：原 `backend/` Python FastAPI 后端整体迁移到 Go 后端；`backend/` 已从当前工作区删除
 **重构原则**：接口兼容、数据连续、分阶段验收、每阶段完成必须更新本文档
 
@@ -632,6 +632,10 @@ pytest
 - 验证结果（阶段进行中）：Go 全量单元/契约测试通过；Go vet 通过；覆盖 `/progress` 鉴权、overview、mastery、statistics、path、knowledge-graph、class-ranking、chapters 的应用层和 HTTP 层主要路径；覆盖 `/portrait` 鉴权、读取、清除和模板画像生成的应用层与 HTTP 层主要路径；覆盖 `/mistakes` 鉴权、列表筛选/排序/分页、统计、详情、标记掌握、删除和复习推荐的应用层与 HTTP 层主要路径；覆盖 `/exercise` 鉴权、下一题选择、提交答案、DKT/profile 更新、题目详情和解析权限的应用层主要路径；覆盖 `/session` 鉴权、创建、历史、列表、结束、模式、删除、批删、任务取消和 SSE 形状兼容降级的应用层与 HTTP 层主要路径。2026-06-01 本轮 `go test ./... -count=1` 通过。
 - 交付物链接：`backend-go/internal/application/progress/`、`backend-go/internal/adapter/http/progress/`、`backend-go/internal/adapter/postgres/progress_repository.go`、`backend-go/internal/application/portrait/`、`backend-go/internal/adapter/http/portrait/`、`backend-go/internal/adapter/postgres/portrait_repository.go`、`backend-go/internal/application/mistake/`、`backend-go/internal/adapter/http/mistake/`、`backend-go/internal/adapter/postgres/mistake_repository.go`、`backend-go/internal/application/exercise/`、`backend-go/internal/adapter/http/exercise/`、`backend-go/internal/adapter/postgres/exercise_repository.go`、`backend-go/internal/application/session/`、`backend-go/internal/adapter/http/session/`、`backend-go/internal/adapter/postgres/session_repository.go`、`backend-go/cmd/api/main.go`、`backend-go/migrations/0002_replace_bkt_with_dkt.up.sql`（进行中）
 - Residual risks: /session/{id}/chat now has an Eino-first Tutor Agent path when EINO_* is configured and keeps an explicit fallback when not configured; resource recommendation fallback, portrait updates, LLM portrait quality, OCR, math equivalence and LLM diagnosis still need follow-up Eino slices. Repository integration tests and runtime user acceptance remain separate validation work.
+- 2026-07-10 错题复习候选择优算法验证命令：`gofmt -w internal/application/mistake/service.go internal/application/mistake/service_test.go`；`GOCACHE=E:\code\msp-go\.gocache MSP_REPO_ROOT=E:\code\msp-go go test ./internal/application/mistake -count=1`；`GOCACHE=E:\code\msp-go\.gocache MSP_REPO_ROOT=E:\code\msp-go go test ./... -count=1`；`GOCACHE=E:\code\msp-go\.gocache MSP_REPO_ROOT=E:\code\msp-go go vet ./...`；`git diff --check -- backend-go/internal/application/mistake/service.go backend-go/internal/application/mistake/service_test.go docs/backend-python-to-go-refactor.md`。
+- 2026-07-10 错题复习候选择优算法验证结果：复习推荐从构造候选切片并全量排序改为单趟择优，时间复杂度由 O(n log n) 降为 O(n)，候选额外空间由 O(n) 降为 O(1)；保持高优先级优先、同优先级较新提交优先的既有语义。新增平优先级回归测试，mistake 应用定向测试、后端全量测试和 Go vet 均通过。
+- 2026-07-10 错题复习候选择优算法交付物：`backend-go/internal/application/mistake/service.go`、`backend-go/internal/application/mistake/service_test.go`。
+- 2026-07-10 错题复习候选择优算法残余风险：本切片只优化内存中候选择优，不改变仓储查询范围、掌握度阈值、错误次数阈值或 API 契约；P4 仍缺 mistake/session/exercise/progress/portrait 仓储的真实 PostgreSQL 验证和核心流程运行时验收，因此状态保持 `IN_PROGRESS`。
 
 ### 12.6 P5 内容与教学管理域
 
