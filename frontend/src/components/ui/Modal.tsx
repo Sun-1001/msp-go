@@ -1,4 +1,4 @@
-import React, { useEffect } from 'react';
+import React, { useEffect, useId } from 'react';
 import { createPortal } from 'react-dom';
 import { X } from 'lucide-react';
 import { cn } from '../../libs/utils/cn';
@@ -11,6 +11,31 @@ interface ModalProps {
   children: React.ReactNode;
   className?: string;
   showHeader?: boolean;
+  ariaLabel?: string;
+}
+
+let bodyScrollLockCount = 0;
+let bodyOverflowBeforeLock = '';
+
+function acquireBodyScrollLock() {
+  if (bodyScrollLockCount === 0) {
+    bodyOverflowBeforeLock = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+  }
+
+  bodyScrollLockCount += 1;
+  let released = false;
+
+  return () => {
+    if (released) return;
+    released = true;
+    bodyScrollLockCount -= 1;
+
+    if (bodyScrollLockCount === 0) {
+      document.body.style.overflow = bodyOverflowBeforeLock;
+      bodyOverflowBeforeLock = '';
+    }
+  };
 }
 
 export const Modal: React.FC<ModalProps> = ({
@@ -20,17 +45,16 @@ export const Modal: React.FC<ModalProps> = ({
   children,
   className,
   showHeader = true,
+  ariaLabel,
 }) => {
+  const titleId = useId();
+  const hasVisibleTitle = showHeader && Boolean(title);
+
   // Prevent scrolling when modal is open
   useEffect(() => {
-    if (isOpen) {
-      document.body.style.overflow = 'hidden';
-    } else {
-      document.body.style.overflow = 'unset';
-    }
-    return () => {
-      document.body.style.overflow = 'unset';
-    };
+    if (!isOpen) return;
+
+    return acquireBodyScrollLock();
   }, [isOpen]);
 
   // Handle escape key
@@ -50,7 +74,7 @@ export const Modal: React.FC<ModalProps> = ({
     <div className="fixed inset-0 z-100 flex items-center justify-center overflow-y-auto overflow-x-hidden p-4">
       {/* Backdrop with gradient */}
       <div
-        className="absolute inset-0 bg-surface-900/60 backdrop-blur-md dark:bg-surface-950/80 animate-fade-in"
+        className="absolute inset-0 bg-surface-900/60 backdrop-blur-md dark:bg-surface-950/80 animate-fade-in motion-reduce:animate-none"
         onClick={onClose}
         aria-hidden="true"
       />
@@ -66,10 +90,14 @@ export const Modal: React.FC<ModalProps> = ({
         className={cn(
           "relative w-full max-w-md transform rounded-3xl bg-white p-8 text-left shadow-2xl border border-surface-100",
           "dark:bg-surface-900 dark:border-surface-700",
-          "animate-fade-in animate-scale-in",
+          "animate-fade-in animate-scale-in motion-reduce:animate-none",
           className
         )}
         onClick={(e) => e.stopPropagation()}
+        role="dialog"
+        aria-modal="true"
+        aria-label={hasVisibleTitle ? undefined : ariaLabel || '弹窗'}
+        aria-labelledby={hasVisibleTitle ? titleId : undefined}
       >
         {/* Close button - always visible */}
         <button
@@ -79,6 +107,7 @@ export const Modal: React.FC<ModalProps> = ({
             animationCombos.buttonHover
           )}
           onClick={onClose}
+          aria-label="关闭弹窗"
         >
           <X className="w-5 h-5" />
         </button>
@@ -86,7 +115,7 @@ export const Modal: React.FC<ModalProps> = ({
         {/* Header */}
         {showHeader && title && (
           <div className="mb-6 pr-8">
-            <h3 className="text-xl font-semibold leading-6 text-surface-900 dark:text-surface-100">
+            <h3 id={titleId} className="text-xl font-semibold leading-6 text-surface-900 dark:text-surface-100">
               {title}
             </h3>
           </div>

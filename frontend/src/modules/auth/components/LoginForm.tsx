@@ -1,4 +1,5 @@
 import React, { useState } from 'react';
+import { motion, useReducedMotion } from 'framer-motion';
 import { Link, useNavigate } from 'react-router-dom';
 import { useAppDispatch } from '@/store';
 import { useForm, useWatch } from 'react-hook-form';
@@ -6,20 +7,20 @@ import { zodResolver } from '@hookform/resolvers/zod';
 import { authService } from '@/modules/auth/services/authService';
 import { setCredentials } from '@/modules/auth/store/authSlice';
 import { loginSchema, type LoginFormData } from '@/libs/validation';
-import { User, Lock, Sparkles, GraduationCap, BookOpen } from 'lucide-react';
+import { ArrowRight, Sparkles, GraduationCap, BookOpen, Eye, EyeOff } from 'lucide-react';
 import { logger } from '@/libs/utils/logger';
+import { Button } from '@/components/ui/Button';
 import {
   FormField,
-  FormHeader,
   FormDivider,
   FormFooterLink,
   FormFooterText,
   FormRootError,
-  FormSubmitButton,
   RoleSelector,
   type RoleOption,
 } from '@/libs/form';
 import { ForgotPasswordModal } from './ForgotPasswordModal';
+import { AnimatedLoginCharacters } from './AnimatedLoginCharacters';
 
 const authLogger = logger.createContextLogger('Auth');
 
@@ -59,7 +60,9 @@ const roleOptions: RoleOption<UserRole>[] = [
 export const LoginForm: React.FC<LoginFormProps> = ({ onSuccess, onSwitchToRegister }) => {
   const dispatch = useAppDispatch();
   const navigate = useNavigate();
+  const shouldReduceMotion = useReducedMotion();
   const [showForgotPassword, setShowForgotPassword] = useState(false);
+  const [showPassword, setShowPassword] = useState(false);
 
   const {
     register,
@@ -147,84 +150,123 @@ export const LoginForm: React.FC<LoginFormProps> = ({ onSuccess, onSwitchToRegis
   };
 
   return (
-    <div className="w-full space-y-6">
-      <FormHeader
-        icon={Sparkles}
-        title="欢迎回来"
-        subtitle="登录后开启智能数学学习之旅"
-      />
+    <div className="relative z-[1] grid w-full overflow-hidden lg:min-h-[680px] lg:grid-cols-[minmax(390px,0.92fr)_minmax(440px,1.08fr)]">
+      <AnimatedLoginCharacters avertGaze={showPassword} />
 
-      <form onSubmit={handleSubmit(onSubmit)} className="space-y-5">
-        <RoleSelector
-          options={roleOptions}
-          value={role}
-          onChange={(value) => setValue('role', value)}
-          label="选择身份"
-          error={errors.role?.message}
-        />
+      <div className="max-h-[calc(100vh-2rem)] overflow-y-auto bg-white px-6 py-8 dark:bg-surface-900 sm:px-8 lg:px-12 lg:py-10">
+        <div className="mx-auto w-full max-w-[420px] space-y-5">
+          <header className="space-y-2 text-center">
+            <motion.div
+              className="mx-auto flex h-10 w-10 items-center justify-center text-surface-900 dark:text-surface-100"
+              animate={!shouldReduceMotion && isSubmitting ? { rotate: 180 } : { rotate: 0 }}
+              transition={shouldReduceMotion ? { duration: 0 } : { duration: 0.45, ease: 'easeOut' }}
+            >
+              <Sparkles className="h-7 w-7" />
+            </motion.div>
+            <h1 className="text-3xl font-bold text-surface-950 dark:text-white">欢迎回来</h1>
+            <p className="text-sm text-surface-500 dark:text-surface-400">
+              登录后开启智能数学学习之旅
+            </p>
+          </header>
 
-        <FormField
-          label="用户名"
-          icon={User}
-          placeholder="请输入用户名"
-          autoComplete="username"
-          disabled={isSubmitting}
-          error={errors.username?.message}
-          {...register('username')}
-        />
+          <form onSubmit={handleSubmit(onSubmit)} className="space-y-4">
+            <RoleSelector
+              options={roleOptions}
+              value={role}
+              onChange={(value) => setValue('role', value)}
+              label="选择身份"
+              error={errors.role?.message}
+              variant="compact"
+            />
 
-        <FormField
-          label="密码"
-          icon={Lock}
-          type="password"
-          placeholder="请输入密码"
-          autoComplete="current-password"
-          disabled={isSubmitting}
-          error={errors.password?.message}
-          {...register('password')}
-        />
+            <FormField
+              label="用户名"
+              placeholder="请输入用户名"
+              autoComplete="username"
+              disabled={isSubmitting}
+              error={errors.username?.message}
+              className="h-11 rounded-none border-x-0 border-t-0 border-b bg-transparent px-0 py-2 focus:border-secondary-600 focus:bg-transparent focus:ring-0 focus-visible:ring-0 focus-visible:ring-offset-0 dark:bg-transparent dark:focus:border-secondary-400 dark:focus:bg-transparent"
+              {...register('username')}
+            />
 
-        <div className="flex justify-end -mt-1">
-          <button
-            type="button"
-            onClick={() => setShowForgotPassword(true)}
-            className="text-sm text-primary-600 hover:text-primary-500 dark:text-primary-400 dark:hover:text-primary-300 transition-colors"
-          >
-            忘记密码？
-          </button>
+            <FormField
+              label="密码"
+              type={showPassword ? 'text' : 'password'}
+              placeholder="请输入密码"
+              autoComplete="current-password"
+              disabled={isSubmitting}
+              error={errors.password?.message}
+              className="h-11 rounded-none border-x-0 border-t-0 border-b bg-transparent px-0 py-2 focus:border-secondary-600 focus:bg-transparent focus:ring-0 focus-visible:ring-0 focus-visible:ring-offset-0 dark:bg-transparent dark:focus:border-secondary-400 dark:focus:bg-transparent"
+              trailingAction={(
+                <button
+                  type="button"
+                  disabled={isSubmitting}
+                  aria-label={showPassword ? '隐藏密码' : '显示密码'}
+                  aria-pressed={showPassword}
+                  onPointerDown={(event) => event.preventDefault()}
+                  onClick={() => setShowPassword((visible) => !visible)}
+                  className="flex h-9 w-9 items-center justify-center rounded-md text-surface-400 transition-colors hover:bg-surface-100 hover:text-secondary-600 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-secondary-500/40 disabled:cursor-not-allowed disabled:opacity-50 dark:hover:bg-surface-800 dark:hover:text-secondary-300"
+                >
+                  {showPassword ? (
+                    <EyeOff className="h-4 w-4" aria-hidden="true" />
+                  ) : (
+                    <Eye className="h-4 w-4" aria-hidden="true" />
+                  )}
+                </button>
+              )}
+              {...register('password')}
+            />
+
+            <div className="-mt-1 flex justify-end">
+              <button
+                type="button"
+                onClick={() => setShowForgotPassword(true)}
+                className="text-sm text-secondary-700 transition-colors hover:text-secondary-600 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-secondary-500/40 dark:text-secondary-300 dark:hover:text-secondary-200"
+              >
+                忘记密码？
+              </button>
+            </div>
+
+            <FormRootError message={errors.root?.message} />
+
+            <Button
+              type="submit"
+              isLoading={isSubmitting}
+              className="group h-12 w-full rounded-full bg-surface-950 text-sm font-semibold text-white shadow-lg shadow-surface-950/15 hover:bg-secondary-700 dark:bg-white dark:text-surface-950 dark:hover:bg-secondary-200"
+            >
+              <span className="flex items-center justify-center gap-2">
+                {role === 'student' ? '学生登录' : '教师登录'}
+                <ArrowRight className="h-4 w-4 transition-transform duration-300 group-hover:translate-x-1 motion-reduce:transform-none motion-reduce:transition-none" />
+              </span>
+            </Button>
+          </form>
+
+          <FormDivider />
+
+          <FormFooterLink
+            text="还没有账号？"
+            linkText="立即注册"
+            onClick={onSwitchToRegister}
+          />
+
+          <FormFooterText>
+            登录即表示您同意我们的
+            <Link
+              to="/terms-of-service"
+              className="ml-1 text-primary-600 hover:text-primary-500 dark:text-primary-400 dark:hover:text-primary-300 underline underline-offset-2"
+            >
+              服务条款
+            </Link>
+            和
+            <Link
+              to="/privacy-policy"
+              className="ml-1 text-primary-600 hover:text-primary-500 dark:text-primary-400 dark:hover:text-primary-300 underline underline-offset-2"
+            >
+              隐私政策
+            </Link>
+          </FormFooterText>
         </div>
-
-        <FormRootError message={errors.root?.message} />
-
-        <FormSubmitButton isLoading={isSubmitting}>
-          {role === 'student' ? '学生登录' : '教师登录'}
-        </FormSubmitButton>
-      </form>
-
-      <FormDivider />
-
-      <FormFooterLink
-        text="还没有账号？"
-        linkText="立即注册"
-        onClick={onSwitchToRegister}
-      />
-
-      <FormFooterText>
-        登录即表示您同意我们的
-        <Link
-          to="/terms-of-service"
-          className="ml-1 text-primary-600 hover:text-primary-500 dark:text-primary-400 dark:hover:text-primary-300 underline underline-offset-2"
-        >
-          服务条款
-        </Link>
-        和
-        <Link
-          to="/privacy-policy"
-          className="ml-1 text-primary-600 hover:text-primary-500 dark:text-primary-400 dark:hover:text-primary-300 underline underline-offset-2"
-        >
-          隐私政策
-        </Link>
-      </FormFooterText>
+      </div>
 
       <ForgotPasswordModal
         isOpen={showForgotPassword}

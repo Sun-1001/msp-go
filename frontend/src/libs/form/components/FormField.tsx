@@ -14,6 +14,8 @@ interface FormFieldProps extends React.InputHTMLAttributes<HTMLInputElement> {
   error?: string;
   /** 输入框 ref（用于 react-hook-form） */
   inputRef?: React.Ref<HTMLInputElement>;
+  /** 输入框尾部操作，例如密码显隐按钮 */
+  trailingAction?: React.ReactNode;
 }
 
 /**
@@ -34,7 +36,7 @@ interface FormFieldProps extends React.InputHTMLAttributes<HTMLInputElement> {
  * ```
  */
 export const FormField = React.forwardRef<HTMLInputElement, FormFieldProps>(
-  ({ label, icon: Icon, error, className, id, ...inputProps }, ref) => {
+  ({ label, icon: Icon, error, className, id, trailingAction, ...inputProps }, ref) => {
     const fieldId = id || `field-${label}`;
 
     return (
@@ -50,9 +52,19 @@ export const FormField = React.forwardRef<HTMLInputElement, FormFieldProps>(
           <Input
             id={fieldId}
             ref={ref}
-            className={cn(inputStyles.base, error && inputStyles.error, className)}
+            className={cn(
+              inputStyles.base,
+              error && inputStyles.error,
+              className,
+              trailingAction && 'pr-11'
+            )}
             {...inputProps}
           />
+          {trailingAction && (
+            <div className="absolute inset-y-0 right-0 flex items-center pr-1">
+              {trailingAction}
+            </div>
+          )}
         </div>
         <FormError message={error} />
       </div>

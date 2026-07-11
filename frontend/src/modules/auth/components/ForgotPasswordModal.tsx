@@ -65,7 +65,12 @@ export const ForgotPasswordModal: React.FC<ForgotPasswordModalProps> = ({
   };
 
   return (
-    <Modal isOpen={isOpen} onClose={handleClose} showHeader={false}>
+    <Modal
+      isOpen={isOpen}
+      onClose={handleClose}
+      showHeader={false}
+      ariaLabel={submitted ? '密码重置申请已提交' : '忘记密码'}
+    >
       {submitted ? (
         <div className="text-center space-y-4 py-4">
           <div className="mx-auto w-16 h-16 bg-emerald-100 dark:bg-emerald-900/30 rounded-full flex items-center justify-center">
