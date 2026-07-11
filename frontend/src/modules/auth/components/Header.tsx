@@ -1,7 +1,6 @@
 import React from 'react';
-import { Link, useLocation } from 'react-router-dom';
+import { Link } from 'react-router-dom';
 import { useAppSelector } from '@/store';
-import { motion } from 'framer-motion';
 import { Button } from '@/components/ui/Button';
 import { ThemeToggle } from '@/components/ui/ThemeToggle';
 import { cn } from '@/libs/utils/cn';
@@ -9,7 +8,8 @@ import { Loader2, LogOut, User, Users } from 'lucide-react';
 import { selectIsAuthenticated, selectCurrentUser } from '@/modules/auth/store/authSlice';
 import { getNavItemsByRole } from '@/modules/auth/constants/navigationConfig';
 import { useAuth } from '@/modules/auth/hooks/useAuth';
-import { animationCombos, navIndicatorVariants } from '@/libs/animations';
+import { animationCombos } from '@/libs/animations';
+import { ResponsiveNavigation } from '@/modules/auth/components/ResponsiveNavigation';
 
 interface HeaderProps {
   variant?: 'default' | 'transparent' | 'dark';
@@ -26,7 +26,6 @@ interface HeaderProps {
  * - SOLID: 依赖抽象（hooks），而非具体实现
  */
 export const Header: React.FC<HeaderProps> = ({ variant = 'default', onLoginClick, onRegisterClick }) => {
-  const location = useLocation();
   const isAuthenticated = useAppSelector(selectIsAuthenticated);
   const user = useAppSelector(selectCurrentUser);
   const { handleLogin, handleRegister, handleLogout, isLoggingOut } = useAuth();
@@ -48,9 +47,9 @@ export const Header: React.FC<HeaderProps> = ({ variant = 'default', onLoginClic
       variant === 'transparent' && "fixed border-transparent bg-transparent backdrop-blur-sm",
       variant === 'dark' && "sticky border-surface-800 bg-surface-950/80 backdrop-blur-md"
     )}>
-      <div className="container mx-auto px-4 sm:px-6 lg:px-8 h-16 flex items-center justify-between">
+      <div className="container mx-auto flex h-16 items-center justify-between gap-3 px-4 sm:px-6 lg:px-8">
         {/* Logo */}
-        <Link to={isLoggedIn ? (isTeacher ? '/teacher/dashboard' : '/course/overview') : '/'} className="flex items-center space-x-2 group">
+        <Link to={isLoggedIn ? (isTeacher ? '/teacher/dashboard' : '/course/overview') : '/'} className="group flex shrink-0 items-center space-x-2">
           <div className={cn(
             "h-8 w-8 rounded-lg flex items-center justify-center text-white shadow-lg",
             animationCombos.buttonHover,
@@ -61,7 +60,7 @@ export const Header: React.FC<HeaderProps> = ({ variant = 'default', onLoginClic
             <span className="font-bold text-lg">M</span>
           </div>
           <span className={cn(
-            "font-bold text-xl bg-clip-text text-transparent bg-linear-to-r",
+            "whitespace-nowrap font-bold text-xl bg-clip-text text-transparent bg-linear-to-r",
             isDark ? "from-white to-surface-400" : "from-surface-900 to-surface-600 dark:from-white dark:to-surface-400"
           )}>
             高数智学
@@ -69,7 +68,7 @@ export const Header: React.FC<HeaderProps> = ({ variant = 'default', onLoginClic
           {/* 角色标识 */}
           {isLoggedIn && (
             <span className={cn(
-              "ml-1 px-2 py-0.5 text-xs font-medium rounded-full",
+              "ml-1 shrink-0 whitespace-nowrap px-2 py-0.5 text-xs font-medium rounded-full",
               isTeacher
                 ? "bg-emerald-100 text-emerald-700 dark:bg-emerald-900/50 dark:text-emerald-400"
                 : "bg-primary-100 text-primary-700 dark:bg-primary-900/50 dark:text-primary-400"
@@ -81,46 +80,11 @@ export const Header: React.FC<HeaderProps> = ({ variant = 'default', onLoginClic
 
         {/* Desktop Navigation - Only show when authenticated */}
         {isLoggedIn && (
-          <nav className="hidden md:flex items-center space-x-1">
-            {navItems.map((item) => {
-              const isActive = location.pathname.startsWith(item.href);
-              const Icon = item.icon;
-              return (
-                <Link
-                  key={item.href}
-                  to={item.href}
-                  className={cn(
-                    "relative flex items-center px-3 py-2 rounded-md text-sm font-medium",
-                    animationCombos.navItemHover,
-                    isActive
-                      ? isTeacher
-                        ? "text-emerald-600 bg-emerald-50 dark:text-emerald-400 dark:bg-emerald-950/50"
-                        : "text-primary-600 bg-primary-50 dark:text-primary-400 dark:bg-primary-950/50"
-                      : "text-surface-600 hover:text-primary-600 hover:bg-surface-50 dark:text-surface-400 dark:hover:text-primary-400 dark:hover:bg-surface-800"
-                  )}
-                >
-                  <Icon className={cn("w-4 h-4 mr-2 transition-transform duration-200", isActive && "scale-110")} />
-                  {item.label}
-                  {/* 激活指示器 - 下划线 */}
-                  <motion.span
-                    className={cn(
-                      "absolute bottom-0 left-0 right-0 h-0.5 rounded-full",
-                      isTeacher
-                        ? "bg-emerald-600 dark:bg-emerald-400"
-                        : "bg-primary-600 dark:bg-primary-400"
-                    )}
-                    initial="inactive"
-                    animate={isActive ? "active" : "inactive"}
-                    variants={navIndicatorVariants}
-                  />
-                </Link>
-              );
-            })}
-          </nav>
+          <ResponsiveNavigation items={navItems} isTeacher={isTeacher} />
         )}
 
         {/* User Actions */}
-        <div className="flex items-center space-x-3">
+        <div className="flex shrink-0 items-center space-x-3">
           {/* 主题切换按钮 */}
           <ThemeToggle variant="ghost" />
 
