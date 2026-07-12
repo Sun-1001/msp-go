@@ -233,6 +233,7 @@ func (h *Handler) importUsers(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	r.Body = http.MaxBytesReader(w, r.Body, maxImportBytes)
+	// #nosec G120 -- MaxBytesReader bounds the complete import request body.
 	if err := r.ParseMultipartForm(maxImportBytes); err != nil {
 		writeAdminUserError(w, http.StatusBadRequest, "BAD_REQUEST", "文件读取失败: "+redact.String(err.Error()))
 		return

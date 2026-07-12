@@ -172,6 +172,7 @@ func (h *Handler) importDatabase(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	r.Body = http.MaxBytesReader(w, r.Body, maxImportBytes)
+	// #nosec G120 -- MaxBytesReader bounds the complete import request body.
 	if err := r.ParseMultipartForm(maxImportBytes); err != nil {
 		if isRequestTooLarge(err) {
 			writeAdminSettingsError(w, http.StatusBadRequest, "BAD_REQUEST", "文件大小不能超过 100MB")

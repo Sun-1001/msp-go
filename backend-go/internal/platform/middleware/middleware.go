@@ -163,7 +163,7 @@ func (w gzipResponseWriter) Write(data []byte) (int, error) {
 }
 
 func (w gzipResponseWriter) Flush() {
-	w.writer.Flush()
+	_ = w.writer.Flush()
 	if flusher, ok := w.ResponseWriter.(http.Flusher); ok {
 		flusher.Flush()
 	}

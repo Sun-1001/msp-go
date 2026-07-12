@@ -145,6 +145,7 @@ func (j *trackingJar) SetCookies(u *url.URL, cookies []*http.Cookie) {
 	j.mu.Lock()
 	defer j.mu.Unlock()
 	for _, cookie := range cookies {
+		// #nosec G124 -- the jar preserves upstream Xidian cookie attributes verbatim.
 		copyCookie := *cookie
 		domain := copyCookie.Domain
 		if domain == "" {
@@ -176,6 +177,7 @@ func (j *trackingJar) importCookie(item xidianapp.Cookie) {
 	if pathValue == "" {
 		pathValue = "/"
 	}
+	// #nosec G124 -- imported upstream session cookies restore the serialized Secure flag below.
 	cookie := &http.Cookie{Name: name, Value: value, Domain: domain, Path: pathValue}
 	if secure, ok := item["secure"].(bool); ok {
 		cookie.Secure = secure

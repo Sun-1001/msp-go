@@ -1105,10 +1105,6 @@ func badRequest(message string) error {
 	return Error{Kind: ErrBadRequest, Message: message}
 }
 
-func conflict(message string) error {
-	return Error{Kind: ErrConflict, Message: message}
-}
-
 func normalizeRepositoryError(err error) error {
 	if err == nil {
 		return nil

@@ -343,6 +343,7 @@ func loadEnvFiles(paths []string) {
 }
 
 func loadEnvFile(path string) {
+	// #nosec G304 -- callers provide only the repository's fixed env-file candidates.
 	file, err := os.Open(path)
 	if err != nil {
 		return
@@ -366,7 +367,9 @@ func loadEnvFile(path string) {
 		if _, exists := os.LookupEnv(key); exists {
 			continue
 		}
-		os.Setenv(key, trimEnvValue(value))
+		if err := os.Setenv(key, trimEnvValue(value)); err != nil {
+			continue
+		}
 	}
 }
 
@@ -669,7 +672,7 @@ func validateXidianConfig(cfg Config) error {
 		return errors.New("XIDIAN_SYNC_RETRY_COUNT must be zero or greater")
 	}
 	if cfg.XidianCaptchaWidth <= 0 || cfg.XidianCaptchaHeight <= 0 || cfg.XidianPieceWidth <= 0 || cfg.XidianPieceHeight <= 0 {
-		return errors.New("Xidian captcha dimensions must be greater than 0")
+		return errors.New("xidian captcha dimensions must be greater than 0")
 	}
 	return requireConfigValues("Xidian", map[string]string{
 		"XIDIAN_IDS_BASE":   cfg.XidianIDsBase,

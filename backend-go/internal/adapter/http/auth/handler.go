@@ -379,6 +379,7 @@ func (h *Handler) setAuthCookies(w http.ResponseWriter, refreshToken string) boo
 }
 
 func (h *Handler) setRefreshCookie(w http.ResponseWriter, value string) {
+	// #nosec G124 -- security attributes are explicit; Secure is environment-configurable for local HTTP.
 	http.SetCookie(w, &http.Cookie{
 		Name:     refreshCookieName,
 		Value:    value,
@@ -391,6 +392,7 @@ func (h *Handler) setRefreshCookie(w http.ResponseWriter, value string) {
 }
 
 func (h *Handler) setCSRFCookie(w http.ResponseWriter, value string) {
+	// #nosec G124 -- double-submit CSRF cookies must be readable by the browser client.
 	http.SetCookie(w, &http.Cookie{
 		Name:     csrfCookieName,
 		Value:    value,
@@ -403,6 +405,7 @@ func (h *Handler) setCSRFCookie(w http.ResponseWriter, value string) {
 }
 
 func (h *Handler) clearAuthCookies(w http.ResponseWriter) {
+	// #nosec G124 -- deletion mirrors the explicit refresh-cookie security attributes.
 	http.SetCookie(w, &http.Cookie{
 		Name:     refreshCookieName,
 		Value:    "",
@@ -412,6 +415,7 @@ func (h *Handler) clearAuthCookies(w http.ResponseWriter) {
 		Secure:   h.cookieSecure,
 		SameSite: http.SameSiteLaxMode,
 	})
+	// #nosec G124 -- deletion mirrors the readable double-submit CSRF cookie.
 	http.SetCookie(w, &http.Cookie{
 		Name:     csrfCookieName,
 		Value:    "",

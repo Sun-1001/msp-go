@@ -166,29 +166,12 @@ func matchingParen(source string, openIndex int) int {
 	return -1
 }
 
-func routeKeys(routes []route) map[string]bool {
-	keys := make(map[string]bool, len(routes))
-	for _, item := range routes {
-		keys[item.Method+" "+item.Path] = true
-	}
-	return keys
-}
-
 func difference(left, right map[string]bool) []string {
 	result := []string{}
 	for key := range left {
 		if !right[key] {
 			result = append(result, key)
 		}
-	}
-	sort.Strings(result)
-	return result
-}
-
-func sortedKeys(items map[string]bool) []string {
-	result := make([]string, 0, len(items))
-	for key := range items {
-		result = append(result, key)
 	}
 	sort.Strings(result)
 	return result

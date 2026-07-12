@@ -171,21 +171,20 @@ func newTestService(t *testing.T, repo *fakeRepository) *Service {
 }
 
 type fakeRepository struct {
-	stats             AccountStats
-	listItems         []UserItem
-	listTotal         int
-	lastFilter        ListFilter
-	usersByUsername   map[string]user.User
-	usersByEmail      map[string]user.User
-	created           []user.CreateUser
-	updateUser        user.User
-	updateUserFound   bool
-	updateStatusUser  user.User
-	updateStatusFound bool
-	lastStatus        user.Status
-	deleted           bool
-	exportUsers       []ExportUser
-	createErr         error
+	stats            AccountStats
+	listItems        []UserItem
+	listTotal        int
+	lastFilter       ListFilter
+	usersByUsername  map[string]user.User
+	usersByEmail     map[string]user.User
+	created          []user.CreateUser
+	updateUser       user.User
+	updateUserFound  bool
+	updateStatusUser user.User
+	lastStatus       user.Status
+	deleted          bool
+	exportUsers      []ExportUser
+	createErr        error
 }
 
 func (r *fakeRepository) AccountStats(context.Context) (AccountStats, error) {

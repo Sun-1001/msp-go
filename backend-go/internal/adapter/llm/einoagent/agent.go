@@ -538,7 +538,7 @@ func (g *ConfigurableQuestionGenerator) GenerateQuestion(ctx context.Context, in
 // Generate runs the tutor agent and collects the final assistant message.
 func (a *Agent) Generate(ctx context.Context, input sessionapp.ChatAgentInput) (sessionapp.ChatAgentOutput, error) {
 	if a == nil || a.runner == nil {
-		return sessionapp.ChatAgentOutput{}, errors.New("Eino tutor agent is not configured")
+		return sessionapp.ChatAgentOutput{}, errors.New("eino tutor agent is not configured")
 	}
 	events := a.runner.Run(ctx, toMessages(input))
 	content := ""
@@ -565,7 +565,7 @@ func (a *Agent) Generate(ctx context.Context, input sessionapp.ChatAgentInput) (
 		}
 	}
 	if strings.TrimSpace(content) == "" {
-		return sessionapp.ChatAgentOutput{}, errors.New("Eino tutor agent returned empty content")
+		return sessionapp.ChatAgentOutput{}, errors.New("eino tutor agent returned empty content")
 	}
 	return sessionapp.ChatAgentOutput{Agent: a.name, Content: content}, nil
 }
@@ -576,7 +576,7 @@ type portraitGenerator struct {
 
 func (g portraitGenerator) GeneratePortrait(ctx context.Context, input portraitapp.GeneratorInput) (string, error) {
 	if g.agent == nil {
-		return "", errors.New("Eino portrait agent is not configured")
+		return "", errors.New("eino portrait agent is not configured")
 	}
 	output, err := g.agent.Generate(ctx, sessionapp.ChatAgentInput{
 		Message: portraitPrompt(input),
@@ -586,7 +586,7 @@ func (g portraitGenerator) GeneratePortrait(ctx context.Context, input portraita
 	}
 	content := strings.TrimSpace(output.Content)
 	if content == "" {
-		return "", errors.New("Eino portrait agent returned empty content")
+		return "", errors.New("eino portrait agent returned empty content")
 	}
 	return content, nil
 }
@@ -597,7 +597,7 @@ type exerciseDiagnostician struct {
 
 func (d exerciseDiagnostician) Diagnose(ctx context.Context, input exerciseapp.DiagnosisInput) (exerciseapp.DiagnosisDetail, error) {
 	if d.agent == nil {
-		return exerciseapp.DiagnosisDetail{}, errors.New("Eino diagnostician agent is not configured")
+		return exerciseapp.DiagnosisDetail{}, errors.New("eino diagnostician agent is not configured")
 	}
 	output, err := d.agent.Generate(ctx, sessionapp.ChatAgentInput{
 		Message: diagnosticianPrompt(input),
@@ -614,7 +614,7 @@ type exerciseMathSolver struct {
 
 func (s exerciseMathSolver) CheckAnswer(ctx context.Context, input exerciseapp.AnswerCheckInput) (exerciseapp.AnswerCheckResult, error) {
 	if s.agent == nil {
-		return exerciseapp.AnswerCheckResult{}, errors.New("Eino math solver agent is not configured")
+		return exerciseapp.AnswerCheckResult{}, errors.New("eino math solver agent is not configured")
 	}
 	output, err := s.agent.Generate(ctx, sessionapp.ChatAgentInput{
 		Message: mathSolverPrompt(input),
@@ -631,7 +631,7 @@ type questionParser struct {
 
 func (p questionParser) ParseQuestions(ctx context.Context, input questionapp.ParserInput) (questionapp.AIParseResponse, error) {
 	if p.agent == nil {
-		return questionapp.AIParseResponse{}, errors.New("Eino question parser agent is not configured")
+		return questionapp.AIParseResponse{}, errors.New("eino question parser agent is not configured")
 	}
 	output, err := p.agent.Generate(ctx, sessionapp.ChatAgentInput{
 		Message: questionParserPrompt(input),
@@ -648,7 +648,7 @@ type exerciseQuestionGenerator struct {
 
 func (g exerciseQuestionGenerator) GenerateQuestion(ctx context.Context, input exerciseapp.GenerationInput) (exerciseapp.GeneratedQuestion, error) {
 	if g.agent == nil {
-		return exerciseapp.GeneratedQuestion{}, errors.New("Eino question generator agent is not configured")
+		return exerciseapp.GeneratedQuestion{}, errors.New("eino question generator agent is not configured")
 	}
 	if err := validateGenerationInput(input); err != nil {
 		return exerciseapp.GeneratedQuestion{}, err
@@ -692,30 +692,30 @@ func modelHTTPClient(cfg Config) *http.Client {
 
 func validateConfig(cfg Config) error {
 	if !cfg.Enabled {
-		return errors.New("Eino agent is disabled")
+		return errors.New("eino agent is disabled")
 	}
 	if strings.TrimSpace(cfg.APIKey) == "" {
-		return errors.New("Eino API key is required")
+		return errors.New("eino API key is required")
 	}
 	if strings.TrimSpace(cfg.Model) == "" {
-		return errors.New("Eino model is required")
+		return errors.New("eino model is required")
 	}
 	if strings.TrimSpace(cfg.BaseURL) != "" {
 		if _, err := outbound.NormalizePublicHTTPSBaseURL(cfg.BaseURL); err != nil {
-			return fmt.Errorf("Eino base URL %w", err)
+			return fmt.Errorf("eino base URL %w", err)
 		}
 	}
 	if cfg.Timeout <= 0 {
-		return errors.New("Eino timeout must be greater than zero")
+		return errors.New("eino timeout must be greater than zero")
 	}
 	if cfg.Temperature < 0 || cfg.Temperature > 2 {
-		return errors.New("Eino temperature must be between 0 and 2")
+		return errors.New("eino temperature must be between 0 and 2")
 	}
 	if cfg.MaxTokens < 0 {
-		return errors.New("Eino max tokens must be zero or greater")
+		return errors.New("eino max tokens must be zero or greater")
 	}
 	if cfg.MaxIterations <= 0 {
-		return errors.New("Eino max iterations must be greater than zero")
+		return errors.New("eino max iterations must be greater than zero")
 	}
 	return nil
 }

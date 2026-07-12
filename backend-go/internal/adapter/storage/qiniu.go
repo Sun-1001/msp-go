@@ -3,7 +3,7 @@ package storage
 import (
 	"context"
 	"crypto/hmac"
-	"crypto/sha1"
+	"crypto/sha1" // #nosec G505 -- Qiniu's upload-token protocol requires HMAC-SHA1.
 	"encoding/base64"
 	"encoding/json"
 	"errors"
@@ -62,7 +62,7 @@ func NewQiniuStorage(cfg QiniuConfig, client *http.Client) (*QiniuStorage, error
 	}
 	if len(missing) > 0 {
 		sort.Strings(missing)
-		return nil, fmt.Errorf("Qiniu storage config missing: %s", strings.Join(missing, ", "))
+		return nil, fmt.Errorf("qiniu storage config missing: %s", strings.Join(missing, ", "))
 	}
 	domain, err := normalizeStorageBaseURL("QINIU_DOMAIN", cfg.Domain)
 	if err != nil {
@@ -119,7 +119,7 @@ func (s *QiniuStorage) UploadStream(ctx context.Context, reader io.Reader, key s
 		if message == "" {
 			message = response.Status
 		}
-		return uploadapp.StoredObject{}, fmt.Errorf("Qiniu upload failed: %s", message)
+		return uploadapp.StoredObject{}, fmt.Errorf("qiniu upload failed: %s", message)
 	}
 	return uploadapp.StoredObject{
 		Key:         cleanKey,

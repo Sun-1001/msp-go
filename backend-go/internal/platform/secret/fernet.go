@@ -60,6 +60,10 @@ func (f *Fernet) Encrypt(plaintext string) (string, error) {
 	if plaintext == "" {
 		return "", nil
 	}
+	unixSeconds := f.now().Unix()
+	if unixSeconds < 0 {
+		return "", errors.New("fernet timestamp must not precede Unix epoch")
+	}
 	block, err := aes.NewCipher(f.encryptionKey)
 	if err != nil {
 		return "", err
@@ -75,7 +79,8 @@ func (f *Fernet) Encrypt(plaintext string) (string, error) {
 	message := make([]byte, 0, 1+8+len(iv)+len(ciphertext)+sha256.Size)
 	message = append(message, fernetVersion)
 	timestamp := make([]byte, 8)
-	binary.BigEndian.PutUint64(timestamp, uint64(f.now().Unix()))
+	// #nosec G115 -- the negative range is rejected above.
+	binary.BigEndian.PutUint64(timestamp, uint64(unixSeconds))
 	message = append(message, timestamp...)
 	message = append(message, iv...)
 	message = append(message, ciphertext...)
@@ -131,6 +136,7 @@ func hmacSHA256Bytes(key []byte, data []byte) []byte {
 
 func pkcs7Pad(data []byte, blockSize int) []byte {
 	padding := blockSize - len(data)%blockSize
+	// #nosec G115 -- callers use AES.BlockSize, so padding is in [1, 16].
 	return append(append([]byte(nil), data...), bytes.Repeat([]byte{byte(padding)}, padding)...)
 }
 

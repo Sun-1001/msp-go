@@ -2,6 +2,7 @@ package postgres
 
 import (
 	"context"
+	"math"
 	"testing"
 	"time"
 
@@ -45,6 +46,27 @@ func TestNewPoolAppliesConfiguredPoolOptions(t *testing.T) {
 	}
 	if got.ConnConfig.RuntimeParams["idle_in_transaction_session_timeout"] != "45000" {
 		t.Fatalf("idle_in_transaction_session_timeout = %q", got.ConnConfig.RuntimeParams["idle_in_transaction_session_timeout"])
+	}
+}
+
+func TestNewPoolRejectsInvalidPoolLimits(t *testing.T) {
+	tests := []struct {
+		name     string
+		maxConns int
+		minConns int
+	}{
+		{name: "zero max", maxConns: 0},
+		{name: "negative min", maxConns: 1, minConns: -1},
+		{name: "min exceeds max", maxConns: 1, minConns: 2},
+		{name: "max overflows int32", maxConns: int(math.MaxInt32) + 1},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			cfg := config.Config{DBPoolSize: test.maxConns, DBPoolMinConns: test.minConns}
+			if _, err := NewPool(context.Background(), cfg); err == nil {
+				t.Fatal("NewPool() error = nil, want invalid pool limits error")
+			}
+		})
 	}
 }
 

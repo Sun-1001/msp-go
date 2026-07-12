@@ -1,17 +1,17 @@
 module mathstudy/backend-go
 
-go 1.25
+go 1.25.0
 
-toolchain go1.25.10
+toolchain go1.25.12
 
 require (
 	github.com/alicebob/miniredis/v2 v2.37.0
 	github.com/cloudwego/eino v0.8.13
 	github.com/cloudwego/eino-ext/components/model/openai v0.1.13
-	github.com/jackc/pgx/v5 v5.7.6
+	github.com/jackc/pgx/v5 v5.9.2
 	github.com/redis/go-redis/v9 v9.17.1
 	golang.org/x/crypto v0.37.0
-	golang.org/x/text v0.24.0
+	golang.org/x/text v0.29.0
 )
 
 require (
@@ -50,7 +50,7 @@ require (
 	github.com/yuin/gopher-lua v1.1.1 // indirect
 	golang.org/x/arch v0.11.0 // indirect
 	golang.org/x/exp v0.0.0-20230713183714-613f0c0eb8a1 // indirect
-	golang.org/x/sync v0.13.0 // indirect
+	golang.org/x/sync v0.17.0 // indirect
 	golang.org/x/sys v0.32.0 // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect
 )

@@ -98,6 +98,7 @@ func aesEncryptPassword(password string, salt string) (string, error) {
 		return "", err
 	}
 	encrypted := make([]byte, len(data))
+	// #nosec G407 -- Xidian's legacy login protocol mandates this fixed CBC IV.
 	cipher.NewCBCEncrypter(block, []byte("xidianscriptsxdu")).CryptBlocks(encrypted, data)
 	return base64.StdEncoding.EncodeToString(encrypted), nil
 }

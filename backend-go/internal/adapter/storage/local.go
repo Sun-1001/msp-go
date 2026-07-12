@@ -38,10 +38,11 @@ func (s *LocalStorage) UploadStream(_ context.Context, reader io.Reader, key str
 	if !isSubpath(root, target) {
 		return uploadapp.StoredObject{}, errors.New("upload key escapes upload directory")
 	}
-	if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Dir(target), 0o750); err != nil {
 		return uploadapp.StoredObject{}, err
 	}
-	file, err := os.OpenFile(target, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o644)
+	// #nosec G304 -- cleanObjectKey and isSubpath constrain target to uploadDir.
+	file, err := os.OpenFile(target, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o600)
 	if err != nil {
 		return uploadapp.StoredObject{}, err
 	}

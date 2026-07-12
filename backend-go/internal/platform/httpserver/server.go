@@ -48,7 +48,7 @@ func NewHandler(cfg config.Config, logger *slog.Logger, checker health.Checker, 
 	if err != nil {
 		return nil, err
 	}
-	if err := os.MkdirAll(uploadsDir, 0o755); err != nil {
+	if err := os.MkdirAll(uploadsDir, 0o750); err != nil {
 		return nil, err
 	}
 	managementAccess, err := newManagementAccess(cfg.ManagementAllowedCIDRs)

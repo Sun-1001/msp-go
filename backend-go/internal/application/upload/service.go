@@ -91,21 +91,6 @@ func (s *Service) SaveResourceFile(ctx context.Context, reader io.Reader, meta F
 	return s.saveResource(ctx, reader, meta, MaxResourceSize, prefix)
 }
 
-func (s *Service) save(ctx context.Context, reader io.Reader, meta FileMeta, allowed map[string]string, maxSize int64, prefix string) (Response, error) {
-	contentType := strings.ToLower(strings.TrimSpace(meta.ContentType))
-	extension, ok := allowed[contentType]
-	if !ok {
-		return Response{}, ErrInvalidContentType
-	}
-	if meta.Size > maxSize {
-		return Response{}, ErrFileTooLarge
-	}
-	if reader == nil {
-		return Response{}, errors.New("upload reader is nil")
-	}
-	return s.store(ctx, reader, contentType, meta.Size, maxSize, extension, prefix)
-}
-
 func (s *Service) saveResource(ctx context.Context, reader io.Reader, meta FileMeta, maxSize int64, prefix string) (Response, error) {
 	contentType := strings.ToLower(strings.TrimSpace(meta.ContentType))
 	extension, ok := allowedResourceTypes()[contentType]

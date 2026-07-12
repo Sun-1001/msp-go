@@ -25,6 +25,8 @@ uploads/
 *.temp
 .cache/
 .gocache/
+backend-go/coverage.out
+frontend/coverage/
 
 # Python 缓存（根目录级别）
 __pycache__/
@@ -45,3 +47,7 @@ __pycache__/
 .omc/
 .codex/
 .workflow/
+
+# 本地运行、构建和安全测试产物
+output/
+uploads-test/

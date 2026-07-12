@@ -45,6 +45,18 @@ func TestFernetRejectsInvalidToken(t *testing.T) {
 	}
 }
 
+func TestFernetRejectsTimestampBeforeUnixEpoch(t *testing.T) {
+	service, err := NewFernet(testFernetKey)
+	if err != nil {
+		t.Fatalf("NewFernet() error = %v", err)
+	}
+	service.now = func() time.Time { return time.Unix(-1, 0).UTC() }
+
+	if _, err := service.Encrypt("secret-password"); err == nil {
+		t.Fatal("Encrypt() error = nil, want invalid timestamp error")
+	}
+}
+
 func TestNewFernetRejectsInvalidKey(t *testing.T) {
 	if _, err := NewFernet("bad-key"); err == nil {
 		t.Fatal("NewFernet(bad-key) error = nil, want error")

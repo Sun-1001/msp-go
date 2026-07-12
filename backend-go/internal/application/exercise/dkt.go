@@ -180,12 +180,14 @@ func addTokenEmbedding(vector []float64, token string, weight float64) {
 	hash := fnv.New64a()
 	_, _ = hash.Write([]byte(token))
 	value := hash.Sum64()
+	// #nosec G115 -- modulo len(vector) bounds the result to a valid int index.
 	index := int(value % uint64(len(vector)))
 	sign := 1.0
 	if (value>>8)&1 == 1 {
 		sign = -1.0
 	}
 	vector[index] += sign * weight
+	// #nosec G115 -- modulo len(vector) bounds the result to a valid int index.
 	secondary := int((value >> 16) % uint64(len(vector)))
 	vector[secondary] += sign * weight * 0.37
 }

@@ -87,6 +87,7 @@ func (h *Handler) resource(w http.ResponseWriter, r *http.Request) {
 
 func (h *Handler) upload(w http.ResponseWriter, r *http.Request, maxSize int64, save func(context.Context, io.Reader, uploadapp.FileMeta) (uploadapp.Response, error), fallback string) {
 	r.Body = http.MaxBytesReader(w, r.Body, maxSize+multipartMemory)
+	// #nosec G120 -- MaxBytesReader bounds the complete multipart request body.
 	if err := r.ParseMultipartForm(multipartMemory); err != nil {
 		var maxBytesError *http.MaxBytesError
 		if errors.As(err, &maxBytesError) {
