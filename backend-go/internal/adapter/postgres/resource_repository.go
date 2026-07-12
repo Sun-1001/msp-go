@@ -159,8 +159,9 @@ func (r ResourceRepository) updateResource(ctx context.Context, resourceID strin
 	var metaRaw []byte
 	err := r.DB().QueryRow(ctx, `
 		SELECT type::text, title, body, difficulty, tags, meta
-		FROM public.contents
-		WHERE id = $1 AND owner_teacher_id = $2 AND deleted_at IS NULL`,
+		FROM public.contents c
+		WHERE c.id = $1 AND c.owner_teacher_id = $2 AND c.deleted_at IS NULL
+			AND `+resourceContentTypeCondition,
 		resourceID,
 		ownerID,
 	).Scan(&currentType, &title, &body, &difficulty, &tagsRaw, &metaRaw)
@@ -224,7 +225,7 @@ func (r ResourceRepository) updateResource(ctx context.Context, resourceID strin
 		return resourceapp.Resource{}, false, err
 	}
 	tag, err := r.DB().Exec(ctx, `
-		UPDATE public.contents
+		UPDATE public.contents c
 		SET type = $3::public.contenttype,
 			title = $4,
 			body = $5,
@@ -232,7 +233,8 @@ func (r ResourceRepository) updateResource(ctx context.Context, resourceID strin
 			tags = $7::json,
 			meta = $8::json,
 			updated_at = $9
-		WHERE id = $1 AND owner_teacher_id = $2 AND deleted_at IS NULL`,
+		WHERE c.id = $1 AND c.owner_teacher_id = $2 AND c.deleted_at IS NULL
+			AND `+resourceContentTypeCondition,
 		resourceID,
 		ownerID,
 		currentType,
@@ -271,9 +273,10 @@ func (r ResourceRepository) updateResource(ctx context.Context, resourceID strin
 // DeleteResource soft-deletes a teacher-owned resource.
 func (r ResourceRepository) DeleteResource(ctx context.Context, resourceID string, ownerID string, now time.Time) (bool, error) {
 	tag, err := r.DB().Exec(ctx, `
-		UPDATE public.contents
+		UPDATE public.contents c
 		SET deleted_at = $3, status = 'ARCHIVED'::public.contentstatus
-		WHERE id = $1 AND owner_teacher_id = $2 AND deleted_at IS NULL`,
+		WHERE c.id = $1 AND c.owner_teacher_id = $2 AND c.deleted_at IS NULL
+			AND `+resourceContentTypeCondition,
 		resourceID,
 		ownerID,
 		now,
@@ -292,8 +295,9 @@ func (r ResourceRepository) ToggleFavorite(ctx context.Context, userID string, r
 		exists, err := tx.Exists(ctx, `
 			SELECT EXISTS (
 				SELECT 1
-				FROM public.contents
-				WHERE id = $1 AND status = 'PUBLISHED' AND deleted_at IS NULL
+				FROM public.contents c
+				WHERE c.id = $1 AND c.status = 'PUBLISHED' AND c.deleted_at IS NULL
+					AND `+resourceContentTypeCondition+`
 			)`,
 			resourceID,
 		)
@@ -545,7 +549,8 @@ func (r ResourceRepository) getResource(ctx context.Context, resourceID string, 
 			LIMIT 1
 		) asset ON true
 		LEFT JOIN public.user_favorites uf ON uf.user_id = $2 AND uf.content_id = c.id
-		WHERE c.id = $1 AND c.deleted_at IS NULL `+publishedClause,
+		WHERE c.id = $1 AND c.deleted_at IS NULL
+			AND `+resourceContentTypeCondition+` `+publishedClause,
 		resourceID,
 		userID,
 	)
@@ -564,7 +569,7 @@ func resourceWhereClause(userID string, filter resourceapp.ListFilter) (string, 
 	conditions := []string{
 		"c.status = 'PUBLISHED'",
 		"c.deleted_at IS NULL",
-		"c.type IN ('VIDEO', 'ARTICLE')",
+		resourceContentTypeCondition,
 		"($1::varchar IS NOT NULL)",
 	}
 	if filter.Type != "" {
@@ -589,6 +594,8 @@ func resourceWhereClause(userID string, filter resourceapp.ListFilter) (string, 
 	}
 	return strings.Join(conditions, " AND "), args
 }
+
+const resourceContentTypeCondition = "c.type IN ('VIDEO', 'ARTICLE')"
 
 const resourceSelectColumns = `
 	c.id,

@@ -34,29 +34,29 @@ type Repository interface {
 	ListStudentsInClasses(context.Context, []string) ([]string, error)
 	ListTeacherStudents(context.Context, string, StudentListFilter) ([]StudentListItem, int, error)
 	CountActiveSessionsSince(context.Context, []string, time.Time) (int, error)
-	AverageAttemptScore(context.Context, []string, *time.Time) (float64, bool, error)
-	SumAttemptSeconds(context.Context, []string, *time.Time) (int, error)
-	CountDistinctAttemptStudentsSince(context.Context, []string, time.Time) (int, error)
+	AverageAttemptScore(context.Context, string, []string, *time.Time) (float64, bool, error)
+	SumAttemptSeconds(context.Context, string, []string, *time.Time) (int, error)
+	CountDistinctAttemptStudentsSince(context.Context, string, []string, time.Time) (int, error)
 	ListProfiles(context.Context, []string) ([]StudentProfile, error)
 	KnowledgeNames(context.Context, []string) (map[string]string, error)
 	WeeklySessionActivity(context.Context, []string, time.Time) (map[string]int, error)
-	TopStudentsByAverageScore(context.Context, []string, int) ([]StudentScore, error)
+	TopStudentsByAverageScore(context.Context, string, []string, int) ([]StudentScore, error)
 	UserDisplayNames(context.Context, []string) (map[string]string, error)
 	ClassOwnedByTeacher(context.Context, string, string) (bool, error)
-	CommonErrors(context.Context, []string, int) ([]CommonErrorAggregate, error)
-	LowScoreStudents(context.Context, []string, float64) (map[string]float64, error)
+	CommonErrors(context.Context, string, []string, int) ([]CommonErrorAggregate, error)
+	LowScoreStudents(context.Context, string, []string, float64) (map[string]float64, error)
 	ActiveStudentIDsSince(context.Context, []string, time.Time) (map[string]struct{}, error)
 	StudentEnrollmentForTeacher(context.Context, string, string) (StudentEnrollment, bool, error)
 	GetUser(context.Context, string) (UserInfo, bool, error)
-	GetProfile(context.Context, string) (StudentProfile, bool, error)
-	AverageStudentScore(context.Context, string) (float64, bool, error)
-	RankByAverageScore(context.Context, []string) ([]StudentScore, error)
+	GetProfile(context.Context, string, string) (StudentProfile, bool, error)
+	AverageStudentScore(context.Context, string, string) (float64, bool, error)
+	RankByAverageScore(context.Context, string, []string) ([]StudentScore, error)
 	LastSessionStartedAt(context.Context, string) (*time.Time, error)
 	ListSessionDays(context.Context, string) ([]time.Time, error)
-	AttemptConceptCounts(context.Context, string) (map[string]int, error)
-	RecentAttempts(context.Context, string, int) ([]RecentAttempt, error)
+	AttemptConceptCounts(context.Context, string, string) (map[string]int, error)
+	RecentAttempts(context.Context, string, string, int) ([]RecentAttempt, error)
 	RecentSessions(context.Context, string, int) ([]RecentSession, error)
-	RecentMistakes(context.Context, string, int) ([]StudentMistake, error)
+	RecentMistakes(context.Context, string, string, int) ([]StudentMistake, error)
 }
 
 // StudentProfile mirrors the teacher-facing fields stored in student_profiles.
@@ -348,7 +348,7 @@ func (s *Service) GetStudentsStats(ctx context.Context, teacherID string) (Stude
 	if total == 0 {
 		return StudentsStats{}, nil
 	}
-	avgScore, ok, err := s.repo.AverageAttemptScore(ctx, studentIDs, nil)
+	avgScore, ok, err := s.repo.AverageAttemptScore(ctx, teacherID, studentIDs, nil)
 	if err != nil {
 		return StudentsStats{}, err
 	}
@@ -363,7 +363,7 @@ func (s *Service) GetStudentsStats(ctx context.Context, teacherID string) (Stude
 	if err != nil {
 		return StudentsStats{}, err
 	}
-	lowScoreStudents, err := s.repo.LowScoreStudents(ctx, studentIDs, 60)
+	lowScoreStudents, err := s.repo.LowScoreStudents(ctx, teacherID, studentIDs, 60)
 	if err != nil {
 		return StudentsStats{}, err
 	}
@@ -415,18 +415,18 @@ func (s *Service) GetAnalytics(ctx context.Context, teacherID string, timeRange 
 		return emptyAnalytics(), nil
 	}
 
-	avgScore, scoreOK, err := s.repo.AverageAttemptScore(ctx, studentIDs, &rangeStart)
+	avgScore, scoreOK, err := s.repo.AverageAttemptScore(ctx, teacherID, studentIDs, &rangeStart)
 	if err != nil {
 		return AnalyticsResponse{}, err
 	}
 	if !scoreOK {
 		avgScore = 0
 	}
-	totalSeconds, err := s.repo.SumAttemptSeconds(ctx, studentIDs, &rangeStart)
+	totalSeconds, err := s.repo.SumAttemptSeconds(ctx, teacherID, studentIDs, &rangeStart)
 	if err != nil {
 		return AnalyticsResponse{}, err
 	}
-	activeStudents, err := s.repo.CountDistinctAttemptStudentsSince(ctx, studentIDs, rangeStart)
+	activeStudents, err := s.repo.CountDistinctAttemptStudentsSince(ctx, teacherID, studentIDs, rangeStart)
 	if err != nil {
 		return AnalyticsResponse{}, err
 	}
@@ -442,7 +442,7 @@ func (s *Service) GetAnalytics(ctx context.Context, teacherID string, timeRange 
 	if err != nil {
 		return AnalyticsResponse{}, err
 	}
-	topStudents, err := s.topStudents(ctx, studentIDs, 5)
+	topStudents, err := s.topStudents(ctx, teacherID, studentIDs, 5)
 	if err != nil {
 		return AnalyticsResponse{}, err
 	}
@@ -480,7 +480,7 @@ func (s *Service) GetClassAnalytics(ctx context.Context, teacherID string, class
 	if err != nil {
 		return ClassAnalyticsResponse{}, err
 	}
-	avgScore, scoreOK, err := s.repo.AverageAttemptScore(ctx, studentIDs, nil)
+	avgScore, scoreOK, err := s.repo.AverageAttemptScore(ctx, teacherID, studentIDs, nil)
 	if err != nil {
 		return ClassAnalyticsResponse{}, err
 	}
@@ -488,7 +488,7 @@ func (s *Service) GetClassAnalytics(ctx context.Context, teacherID string, class
 		avgScore = 0
 	}
 	weekStart := s.now().AddDate(0, 0, -7)
-	seconds, err := s.repo.SumAttemptSeconds(ctx, studentIDs, &weekStart)
+	seconds, err := s.repo.SumAttemptSeconds(ctx, teacherID, studentIDs, &weekStart)
 	if err != nil {
 		return ClassAnalyticsResponse{}, err
 	}
@@ -496,15 +496,15 @@ func (s *Service) GetClassAnalytics(ctx context.Context, teacherID string, class
 	if err != nil {
 		return ClassAnalyticsResponse{}, err
 	}
-	commonErrors, err := s.commonErrors(ctx, studentIDs)
+	commonErrors, err := s.commonErrors(ctx, teacherID, studentIDs)
 	if err != nil {
 		return ClassAnalyticsResponse{}, err
 	}
-	alerts, err := s.classAlerts(ctx, studentIDs, weekStart)
+	alerts, err := s.classAlerts(ctx, teacherID, studentIDs, weekStart)
 	if err != nil {
 		return ClassAnalyticsResponse{}, err
 	}
-	rankings, err := s.classRankings(ctx, studentIDs, 5)
+	rankings, err := s.classRankings(ctx, teacherID, studentIDs, 5)
 	if err != nil {
 		return ClassAnalyticsResponse{}, err
 	}
@@ -537,14 +537,14 @@ func (s *Service) GetStudentDetail(ctx context.Context, teacherID string, studen
 	if !ok {
 		return StudentDetailResponse{}, ErrStudentNotFound
 	}
-	profile, hasProfile, err := s.repo.GetProfile(ctx, studentID)
+	profile, hasProfile, err := s.repo.GetProfile(ctx, teacherID, studentID)
 	if err != nil {
 		return StudentDetailResponse{}, err
 	}
 	if !hasProfile {
 		profile = StudentProfile{StudentID: studentID, MasteryVector: map[string]float64{}}
 	}
-	avgScore, scoreOK, err := s.repo.AverageStudentScore(ctx, studentID)
+	avgScore, scoreOK, err := s.repo.AverageStudentScore(ctx, teacherID, studentID)
 	if err != nil {
 		return StudentDetailResponse{}, err
 	}
@@ -555,7 +555,7 @@ func (s *Service) GetStudentDetail(ctx context.Context, teacherID string, studen
 	if err != nil {
 		return StudentDetailResponse{}, err
 	}
-	rank, err := s.studentRank(ctx, studentID, classStudentIDs)
+	rank, err := s.studentRank(ctx, teacherID, studentID, classStudentIDs)
 	if err != nil {
 		return StudentDetailResponse{}, err
 	}
@@ -567,15 +567,15 @@ func (s *Service) GetStudentDetail(ctx context.Context, teacherID string, studen
 	if err != nil {
 		return StudentDetailResponse{}, err
 	}
-	topicMastery, err := s.studentTopicMastery(ctx, studentID, profile.MasteryVector)
+	topicMastery, err := s.studentTopicMastery(ctx, teacherID, studentID, profile.MasteryVector)
 	if err != nil {
 		return StudentDetailResponse{}, err
 	}
-	recentActivity, err := s.recentActivity(ctx, studentID)
+	recentActivity, err := s.recentActivity(ctx, teacherID, studentID)
 	if err != nil {
 		return StudentDetailResponse{}, err
 	}
-	recentMistakes, err := s.repo.RecentMistakes(ctx, studentID, 5)
+	recentMistakes, err := s.repo.RecentMistakes(ctx, teacherID, studentID, 5)
 	if err != nil {
 		return StudentDetailResponse{}, err
 	}
@@ -722,8 +722,8 @@ func (s *Service) weeklyActivity(ctx context.Context, studentIDs []string, total
 	return items, nil
 }
 
-func (s *Service) topStudents(ctx context.Context, studentIDs []string, limit int) ([]TopStudentItem, error) {
-	rows, err := s.repo.TopStudentsByAverageScore(ctx, studentIDs, limit)
+func (s *Service) topStudents(ctx context.Context, teacherID string, studentIDs []string, limit int) ([]TopStudentItem, error) {
+	rows, err := s.repo.TopStudentsByAverageScore(ctx, teacherID, studentIDs, limit)
 	if err != nil {
 		return nil, err
 	}
@@ -747,8 +747,8 @@ func (s *Service) topStudents(ctx context.Context, studentIDs []string, limit in
 	return items, nil
 }
 
-func (s *Service) commonErrors(ctx context.Context, studentIDs []string) ([]ClassCommonError, error) {
-	rows, err := s.repo.CommonErrors(ctx, studentIDs, 10)
+func (s *Service) commonErrors(ctx context.Context, teacherID string, studentIDs []string) ([]ClassCommonError, error) {
+	rows, err := s.repo.CommonErrors(ctx, teacherID, studentIDs, 10)
 	if err != nil {
 		return nil, err
 	}
@@ -769,8 +769,8 @@ func (s *Service) commonErrors(ctx context.Context, studentIDs []string) ([]Clas
 	return items, nil
 }
 
-func (s *Service) classAlerts(ctx context.Context, studentIDs []string, weekStart time.Time) ([]ClassAlert, error) {
-	lowScoreStudents, err := s.repo.LowScoreStudents(ctx, studentIDs, 60)
+func (s *Service) classAlerts(ctx context.Context, teacherID string, studentIDs []string, weekStart time.Time) ([]ClassAlert, error) {
+	lowScoreStudents, err := s.repo.LowScoreStudents(ctx, teacherID, studentIDs, 60)
 	if err != nil {
 		return nil, err
 	}
@@ -830,8 +830,8 @@ func (s *Service) classAlerts(ctx context.Context, studentIDs []string, weekStar
 	return alerts, nil
 }
 
-func (s *Service) classRankings(ctx context.Context, studentIDs []string, limit int) ([]ClassStudentRank, error) {
-	rows, err := s.repo.TopStudentsByAverageScore(ctx, studentIDs, limit)
+func (s *Service) classRankings(ctx context.Context, teacherID string, studentIDs []string, limit int) ([]ClassStudentRank, error) {
+	rows, err := s.repo.TopStudentsByAverageScore(ctx, teacherID, studentIDs, limit)
 	if err != nil {
 		return nil, err
 	}
@@ -854,8 +854,8 @@ func (s *Service) classRankings(ctx context.Context, studentIDs []string, limit 
 	return items, nil
 }
 
-func (s *Service) studentRank(ctx context.Context, studentID string, classStudentIDs []string) (int, error) {
-	rows, err := s.repo.RankByAverageScore(ctx, classStudentIDs)
+func (s *Service) studentRank(ctx context.Context, teacherID string, studentID string, classStudentIDs []string) (int, error) {
+	rows, err := s.repo.RankByAverageScore(ctx, teacherID, classStudentIDs)
 	if err != nil {
 		return 0, err
 	}
@@ -887,13 +887,13 @@ func (s *Service) streakDays(ctx context.Context, studentID string) (int, error)
 	}
 }
 
-func (s *Service) studentTopicMastery(ctx context.Context, studentID string, mastery map[string]float64) ([]StudentTopicMastery, error) {
+func (s *Service) studentTopicMastery(ctx context.Context, teacherID string, studentID string, mastery map[string]float64) ([]StudentTopicMastery, error) {
 	conceptIDs := maputil.SortedFloatKeysByValueDesc(mastery)
 	names, err := s.repo.KnowledgeNames(ctx, conceptIDs)
 	if err != nil {
 		return nil, err
 	}
-	counts, err := s.repo.AttemptConceptCounts(ctx, studentID)
+	counts, err := s.repo.AttemptConceptCounts(ctx, teacherID, studentID)
 	if err != nil {
 		return nil, err
 	}
@@ -909,8 +909,8 @@ func (s *Service) studentTopicMastery(ctx context.Context, studentID string, mas
 	return items, nil
 }
 
-func (s *Service) recentActivity(ctx context.Context, studentID string) ([]StudentRecentActivity, error) {
-	attempts, err := s.repo.RecentAttempts(ctx, studentID, 10)
+func (s *Service) recentActivity(ctx context.Context, teacherID string, studentID string) ([]StudentRecentActivity, error) {
+	attempts, err := s.repo.RecentAttempts(ctx, teacherID, studentID, 10)
 	if err != nil {
 		return nil, err
 	}

@@ -203,6 +203,40 @@ func TestConfigurableQuestionParserUsesQuestionParserRuntimeConfig(t *testing.T)
 	}
 }
 
+func TestConfigurableQuestionGeneratorUsesQuestionGeneratorRuntimeConfig(t *testing.T) {
+	provider := &fakeRuntimeConfigProvider{
+		runtime: adminaiconfigapp.RuntimeConfig{
+			BaseURL:       "https://api.example.com",
+			APIKey:        "generator-key",
+			Model:         "generator-model",
+			Temperature:   0.35,
+			MaxTokens:     1200,
+			Timeout:       time.Second,
+			MaxIterations: 3,
+		},
+		ok: true,
+	}
+	generator := NewConfigurableQuestionGenerator(provider, Config{Enabled: false})
+	var captured Config
+	generator.newGenerator = func(_ context.Context, cfg Config) (exerciseapp.QuestionGenerator, error) {
+		captured = cfg
+		return fakeExerciseQuestionGenerator{question: exerciseapp.GeneratedQuestion{Title: "AI 题目"}}, nil
+	}
+	question, err := generator.GenerateQuestion(context.Background(), exerciseapp.GenerationInput{
+		Concept:    exerciseapp.KnowledgeConcept{ID: "concept-1", Name: "导数"},
+		Difficulty: 0.6,
+	})
+	if err != nil {
+		t.Fatalf("GenerateQuestion() error = %v", err)
+	}
+	if question.Title != "AI 题目" || !provider.called || provider.agentType != "question_generator" {
+		t.Fatalf("question=%#v called=%v agentType=%q", question, provider.called, provider.agentType)
+	}
+	if captured.Model != "generator-model" || captured.APIKey != "generator-key" || captured.MaxIterations != 3 {
+		t.Fatalf("captured config = %#v", captured)
+	}
+}
+
 func TestPortraitGeneratorBuildsPromptFromProfile(t *testing.T) {
 	agent := &fakeChatAgent{output: sessionapp.ChatAgentOutput{Agent: "portrait", Content: "  # 学生画像\n  "}}
 	generator := portraitGenerator{agent: agent}
@@ -330,6 +364,90 @@ func TestQuestionParserParsesStructuredJSON(t *testing.T) {
 	}
 }
 
+func TestExerciseQuestionGeneratorBuildsPromptAndUsesTrustedContext(t *testing.T) {
+	agent := &fakeChatAgent{output: sessionapp.ChatAgentOutput{Agent: "question_generator", Content: `{
+		"title":"隐函数求导",
+		"body":"设 x^2+y^2=1，求 dy/dx。",
+		"type":"multiple_choice",
+		"difficulty":0.3,
+		"answer":"-x/y",
+		"answer_type":"text",
+		"options":["x/y","-x/y","-y/x","y/x"],
+		"hints":["等式两边同时对 x 求导。"],
+		"solution_steps":["得到 2x+2y y'=0。","解得 y'=-x/y。"],
+		"estimated_time_seconds":180,
+		"concept_ids":["hallucinated"],
+		"knowledge_point_names":["无关知识点"]
+	}`}}
+	generator := exerciseQuestionGenerator{agent: agent}
+	question, err := generator.GenerateQuestion(context.Background(), exerciseapp.GenerationInput{
+		Concept: exerciseapp.KnowledgeConcept{
+			ID:          "implicit-differentiation",
+			Name:        "隐函数求导",
+			Description: "通过方程两边求导计算导数",
+			Chapter:     "导数与微分",
+		},
+		Difficulty: 0.7,
+	})
+	if err != nil {
+		t.Fatalf("GenerateQuestion() error = %v", err)
+	}
+	if question.Difficulty != 0.7 || strings.Join(question.ConceptIDs, ",") != "implicit-differentiation" || strings.Join(question.KnowledgePointNames, ",") != "隐函数求导" {
+		t.Fatalf("question trusted fields = %#v", question)
+	}
+	prompt := agent.lastInput.Message
+	for _, want := range []string{"隐函数求导", "导数与微分", `"difficulty":0.7`, "multiple_choice", "30 到 3600"} {
+		if !strings.Contains(prompt, want) {
+			t.Fatalf("prompt missing %q: %s", want, prompt)
+		}
+	}
+}
+
+func TestParseGeneratedQuestionJSONAcceptsValidMultipleChoiceQuestion(t *testing.T) {
+	question, err := parseGeneratedQuestionJSON(`{
+		"title":"  定积分计算  ",
+		"body":"计算积分。",
+		"type":"multiple_choice",
+		"difficulty":0.5,
+		"answer":" 2 ",
+		"answer_type":"text",
+		"options":[" 1 "," 2 "," 3 "," 4 "],
+		"hints":[" 使用牛顿-莱布尼茨公式 "],
+		"solution_steps":[" 代入上下限 "],
+		"estimated_time_seconds":240,
+		"concept_ids":["integral"],
+		"knowledge_point_names":["定积分"]
+	}`)
+	if err != nil {
+		t.Fatalf("parseGeneratedQuestionJSON() error = %v", err)
+	}
+	if question.Title != "定积分计算" || question.Answer != "2" || len(question.Options) != 4 || question.Options[1] != "2" || question.EstimatedTimeSeconds != 240 {
+		t.Fatalf("question = %#v", question)
+	}
+}
+
+func TestParseGeneratedQuestionJSONRejectsInvalidOptions(t *testing.T) {
+	tests := []struct {
+		name    string
+		options string
+		answer  string
+		want    string
+	}{
+		{name: "duplicate after trim", options: `["1"," 1 ","2","3"]`, answer: "1", want: "four unique"},
+		{name: "extra empty option", options: `["1","2","3","4"," "]`, answer: "1", want: "four unique"},
+		{name: "answer not present", options: `["1","2","3","4"]`, answer: "5", want: "match one option"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			content := `{"title":"题目","body":"题干","type":"multiple_choice","difficulty":0.5,"answer":"` + tt.answer + `","answer_type":"text","options":` + tt.options + `,"hints":["提示"],"solution_steps":["解析"],"estimated_time_seconds":120}`
+			_, err := parseGeneratedQuestionJSON(content)
+			if err == nil || !strings.Contains(err.Error(), tt.want) {
+				t.Fatalf("parseGeneratedQuestionJSON() error = %v, want %q", err, tt.want)
+			}
+		})
+	}
+}
+
 func TestParseQuestionParseJSONRejectsMissingBody(t *testing.T) {
 	_, err := parseQuestionParseJSON(`{"questions":[{"title":"题目","body":""}]}`)
 	if err == nil || !strings.Contains(err.Error(), "required") {
@@ -429,6 +547,18 @@ type fakeEinoMathSolver struct {
 type fakeQuestionParser struct {
 	response questionapp.AIParseResponse
 	err      error
+}
+
+type fakeExerciseQuestionGenerator struct {
+	question exerciseapp.GeneratedQuestion
+	err      error
+}
+
+func (g fakeExerciseQuestionGenerator) GenerateQuestion(context.Context, exerciseapp.GenerationInput) (exerciseapp.GeneratedQuestion, error) {
+	if g.err != nil {
+		return exerciseapp.GeneratedQuestion{}, g.err
+	}
+	return g.question, nil
 }
 
 func (p fakeQuestionParser) ParseQuestions(context.Context, questionapp.ParserInput) (questionapp.AIParseResponse, error) {

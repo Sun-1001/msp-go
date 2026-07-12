@@ -1,10 +1,10 @@
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { useCallback, useState } from 'react';
 import { Card, CardContent, CardFooter, CardHeader, CardTitle } from '@/components/ui/Card';
 import { Button } from '@/components/ui/Button';
 import { Input } from '@/components/ui/Input';
 import { MathRenderer } from '@/libs/math/MathRenderer';
 import { MathText } from '@/libs/math/MathText';
-import { Loader2 } from 'lucide-react';
+import { CheckCircle2, Lightbulb, Loader2, XCircle } from 'lucide-react';
 import { EmptyExerciseState } from './EmptyExerciseState';
 import type { Question, SubmitResult } from '@/modules/exercise/services/exerciseService';
 import type { ExerciseErrorType } from '../hooks/exerciseViewModel';
@@ -12,28 +12,24 @@ import type { ExerciseErrorType } from '../hooks/exerciseViewModel';
 const inlineOrBlockMathRegex = /\$\$?[\s\S]+?\$\$?/;
 const latexHintRegex = /\\[a-zA-Z]+|[_^]/;
 
+const questionTypeLabels: Record<Question['type'], string> = {
+  multiple_choice: '选择题',
+  short_answer: '简答题',
+  proof: '证明题',
+};
+
 const renderMathContent = (
   value: string,
-  options: { className?: string; block?: boolean } = {},
+  options: { className?: string; block?: boolean } = {}
 ) => {
   if (!value) return null;
 
   if (inlineOrBlockMathRegex.test(value)) {
-    return (
-      <MathText className={options.className}>
-        {value}
-      </MathText>
-    );
+    return <MathText className={options.className}>{value}</MathText>;
   }
 
   if (latexHintRegex.test(value)) {
-    return (
-      <MathRenderer
-        expression={value}
-        block={options.block}
-        className={options.className}
-      />
-    );
+    return <MathRenderer expression={value} block={options.block} className={options.className} />;
   }
 
   return <span className={options.className}>{value}</span>;
@@ -46,26 +42,21 @@ export interface ExercisePanelProps {
   submitResult: SubmitResult | null;
   error: string | null;
   errorType: ExerciseErrorType | null;
-  loadNextQuestion: (conceptId?: string, difficulty?: number) => Promise<void>;
+  onNextQuestion: () => void | Promise<void>;
   submitAnswer: (answerText: string) => Promise<void>;
 }
 
-export const ExercisePanel: React.FC<ExercisePanelProps> = ({
+const ExercisePanelContent: React.FC<ExercisePanelProps> = ({
   currentQuestion,
   isLoading,
   isSubmitting,
   submitResult,
   error,
   errorType,
-  loadNextQuestion,
+  onNextQuestion,
   submitAnswer,
 }) => {
-
   const [answer, setAnswer] = useState('');
-
-  useEffect(() => {
-    loadNextQuestion();
-  }, [loadNextQuestion]);
 
   // 提交答案
   const handleSubmit = useCallback(async () => {
@@ -75,10 +66,9 @@ export const ExercisePanel: React.FC<ExercisePanelProps> = ({
   }, [answer, submitAnswer]);
 
   // 下一题
-  const handleNext = useCallback(() => {
-    setAnswer('');
-    loadNextQuestion();
-  }, [loadNextQuestion]);
+  const handleNext = useCallback(async () => {
+    await onNextQuestion();
+  }, [onNextQuestion]);
 
   // ========== 渲染 ==========
 
@@ -96,7 +86,13 @@ export const ExercisePanel: React.FC<ExercisePanelProps> = ({
       <EmptyExerciseState
         errorType={errorType}
         errorMessage={error ?? undefined}
-        onRetry={errorType === 'network_error' || errorType === 'unknown' ? loadNextQuestion : undefined}
+        onRetry={
+          errorType === 'network_error' ||
+          errorType === 'generation_unavailable' ||
+          errorType === 'unknown'
+            ? onNextQuestion
+            : undefined
+        }
       />
     );
   }
@@ -105,7 +101,7 @@ export const ExercisePanel: React.FC<ExercisePanelProps> = ({
     return <div className="p-4 text-center text-surface-500">暂无可用题目</div>;
   }
 
-  const isBusy = isSubmitting;
+  const isBusy = isSubmitting || isLoading;
 
   return (
     <div className="space-y-6 animate-fade-in">
@@ -118,8 +114,8 @@ export const ExercisePanel: React.FC<ExercisePanelProps> = ({
               <span className="text-xs font-normal text-surface-500 dark:text-surface-400">
                 难度 {Math.round(currentQuestion.difficulty * 100)}%
               </span>
-              <span className="text-xs font-normal text-primary-600 dark:text-primary-400 bg-primary-100 dark:bg-primary-900 px-2 py-1 rounded-full uppercase tracking-wider">
-                {currentQuestion.type}
+              <span className="rounded-full bg-primary-100 px-2 py-1 text-xs font-normal text-primary-600 dark:bg-primary-900 dark:text-primary-400">
+                {questionTypeLabels[currentQuestion.type]}
               </span>
             </div>
           </CardTitle>
@@ -132,14 +128,51 @@ export const ExercisePanel: React.FC<ExercisePanelProps> = ({
 
           {/* 答案输入区 */}
           <div className="space-y-4">
-            <Input
-              value={answer}
-              onChange={(e) => setAnswer(e.target.value)}
-              placeholder="输入答案（支持 LaTeX 格式，如 \frac{x^3}{3} + C）"
-              className="text-lg"
-              disabled={isBusy || !!submitResult}
-            />
-
+            {currentQuestion.type === 'multiple_choice' &&
+            (currentQuestion.options?.length ?? 0) > 0 ? (
+              <fieldset disabled={isBusy || !!submitResult}>
+                <legend className="sr-only">选择答案</legend>
+                <div role="radiogroup" aria-label="答案选项" className="grid gap-3">
+                  {(currentQuestion.options ?? []).map((option, index) => {
+                    const optionId = `exercise-${currentQuestion.id}-option-${index}`;
+                    const isSelected = answer === option;
+                    return (
+                      <label
+                        key={optionId}
+                        htmlFor={optionId}
+                        className={`flex min-h-12 cursor-pointer items-center gap-3 rounded-md border px-4 py-3 transition-colors ${
+                          isSelected
+                            ? 'border-primary-500 bg-primary-50 text-primary-900 dark:bg-primary-950/40 dark:text-primary-100'
+                            : 'border-surface-200 bg-white text-surface-800 hover:border-primary-300 dark:border-surface-700 dark:bg-surface-900 dark:text-surface-200'
+                        }`}
+                      >
+                        <input
+                          id={optionId}
+                          type="radio"
+                          name={`exercise-${currentQuestion.id}-answer`}
+                          value={option}
+                          checked={isSelected}
+                          onChange={(event) => setAnswer(event.target.value)}
+                          className="h-4 w-4 shrink-0 accent-primary-600"
+                        />
+                        <span className="w-5 shrink-0 text-sm font-semibold text-surface-500">
+                          {String.fromCharCode(65 + index)}.
+                        </span>
+                        {renderMathContent(option, { className: 'min-w-0' })}
+                      </label>
+                    );
+                  })}
+                </div>
+              </fieldset>
+            ) : (
+              <Input
+                value={answer}
+                onChange={(event) => setAnswer(event.target.value)}
+                placeholder="输入答案（支持 LaTeX 格式，如 \frac{x^3}{3} + C）"
+                className="text-lg"
+                disabled={isBusy || !!submitResult}
+              />
+            )}
           </div>
         </CardContent>
         <CardFooter className="bg-surface-50 dark:bg-surface-800 p-4 flex justify-between items-center">
@@ -153,7 +186,12 @@ export const ExercisePanel: React.FC<ExercisePanelProps> = ({
               提交答案
             </Button>
           ) : (
-            <Button onClick={handleNext} variant="secondary">
+            <Button
+              onClick={handleNext}
+              variant="secondary"
+              isLoading={isLoading}
+              disabled={isLoading}
+            >
               下一题
             </Button>
           )}
@@ -171,13 +209,18 @@ export const ExercisePanel: React.FC<ExercisePanelProps> = ({
         >
           <CardContent className="p-4 space-y-3">
             <h4
-              className={`font-bold text-lg ${
+              className={`flex items-center gap-2 font-bold text-lg ${
                 submitResult.isCorrect
                   ? 'text-green-800 dark:text-green-400'
                   : 'text-red-800 dark:text-red-400'
               }`}
             >
-              {submitResult.isCorrect ? '✓ 回答正确！' : '✗ 回答错误'}
+              {submitResult.isCorrect ? (
+                <CheckCircle2 className="h-5 w-5 shrink-0" aria-hidden="true" />
+              ) : (
+                <XCircle className="h-5 w-5 shrink-0" aria-hidden="true" />
+              )}
+              <span>{submitResult.isCorrect ? '回答正确' : '回答错误'}</span>
             </h4>
 
             {/* 反馈文本 */}
@@ -205,8 +248,9 @@ export const ExercisePanel: React.FC<ExercisePanelProps> = ({
                   )}
                 </p>
                 {submitResult.diagnosis.suggestion && (
-                  <p className="text-sm text-amber-700 dark:text-amber-300">
-                    💡 {submitResult.diagnosis.suggestion}
+                  <p className="flex items-start gap-2 text-sm text-amber-700 dark:text-amber-300">
+                    <Lightbulb className="mt-0.5 h-4 w-4 shrink-0" aria-hidden="true" />
+                    <span>{submitResult.diagnosis.suggestion}</span>
                   </p>
                 )}
               </div>
@@ -230,9 +274,15 @@ export const ExercisePanel: React.FC<ExercisePanelProps> = ({
       )}
 
       {/* 错误提示 */}
-      {error && !submitResult && (
-        <div className="text-red-500 text-sm text-center">{error}</div>
-      )}
+      {error ? (
+        <div role="alert" className="text-center text-sm text-red-500">
+          {error}
+        </div>
+      ) : null}
     </div>
   );
 };
+
+export const ExercisePanel: React.FC<ExercisePanelProps> = (props) => (
+  <ExercisePanelContent key={props.currentQuestion?.id ?? 'no-question'} {...props} />
+);

@@ -147,17 +147,20 @@ func (r ExerciseRepository) UpdateSessionCurrentContent(ctx context.Context, ses
 	return err
 }
 
-// UpdateSessionAfterSubmit appends attempted content and clears the current content.
-func (r ExerciseRepository) UpdateSessionAfterSubmit(ctx context.Context, sessionID string, attempted []string) error {
+// UpdateSessionAfterSubmit appends attempted content and clears it when it is the current class exercise.
+func (r ExerciseRepository) UpdateSessionAfterSubmit(ctx context.Context, sessionID string, exerciseID string, attempted []string) error {
 	raw, err := json.Marshal(attempted)
 	if err != nil {
 		return err
 	}
 	_, err = r.DB().Exec(ctx, `
 		UPDATE public.learning_sessions
-		SET contents_attempted = $2::json, current_content_id = NULL
+		SET
+			contents_attempted = $3::json,
+			current_content_id = CASE WHEN current_content_id = $2 THEN NULL ELSE current_content_id END
 		WHERE id = $1`,
 		sessionID,
+		exerciseID,
 		string(raw),
 	)
 	return err
@@ -174,14 +177,84 @@ func (r ExerciseRepository) GetExercise(ctx context.Context, exerciseID string) 
 	return scanOptionalExercise(row)
 }
 
-// ListRecentContentIDs returns recently started content IDs.
+// GetKnowledgeConcept returns trusted knowledge context for AI exercise generation.
+func (r ExerciseRepository) GetKnowledgeConcept(ctx context.Context, conceptID string) (exerciseapp.KnowledgeConcept, bool, error) {
+	var concept exerciseapp.KnowledgeConcept
+	var chapter pgtype.Text
+	err := r.DB().QueryRow(ctx, `
+		SELECT id, name, description, chapter
+		FROM public.knowledge_nodes
+		WHERE id = $1`,
+		conceptID,
+	).Scan(&concept.ID, &concept.Name, &concept.Description, &chapter)
+	if err != nil {
+		if err == pgx.ErrNoRows {
+			return exerciseapp.KnowledgeConcept{}, false, nil
+		}
+		return exerciseapp.KnowledgeConcept{}, false, err
+	}
+	if chapter.Valid {
+		concept.Chapter = chapter.String
+	}
+	return concept, true, nil
+}
+
+// CreateGeneratedExercise persists one published student-owned AI exercise.
+func (r ExerciseRepository) CreateGeneratedExercise(ctx context.Context, studentID string, generated exerciseapp.GeneratedQuestion, now time.Time) (exerciseapp.Exercise, error) {
+	exerciseID, err := newUUID()
+	if err != nil {
+		return exerciseapp.Exercise{}, err
+	}
+	conceptIDsRaw, err := json.Marshal(generated.ConceptIDs)
+	if err != nil {
+		return exerciseapp.Exercise{}, fmt.Errorf("encode generated exercise concept ids: %w", err)
+	}
+	metaRaw, err := json.Marshal(generatedQuestionMeta(generated))
+	if err != nil {
+		return exerciseapp.Exercise{}, fmt.Errorf("encode generated exercise meta: %w", err)
+	}
+	row := r.DB().QueryRow(ctx, `
+		INSERT INTO public.contents (
+			id,
+			type,
+			owner_teacher_id,
+			generated_by_student_id,
+			status,
+			title,
+			body,
+			difficulty,
+			concept_ids,
+			tags,
+			meta,
+			created_at,
+			updated_at,
+			published_at,
+			deleted_at
+		)
+		VALUES ($1, 'PROBLEM'::public.contenttype, NULL, $2, 'PUBLISHED'::public.contentstatus, $3, $4, $5, $6::json, '[]'::json, $7::json, $8, $8, $8, NULL)
+		RETURNING `+exerciseSelectColumns,
+		exerciseID,
+		studentID,
+		generated.Title,
+		generated.Body,
+		generated.Difficulty,
+		string(conceptIDsRaw),
+		string(metaRaw),
+		now,
+	)
+	exercise, ok, err := scanOptionalExercise(row)
+	if err != nil {
+		return exerciseapp.Exercise{}, err
+	}
+	if !ok {
+		return exerciseapp.Exercise{}, pgx.ErrNoRows
+	}
+	return exercise, nil
+}
+
+// ListRecentContentIDs returns recent class-exercise IDs without self-practice attempts.
 func (r ExerciseRepository) ListRecentContentIDs(ctx context.Context, userID string, limit int) ([]string, error) {
-	rows, err := r.DB().Query(ctx, `
-		SELECT content_id
-		FROM public.content_attempts
-		WHERE student_id = $1
-		ORDER BY started_at DESC
-		LIMIT $2`,
+	rows, err := r.DB().Query(ctx, recentClassContentIDsSQL,
 		userID,
 		limit,
 	)
@@ -200,6 +273,14 @@ func (r ExerciseRepository) ListRecentContentIDs(ctx context.Context, userID str
 	}
 	return ids, rows.Err()
 }
+
+const recentClassContentIDsSQL = `
+	SELECT ca.content_id
+	FROM public.content_attempts ca
+	JOIN public.contents c ON c.id = ca.content_id
+	WHERE ca.student_id = $1 AND c.generated_by_student_id IS NULL
+	ORDER BY ca.started_at DESC
+	LIMIT $2`
 
 // ListCandidateExercises returns published teacher-owned problems in a difficulty window.
 func (r ExerciseRepository) ListCandidateExercises(ctx context.Context, filter exerciseapp.CandidateFilter) ([]exerciseapp.Exercise, error) {
@@ -240,45 +321,51 @@ func (r ExerciseRepository) ListCandidateExercises(ctx context.Context, filter e
 
 // GetProfile returns the student's exercise tracking profile.
 func (r ExerciseRepository) GetProfile(ctx context.Context, userID string) (exerciseapp.StudentProfile, bool, error) {
-	var profile exerciseapp.StudentProfile
-	var masteryRaw []byte
-	var errorRaw []byte
-	err := r.DB().QueryRow(ctx, `
-		SELECT
+	row := r.DB().QueryRow(ctx, `
+		SELECT `+exerciseProfileColumns+`
+		FROM public.student_profiles
+		WHERE student_id = $1`,
+		userID,
+	)
+	return scanOptionalExerciseProfile(row)
+}
+
+// CreateProfile inserts default tracking state or returns a concurrently created profile.
+func (r ExerciseRepository) CreateProfile(ctx context.Context, userID string, now time.Time) (exerciseapp.StudentProfile, error) {
+	profileID, err := newUUID()
+	if err != nil {
+		return exerciseapp.StudentProfile{}, err
+	}
+	row := r.DB().QueryRow(ctx, `
+		INSERT INTO public.student_profiles (
+			id,
+			student_id,
 			mastery_vector,
 			error_tendency,
 			preferred_difficulty,
 			learning_pace,
 			total_exercises,
-			correct_count
-		FROM public.student_profiles
-		WHERE student_id = $1`,
+			correct_count,
+			total_study_time_minutes,
+			recent_concepts,
+			updated_at,
+			portrait_version
+		)
+		VALUES ($1, $2, '{}'::json, '{}'::json, 0.5, 1.0, 0, 0, 0, '[]'::json, $3, 0)
+		ON CONFLICT (student_id) DO UPDATE SET student_id = EXCLUDED.student_id
+		RETURNING `+exerciseProfileColumns,
+		profileID,
 		userID,
-	).Scan(
-		&masteryRaw,
-		&errorRaw,
-		&profile.PreferredDifficulty,
-		&profile.LearningPace,
-		&profile.TotalExercises,
-		&profile.CorrectCount,
+		now,
 	)
+	profile, ok, err := scanOptionalExerciseProfile(row)
 	if err != nil {
-		if err == pgx.ErrNoRows {
-			return exerciseapp.StudentProfile{}, false, nil
-		}
-		return exerciseapp.StudentProfile{}, false, err
+		return exerciseapp.StudentProfile{}, err
 	}
-	mastery, err := decodeFloatMap(masteryRaw)
-	if err != nil {
-		return exerciseapp.StudentProfile{}, false, fmt.Errorf("decode mastery vector: %w", err)
+	if !ok {
+		return exerciseapp.StudentProfile{}, pgx.ErrNoRows
 	}
-	errorTendency, err := decodeFloatMap(errorRaw)
-	if err != nil {
-		return exerciseapp.StudentProfile{}, false, fmt.Errorf("decode error tendency: %w", err)
-	}
-	profile.MasteryVector = mastery
-	profile.ErrorTendency = errorTendency
-	return profile, true, nil
+	return profile, nil
 }
 
 // HasSubmittedAttempt reports whether the student has attempted the exercise.
@@ -570,12 +657,52 @@ func (r ExerciseRepository) UpdateProfileTracking(ctx context.Context, userID st
 const exerciseSelectColumns = `
 	id,
 	owner_teacher_id,
+	generated_by_student_id,
 	status::text,
 	title,
 	body,
 	difficulty,
 	concept_ids,
 	meta`
+
+const exerciseProfileColumns = `
+	mastery_vector,
+	error_tendency,
+	preferred_difficulty,
+	learning_pace,
+	total_exercises,
+	correct_count`
+
+func scanOptionalExerciseProfile(row pgx.Row) (exerciseapp.StudentProfile, bool, error) {
+	var profile exerciseapp.StudentProfile
+	var masteryRaw []byte
+	var errorRaw []byte
+	err := row.Scan(
+		&masteryRaw,
+		&errorRaw,
+		&profile.PreferredDifficulty,
+		&profile.LearningPace,
+		&profile.TotalExercises,
+		&profile.CorrectCount,
+	)
+	if err != nil {
+		if err == pgx.ErrNoRows {
+			return exerciseapp.StudentProfile{}, false, nil
+		}
+		return exerciseapp.StudentProfile{}, false, err
+	}
+	mastery, err := decodeFloatMap(masteryRaw)
+	if err != nil {
+		return exerciseapp.StudentProfile{}, false, fmt.Errorf("decode mastery vector: %w", err)
+	}
+	errorTendency, err := decodeFloatMap(errorRaw)
+	if err != nil {
+		return exerciseapp.StudentProfile{}, false, fmt.Errorf("decode error tendency: %w", err)
+	}
+	profile.MasteryVector = mastery
+	profile.ErrorTendency = errorTendency
+	return profile, true, nil
+}
 
 func scanOptionalExerciseSession(row pgx.Row) (exerciseapp.LearningSession, bool, error) {
 	var session exerciseapp.LearningSession
@@ -610,11 +737,14 @@ func scanOptionalExercise(row pgx.Row) (exerciseapp.Exercise, bool, error) {
 
 func scanExercise(scanner rowScanner) (exerciseapp.Exercise, error) {
 	var exercise exerciseapp.Exercise
+	var ownerTeacherID pgtype.Text
+	var generatedByStudentID pgtype.Text
 	var conceptIDsRaw []byte
 	var metaRaw []byte
 	if err := scanner.Scan(
 		&exercise.ID,
-		&exercise.OwnerTeacherID,
+		&ownerTeacherID,
+		&generatedByStudentID,
 		&exercise.Status,
 		&exercise.Title,
 		&exercise.Body,
@@ -623,6 +753,12 @@ func scanExercise(scanner rowScanner) (exerciseapp.Exercise, error) {
 		&metaRaw,
 	); err != nil {
 		return exerciseapp.Exercise{}, err
+	}
+	if ownerTeacherID.Valid {
+		exercise.OwnerTeacherID = ownerTeacherID.String
+	}
+	if generatedByStudentID.Valid {
+		exercise.GeneratedByStudentID = generatedByStudentID.String
 	}
 	conceptIDs, err := decodeStringSlice(conceptIDsRaw)
 	if err != nil {
@@ -635,4 +771,17 @@ func scanExercise(scanner rowScanner) (exerciseapp.Exercise, error) {
 	exercise.ConceptIDs = conceptIDs
 	exercise.Meta = meta
 	return exercise, nil
+}
+
+func generatedQuestionMeta(generated exerciseapp.GeneratedQuestion) map[string]any {
+	return map[string]any{
+		"answer":                 generated.Answer,
+		"answer_type":            generated.AnswerType,
+		"type":                   generated.Type,
+		"options":                generated.Options,
+		"hints":                  generated.Hints,
+		"solution_steps":         generated.SolutionSteps,
+		"estimated_time_seconds": generated.EstimatedTimeSeconds,
+		"knowledge_point_names":  generated.KnowledgePointNames,
+	}
 }

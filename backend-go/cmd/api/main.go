@@ -246,7 +246,22 @@ func main() {
 		MaxTokens:     cfg.EinoMaxTokens,
 		MaxIterations: cfg.EinoMaxIterations,
 	})
-	exerciseService, err := exerciseapp.NewService(exerciseRepo, exerciseapp.SolverAnswerChecker{Solver: mathSolver}, exerciseapp.WithDiagnostician(diagnostician))
+	questionGenerator := einoagent.NewConfigurableQuestionGenerator(adminAIConfigService, einoagent.Config{
+		Enabled:       cfg.EinoEnabled,
+		BaseURL:       cfg.EinoBaseURL,
+		APIKey:        cfg.EinoAPIKey,
+		Model:         cfg.EinoModel,
+		Timeout:       cfg.EinoTimeout,
+		Temperature:   cfg.EinoTemperature,
+		MaxTokens:     cfg.EinoMaxTokens,
+		MaxIterations: cfg.EinoMaxIterations,
+	})
+	exerciseService, err := exerciseapp.NewService(
+		exerciseRepo,
+		exerciseapp.SolverAnswerChecker{Solver: mathSolver},
+		exerciseapp.WithDiagnostician(diagnostician),
+		exerciseapp.WithQuestionGenerator(questionGenerator),
+	)
 	if err != nil {
 		logger.Error("configure exercise service", "error", err)
 		os.Exit(1)

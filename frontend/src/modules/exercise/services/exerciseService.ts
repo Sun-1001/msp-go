@@ -17,10 +17,31 @@ export interface Question {
   content: string; // LaTeX
   difficulty: number;
   type: 'multiple_choice' | 'short_answer' | 'proof';
+  source: 'class' | 'ai_generated';
   knowledgePoints: string[];
+  knowledgePointNames: string[];
   hintsAvailable: boolean;
   estimatedTimeSeconds: number;
   options?: string[] | null;
+}
+
+interface QuestionResponse {
+  id: string;
+  title: string;
+  content: string;
+  difficulty: number;
+  type: string;
+  source?: Question['source'];
+  knowledge_points?: string[];
+  knowledge_point_names?: string[];
+  hints_available: boolean;
+  estimated_time_seconds: number;
+  options?: string[] | null;
+}
+
+export interface GenerateQuestionPayload {
+  conceptId: string;
+  difficulty: number;
 }
 
 export interface DiagnosisDetail {
@@ -53,49 +74,59 @@ export interface SubmitPayload {
   timeSpentSeconds: number;
 }
 
+const mapQuestion = (data: QuestionResponse): Question => ({
+  id: data.id,
+  title: data.title,
+  content: data.content,
+  difficulty: data.difficulty,
+  type: data.type as Question['type'],
+  source: data.source ?? 'class',
+  knowledgePoints: data.knowledge_points ?? [],
+  knowledgePointNames: data.knowledge_point_names ?? [],
+  hintsAvailable: data.hints_available,
+  estimatedTimeSeconds: data.estimated_time_seconds,
+  options: data.options,
+});
+
 // ========== API 调用 ==========
 
 export const exerciseService = {
   /**
    * 获取下一道自适应练习题
    */
-  async fetchNextQuestion(
-    conceptId?: string,
-    difficulty?: number,
-  ): Promise<Question | null> {
+  async fetchNextQuestion(conceptId?: string, difficulty?: number): Promise<Question | null> {
     exerciseLogger.debug('Fetching next question', { conceptId, difficulty });
 
     const params: Record<string, string> = {};
     if (conceptId) params.concept_id = conceptId;
     if (difficulty !== undefined) params.difficulty = String(difficulty);
 
-    const res = await apiClient.get<{
-      id: string;
-      title: string;
-      content: string;
-      difficulty: number;
-      type: string;
-      knowledge_points: string[];
-      hints_available: boolean;
-      estimated_time_seconds: number;
-      options?: string[] | null;
-    } | null>('/exercise/next', { params });
+    const res = await apiClient.get<QuestionResponse | null>('/exercise/next', {
+      params,
+    });
 
     const data = res.data;
     if (!data) {
       return null;
     }
-    return {
-      id: data.id,
-      title: data.title,
-      content: data.content,
-      difficulty: data.difficulty,
-      type: data.type as Question['type'],
-      knowledgePoints: data.knowledge_points,
-      hintsAvailable: data.hints_available,
-      estimatedTimeSeconds: data.estimated_time_seconds,
-      options: data.options,
-    };
+    return mapQuestion(data);
+  },
+
+  /**
+   * 按指定知识点和难度生成一道学生自主练习题
+   */
+  async generateQuestion(payload: GenerateQuestionPayload): Promise<Question> {
+    exerciseLogger.debug('Generating question', {
+      conceptId: payload.conceptId,
+      difficulty: payload.difficulty,
+    });
+
+    const res = await apiClient.post<QuestionResponse>('/exercise/generate', {
+      concept_id: payload.conceptId,
+      difficulty: payload.difficulty,
+    });
+
+    return mapQuestion(res.data);
   },
 
   /**
@@ -139,7 +170,7 @@ export const exerciseService = {
       studentAnswerLatex: data.student_answer_latex,
       correctAnswerLatex: data.correct_answer_latex,
       diagnosis: data.diagnosis
-          ? {
+        ? {
             errorType: data.diagnosis.error_type,
             errorSubtype: data.diagnosis.error_subtype,
             taxonomyCode: data.diagnosis.taxonomy_code,

@@ -57,6 +57,23 @@ func TestListStudentsNormalizesPaginationAndReturnsTotalPages(t *testing.T) {
 	}
 }
 
+func TestGetStudentsStatsScopesAttemptQueriesToTeacher(t *testing.T) {
+	repo := &fakeTeacherRepo{
+		classIDs:         []string{"class-1"},
+		students:         []string{"student-1"},
+		avgScore:         85,
+		avgScoreOK:       true,
+		activeStudentSet: map[string]struct{}{"student-1": {}},
+		lowScoreStudents: map[string]float64{},
+	}
+	service := newTeacherTestService(repo, time.Date(2026, time.April, 27, 15, 0, 0, 0, time.UTC))
+
+	if _, err := service.GetStudentsStats(context.Background(), "teacher-1"); err != nil {
+		t.Fatalf("GetStudentsStats() error = %v", err)
+	}
+	assertAttemptQueriesUseTeacher(t, repo, "teacher-1", 2)
+}
+
 func TestGetAnalyticsBuildsOverviewMasteryWeeklyAndRanking(t *testing.T) {
 	now := time.Date(2026, time.April, 27, 15, 0, 0, 0, time.UTC)
 	repo := &fakeTeacherRepo{
@@ -95,6 +112,7 @@ func TestGetAnalyticsBuildsOverviewMasteryWeeklyAndRanking(t *testing.T) {
 	if len(analytics.TopStudents) != 1 || analytics.TopStudents[0].Name != "李四" || analytics.TopStudents[0].Rank != 1 {
 		t.Fatalf("top students = %#v", analytics.TopStudents)
 	}
+	assertAttemptQueriesUseTeacher(t, repo, "teacher-1", 4)
 }
 
 func TestGetClassAnalyticsValidatesOwnershipAndBuildsAlerts(t *testing.T) {
@@ -138,6 +156,7 @@ func TestGetClassAnalyticsValidatesOwnershipAndBuildsAlerts(t *testing.T) {
 	if len(response.StudentRankings) != 1 || response.StudentRankings[0].Name != "张三" {
 		t.Fatalf("rankings = %#v", response.StudentRankings)
 	}
+	assertAttemptQueriesUseTeacher(t, repo, "teacher-1", 5)
 }
 
 func TestGetStudentDetailBuildsSummaryAndActivity(t *testing.T) {
@@ -184,6 +203,7 @@ func TestGetStudentDetailBuildsSummaryAndActivity(t *testing.T) {
 	if len(response.RecentMistakes) != 1 || response.RecentMistakes[0].Explanation == nil {
 		t.Fatalf("recent mistakes = %#v", response.RecentMistakes)
 	}
+	assertAttemptQueriesUseTeacher(t, repo, "teacher-1", 6)
 }
 
 func TestGetStudentDetailDistinguishesMissingStudentAccount(t *testing.T) {
@@ -208,6 +228,18 @@ func newTeacherTestService(repo *fakeTeacherRepo, now time.Time) *Service {
 	service.now = func() time.Time { return now }
 	service.idFactory = repo.nextID
 	return service
+}
+
+func assertAttemptQueriesUseTeacher(t *testing.T, repo *fakeTeacherRepo, wantTeacherID string, wantCount int) {
+	t.Helper()
+	if len(repo.attemptTeacherIDs) != wantCount {
+		t.Fatalf("attempt query teacher IDs = %#v, want %d calls", repo.attemptTeacherIDs, wantCount)
+	}
+	for _, teacherID := range repo.attemptTeacherIDs {
+		if teacherID != wantTeacherID {
+			t.Fatalf("attempt query teacher ID = %q, want %q", teacherID, wantTeacherID)
+		}
+	}
 }
 
 type fakeTeacherRepo struct {
@@ -246,6 +278,7 @@ type fakeTeacherRepo struct {
 	studentListItems        []StudentListItem
 	studentListTotal        int
 	lastStudentFilter       StudentListFilter
+	attemptTeacherIDs       []string
 	ids                     []string
 	idIndex                 int
 }
@@ -258,6 +291,10 @@ func (r *fakeTeacherRepo) nextID() (string, error) {
 	id := r.ids[r.idIndex]
 	r.idIndex++
 	return id, nil
+}
+
+func (r *fakeTeacherRepo) recordAttemptTeacherID(teacherID string) {
+	r.attemptTeacherIDs = append(r.attemptTeacherIDs, teacherID)
 }
 
 func (r *fakeTeacherRepo) ListTeacherClassIDs(context.Context, string) ([]string, error) {
@@ -278,15 +315,18 @@ func (r *fakeTeacherRepo) CountActiveSessionsSince(_ context.Context, _ []string
 	return r.activeSessionsSince, nil
 }
 
-func (r *fakeTeacherRepo) AverageAttemptScore(context.Context, []string, *time.Time) (float64, bool, error) {
+func (r *fakeTeacherRepo) AverageAttemptScore(_ context.Context, teacherID string, _ []string, _ *time.Time) (float64, bool, error) {
+	r.recordAttemptTeacherID(teacherID)
 	return r.avgScore, r.avgScoreOK, nil
 }
 
-func (r *fakeTeacherRepo) SumAttemptSeconds(context.Context, []string, *time.Time) (int, error) {
+func (r *fakeTeacherRepo) SumAttemptSeconds(_ context.Context, teacherID string, _ []string, _ *time.Time) (int, error) {
+	r.recordAttemptTeacherID(teacherID)
 	return r.sumSeconds, nil
 }
 
-func (r *fakeTeacherRepo) CountDistinctAttemptStudentsSince(context.Context, []string, time.Time) (int, error) {
+func (r *fakeTeacherRepo) CountDistinctAttemptStudentsSince(_ context.Context, teacherID string, _ []string, _ time.Time) (int, error) {
+	r.recordAttemptTeacherID(teacherID)
 	return r.distinctAttemptStudents, nil
 }
 
@@ -302,7 +342,8 @@ func (r *fakeTeacherRepo) WeeklySessionActivity(context.Context, []string, time.
 	return r.weeklyActivity, nil
 }
 
-func (r *fakeTeacherRepo) TopStudentsByAverageScore(context.Context, []string, int) ([]StudentScore, error) {
+func (r *fakeTeacherRepo) TopStudentsByAverageScore(_ context.Context, teacherID string, _ []string, _ int) ([]StudentScore, error) {
+	r.recordAttemptTeacherID(teacherID)
 	return r.topStudents, nil
 }
 
@@ -314,11 +355,13 @@ func (r *fakeTeacherRepo) ClassOwnedByTeacher(context.Context, string, string) (
 	return r.classOwned, nil
 }
 
-func (r *fakeTeacherRepo) CommonErrors(context.Context, []string, int) ([]CommonErrorAggregate, error) {
+func (r *fakeTeacherRepo) CommonErrors(_ context.Context, teacherID string, _ []string, _ int) ([]CommonErrorAggregate, error) {
+	r.recordAttemptTeacherID(teacherID)
 	return r.commonErrors, nil
 }
 
-func (r *fakeTeacherRepo) LowScoreStudents(context.Context, []string, float64) (map[string]float64, error) {
+func (r *fakeTeacherRepo) LowScoreStudents(_ context.Context, teacherID string, _ []string, _ float64) (map[string]float64, error) {
+	r.recordAttemptTeacherID(teacherID)
 	return r.lowScoreStudents, nil
 }
 
@@ -334,15 +377,18 @@ func (r *fakeTeacherRepo) GetUser(context.Context, string) (UserInfo, bool, erro
 	return r.userInfo, r.userFound, nil
 }
 
-func (r *fakeTeacherRepo) GetProfile(context.Context, string) (StudentProfile, bool, error) {
+func (r *fakeTeacherRepo) GetProfile(_ context.Context, teacherID string, _ string) (StudentProfile, bool, error) {
+	r.recordAttemptTeacherID(teacherID)
 	return r.profile, r.profileFound, nil
 }
 
-func (r *fakeTeacherRepo) AverageStudentScore(context.Context, string) (float64, bool, error) {
+func (r *fakeTeacherRepo) AverageStudentScore(_ context.Context, teacherID string, _ string) (float64, bool, error) {
+	r.recordAttemptTeacherID(teacherID)
 	return r.avgStudentScore, r.avgStudentOK, nil
 }
 
-func (r *fakeTeacherRepo) RankByAverageScore(context.Context, []string) ([]StudentScore, error) {
+func (r *fakeTeacherRepo) RankByAverageScore(_ context.Context, teacherID string, _ []string) ([]StudentScore, error) {
+	r.recordAttemptTeacherID(teacherID)
 	return r.rankScores, nil
 }
 
@@ -354,11 +400,13 @@ func (r *fakeTeacherRepo) ListSessionDays(context.Context, string) ([]time.Time,
 	return r.sessionDays, nil
 }
 
-func (r *fakeTeacherRepo) AttemptConceptCounts(context.Context, string) (map[string]int, error) {
+func (r *fakeTeacherRepo) AttemptConceptCounts(_ context.Context, teacherID string, _ string) (map[string]int, error) {
+	r.recordAttemptTeacherID(teacherID)
 	return r.conceptCounts, nil
 }
 
-func (r *fakeTeacherRepo) RecentAttempts(context.Context, string, int) ([]RecentAttempt, error) {
+func (r *fakeTeacherRepo) RecentAttempts(_ context.Context, teacherID string, _ string, _ int) ([]RecentAttempt, error) {
+	r.recordAttemptTeacherID(teacherID)
 	return r.recentAttempts, nil
 }
 
@@ -366,6 +414,7 @@ func (r *fakeTeacherRepo) RecentSessions(context.Context, string, int) ([]Recent
 	return r.recentSessions, nil
 }
 
-func (r *fakeTeacherRepo) RecentMistakes(context.Context, string, int) ([]StudentMistake, error) {
+func (r *fakeTeacherRepo) RecentMistakes(_ context.Context, teacherID string, _ string, _ int) ([]StudentMistake, error) {
+	r.recordAttemptTeacherID(teacherID)
 	return r.recentMistakes, nil
 }

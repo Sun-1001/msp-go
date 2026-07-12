@@ -11,6 +11,10 @@ interface EmptyExerciseStateProps {
   onRetry?: () => void;
 }
 
+const actionGroupClass =
+  'flex w-full max-w-xs flex-col justify-center gap-3 sm:w-auto sm:max-w-none sm:flex-row';
+const actionButtonClass = 'w-full whitespace-nowrap sm:w-auto';
+
 /**
  * 练习题空状态组件
  *
@@ -40,16 +44,18 @@ export const EmptyExerciseState: React.FC<EmptyExerciseStateProps> = ({
             <p className="text-surface-600 dark:text-surface-400 mb-6 text-center max-w-md">
               您还没有加入任何班级。加入班级后，您就可以开始练习教师发布的题目啦～
             </p>
-            <div className="flex gap-3 justify-center">
+            <div className={actionGroupClass}>
               <Button
                 variant="outline"
                 onClick={() => navigate('/course/overview')}
+                className={actionButtonClass}
               >
                 <Home className="w-4 h-4 mr-2" />
                 返回首页
               </Button>
               <Button
                 onClick={() => navigate('/my-class')}
+                className={actionButtonClass}
               >
                 <Users className="w-4 h-4 mr-2" />
                 加入班级
@@ -75,10 +81,11 @@ export const EmptyExerciseState: React.FC<EmptyExerciseStateProps> = ({
             <p className="text-surface-500 dark:text-surface-500 text-sm mb-6 text-center max-w-md">
               或者您已经完成了所有可用题目 ✨
             </p>
-            <div className="flex gap-3 justify-center">
+            <div className={actionGroupClass}>
               <Button
                 variant="outline"
                 onClick={() => navigate('/course/overview')}
+                className={actionButtonClass}
               >
                 <Home className="w-4 h-4 mr-2" />
                 返回首页
@@ -86,6 +93,7 @@ export const EmptyExerciseState: React.FC<EmptyExerciseStateProps> = ({
               <Button
                 variant="secondary"
                 onClick={() => navigate('/resources')}
+                className={actionButtonClass}
               >
                 <BookOpen className="w-4 h-4 mr-2" />
                 查看学习资源
@@ -108,16 +116,17 @@ export const EmptyExerciseState: React.FC<EmptyExerciseStateProps> = ({
             <p className="text-surface-600 dark:text-surface-400 mb-6 text-center max-w-md">
               请检查您的网络连接，然后重试
             </p>
-            <div className="flex gap-3 justify-center">
+            <div className={actionGroupClass}>
               <Button
                 variant="outline"
                 onClick={() => navigate('/course/overview')}
+                className={actionButtonClass}
               >
                 <Home className="w-4 h-4 mr-2" />
                 返回首页
               </Button>
               {onRetry && (
-                <Button onClick={onRetry}>
+                <Button onClick={onRetry} className={actionButtonClass}>
                   重试
                 </Button>
               )}
@@ -140,16 +149,17 @@ export const EmptyExerciseState: React.FC<EmptyExerciseStateProps> = ({
             <p className="text-surface-600 dark:text-surface-400 mb-2 text-center max-w-md">
               {errorMessage || '发生了一些问题，请稍后重试'}
             </p>
-            <div className="flex gap-3 justify-center mt-6">
+            <div className={`${actionGroupClass} mt-6`}>
               <Button
                 variant="outline"
                 onClick={() => navigate('/course/overview')}
+                className={actionButtonClass}
               >
                 <Home className="w-4 h-4 mr-2" />
                 返回首页
               </Button>
               {onRetry && (
-                <Button onClick={onRetry}>
+                <Button onClick={onRetry} className={actionButtonClass}>
                   重试
                 </Button>
               )}
@@ -161,7 +171,7 @@ export const EmptyExerciseState: React.FC<EmptyExerciseStateProps> = ({
 
   return (
     <Card className="border-surface-200 dark:border-surface-700">
-      <CardContent className="p-12">
+      <CardContent className="p-6 sm:p-12">
         <div className="flex flex-col items-center">
           {renderContent()}
         </div>

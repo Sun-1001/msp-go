@@ -20,10 +20,16 @@ import (
 
 // Public exercise errors mapped by the HTTP layer.
 var (
-	ErrNotFound       = errors.New("exercise not found")
-	ErrForbidden      = errors.New("student is not enrolled")
-	ErrBadRequest     = errors.New("bad exercise request")
-	ErrOCRUnavailable = errors.New("image answer OCR is unavailable")
+	ErrNotFound                = errors.New("exercise not found")
+	ErrForbidden               = errors.New("student is not enrolled")
+	ErrBadRequest              = errors.New("bad exercise request")
+	ErrOCRUnavailable          = errors.New("image answer OCR is unavailable")
+	ErrAIGenerationUnavailable = errors.New("AI exercise generation is unavailable")
+)
+
+const (
+	ExerciseSourceClass       = "class"
+	ExerciseSourceAIGenerated = "ai_generated"
 )
 
 // Repository is the persistence surface required by exercise use cases.
@@ -33,11 +39,14 @@ type Repository interface {
 	GetLatestSession(context.Context, string) (LearningSession, bool, error)
 	CreateSession(context.Context, string, time.Time) (LearningSession, error)
 	UpdateSessionCurrentContent(context.Context, string, *string) error
-	UpdateSessionAfterSubmit(context.Context, string, []string) error
+	UpdateSessionAfterSubmit(context.Context, string, string, []string) error
 	GetExercise(context.Context, string) (Exercise, bool, error)
+	GetKnowledgeConcept(context.Context, string) (KnowledgeConcept, bool, error)
+	CreateGeneratedExercise(context.Context, string, GeneratedQuestion, time.Time) (Exercise, error)
 	ListRecentContentIDs(context.Context, string, int) ([]string, error)
 	ListCandidateExercises(context.Context, CandidateFilter) ([]Exercise, error)
 	GetProfile(context.Context, string) (StudentProfile, bool, error)
+	CreateProfile(context.Context, string, time.Time) (StudentProfile, error)
 	HasSubmittedAttempt(context.Context, string, string) (bool, error)
 	ListDKTStates(context.Context, string, []string) (map[string]DKTState, error)
 	ListRecentInteractions(context.Context, string, int) ([]LearningInteraction, error)
@@ -62,14 +71,23 @@ type LearningSession struct {
 
 // Exercise stores problem content.
 type Exercise struct {
-	ID             string
-	OwnerTeacherID string
-	Status         string
-	Title          string
-	Body           string
-	Difficulty     float64
-	ConceptIDs     []string
-	Meta           map[string]any
+	ID                   string
+	OwnerTeacherID       string
+	GeneratedByStudentID string
+	Status               string
+	Title                string
+	Body                 string
+	Difficulty           float64
+	ConceptIDs           []string
+	Meta                 map[string]any
+}
+
+// KnowledgeConcept stores trusted knowledge-node context for AI generation.
+type KnowledgeConcept struct {
+	ID          string
+	Name        string
+	Description string
+	Chapter     string
 }
 
 // StudentProfile stores tracking data updated after attempts.
@@ -170,6 +188,39 @@ type SubmitRequest struct {
 	TimeSpentSeconds int
 }
 
+// GenerateExerciseRequest stores a student's AI self-practice selection.
+type GenerateExerciseRequest struct {
+	ConceptID  string
+	Difficulty float64
+}
+
+// GenerationInput carries trusted knowledge context into the question generator.
+type GenerationInput struct {
+	Concept    KnowledgeConcept
+	Difficulty float64
+}
+
+// GeneratedQuestion stores a validated, persistable AI exercise candidate.
+type GeneratedQuestion struct {
+	Title                string
+	Body                 string
+	Type                 string
+	Difficulty           float64
+	Answer               string
+	AnswerType           string
+	Options              []string
+	Hints                []string
+	SolutionSteps        []string
+	EstimatedTimeSeconds int
+	ConceptIDs           []string
+	KnowledgePointNames  []string
+}
+
+// QuestionGenerator creates structured self-practice questions.
+type QuestionGenerator interface {
+	GenerateQuestion(context.Context, GenerationInput) (GeneratedQuestion, error)
+}
+
 // ExerciseResponse is the Python-compatible exercise summary response.
 type ExerciseResponse struct {
 	ID                   string   `json:"id"`
@@ -177,7 +228,9 @@ type ExerciseResponse struct {
 	Content              string   `json:"content"`
 	Difficulty           float64  `json:"difficulty"`
 	Type                 string   `json:"type"`
+	Source               string   `json:"source"`
 	KnowledgePoints      []string `json:"knowledge_points"`
+	KnowledgePointNames  []string `json:"knowledge_point_names"`
 	HintsAvailable       bool     `json:"hints_available"`
 	EstimatedTimeSeconds int      `json:"estimated_time_seconds"`
 	Options              []string `json:"options"`
@@ -185,14 +238,16 @@ type ExerciseResponse struct {
 
 // ExerciseDetailResponse is the Python-compatible exercise detail response.
 type ExerciseDetailResponse struct {
-	ID              string   `json:"id"`
-	Title           string   `json:"title"`
-	Content         string   `json:"content"`
-	Difficulty      float64  `json:"difficulty"`
-	Type            string   `json:"type"`
-	KnowledgePoints []string `json:"knowledge_points"`
-	Hints           []string `json:"hints"`
-	Options         []string `json:"options"`
+	ID                  string   `json:"id"`
+	Title               string   `json:"title"`
+	Content             string   `json:"content"`
+	Difficulty          float64  `json:"difficulty"`
+	Type                string   `json:"type"`
+	Source              string   `json:"source"`
+	KnowledgePoints     []string `json:"knowledge_points"`
+	KnowledgePointNames []string `json:"knowledge_point_names"`
+	Hints               []string `json:"hints"`
+	Options             []string `json:"options"`
 }
 
 // SolutionResponse is the Python-compatible solution response.
@@ -272,11 +327,12 @@ type Diagnostician interface {
 
 // Service implements adaptive exercise use cases.
 type Service struct {
-	repo          Repository
-	checker       AnswerChecker
-	diagnostician Diagnostician
-	now           func() time.Time
-	newID         func() (string, error)
+	repo              Repository
+	checker           AnswerChecker
+	diagnostician     Diagnostician
+	questionGenerator QuestionGenerator
+	now               func() time.Time
+	newID             func() (string, error)
 }
 
 // Option customizes the exercise service.
@@ -286,6 +342,13 @@ type Option func(*Service)
 func WithDiagnostician(diagnostician Diagnostician) Option {
 	return func(service *Service) {
 		service.diagnostician = diagnostician
+	}
+}
+
+// WithQuestionGenerator enables AI-backed student self-practice generation.
+func WithQuestionGenerator(generator QuestionGenerator) Option {
+	return func(service *Service) {
+		service.questionGenerator = generator
 	}
 }
 
@@ -320,7 +383,7 @@ func (s *Service) GetNextExercise(ctx context.Context, userID string, query Next
 		if err != nil {
 			return nil, err
 		}
-		if ok && current.Status == "PUBLISHED" {
+		if ok && current.Status == "PUBLISHED" && current.GeneratedByStudentID == "" {
 			return toExerciseResponse(current), nil
 		}
 		if err := s.repo.UpdateSessionCurrentContent(ctx, session.ID, nil); err != nil {
@@ -381,6 +444,43 @@ func (s *Service) GetNextExercise(ctx context.Context, userID string, query Next
 	return toExerciseResponse(selected), nil
 }
 
+// GenerateExercise creates and persists one student-owned AI self-practice question.
+func (s *Service) GenerateExercise(ctx context.Context, userID string, request GenerateExerciseRequest) (*ExerciseResponse, error) {
+	request.ConceptID = strings.TrimSpace(request.ConceptID)
+	if request.ConceptID == "" || len(request.ConceptID) > 36 || math.IsNaN(request.Difficulty) || math.IsInf(request.Difficulty, 0) || request.Difficulty < 0 || request.Difficulty > 1 {
+		return nil, ErrBadRequest
+	}
+	if s.questionGenerator == nil {
+		return nil, ErrAIGenerationUnavailable
+	}
+	concept, ok, err := s.repo.GetKnowledgeConcept(ctx, request.ConceptID)
+	if err != nil {
+		return nil, err
+	}
+	if !ok {
+		return nil, ErrNotFound
+	}
+	generated, err := s.questionGenerator.GenerateQuestion(ctx, GenerationInput{
+		Concept:    concept,
+		Difficulty: request.Difficulty,
+	})
+	if err != nil {
+		return nil, ErrAIGenerationUnavailable
+	}
+	generated.Difficulty = request.Difficulty
+	generated.ConceptIDs = []string{concept.ID}
+	generated.KnowledgePointNames = []string{concept.Name}
+	generated = normalizeGeneratedQuestion(generated)
+	if !validGeneratedQuestion(generated) {
+		return nil, ErrAIGenerationUnavailable
+	}
+	exercise, err := s.repo.CreateGeneratedExercise(ctx, userID, generated, s.now())
+	if err != nil {
+		return nil, err
+	}
+	return toExerciseResponse(exercise), nil
+}
+
 // SubmitAnswer records an answer, performs lightweight grading, and updates tracking state.
 func (s *Service) SubmitAnswer(ctx context.Context, userID string, request SubmitRequest) (SubmitResponse, error) {
 	request.AnswerText = strings.TrimSpace(request.AnswerText)
@@ -404,14 +504,11 @@ func (s *Service) SubmitAnswer(ctx context.Context, userID string, request Submi
 		if !ok || exercise.Status != "PUBLISHED" {
 			return ErrBadRequest
 		}
-		teacherID, ok, err := repo.GetTeacherIDForStudent(txCtx, userID)
+		canAccess, err := canAccessExercise(txCtx, repo, userID, exercise)
 		if err != nil {
 			return err
 		}
-		if !ok {
-			return ErrForbidden
-		}
-		if exercise.OwnerTeacherID != teacherID {
+		if !canAccess {
 			return ErrBadRequest
 		}
 
@@ -421,7 +518,7 @@ func (s *Service) SubmitAnswer(ctx context.Context, userID string, request Submi
 		}
 
 		studentAnswer := request.AnswerText
-		check, err := s.checker.CheckAnswer(txCtx, studentAnswer, correctAnswer, metautil.String(exercise.Meta, "answer_type"))
+		check, err := s.checkExerciseAnswer(txCtx, exercise, studentAnswer, correctAnswer)
 		if err != nil {
 			return err
 		}
@@ -484,7 +581,7 @@ func (s *Service) SubmitAnswer(ctx context.Context, userID string, request Submi
 			return err
 		}
 		attempted := appendUnique(session.ContentsAttempted, exercise.ID)
-		if err := repo.UpdateSessionAfterSubmit(txCtx, session.ID, attempted); err != nil {
+		if err := repo.UpdateSessionAfterSubmit(txCtx, session.ID, exercise.ID, attempted); err != nil {
 			return err
 		}
 
@@ -538,14 +635,16 @@ func (s *Service) GetExercise(ctx context.Context, userID string, exerciseID str
 		return ExerciseDetailResponse{}, err
 	}
 	return ExerciseDetailResponse{
-		ID:              exercise.ID,
-		Title:           exercise.Title,
-		Content:         exercise.Body,
-		Difficulty:      exercise.Difficulty,
-		Type:            metaStringDefault(exercise.Meta, "type", "short_answer"),
-		KnowledgePoints: sliceutil.CloneStrings(exercise.ConceptIDs),
-		Hints:           metautil.StringSlice(exercise.Meta, "hints"),
-		Options:         metautil.OptionalStringSlice(exercise.Meta, "options"),
+		ID:                  exercise.ID,
+		Title:               exercise.Title,
+		Content:             exercise.Body,
+		Difficulty:          exercise.Difficulty,
+		Type:                metaStringDefault(exercise.Meta, "type", "short_answer"),
+		Source:              exerciseSource(exercise),
+		KnowledgePoints:     sliceutil.CloneStrings(exercise.ConceptIDs),
+		KnowledgePointNames: metautil.StringSlice(exercise.Meta, "knowledge_point_names"),
+		Hints:               metautil.StringSlice(exercise.Meta, "hints"),
+		Options:             metautil.OptionalStringSlice(exercise.Meta, "options"),
 	}, nil
 }
 
@@ -576,21 +675,42 @@ func (s *Service) GetSolution(ctx context.Context, userID string, exerciseID str
 }
 
 func (s *Service) authorizedExercise(ctx context.Context, userID string, exerciseID string) (Exercise, error) {
-	teacherID, ok, err := s.repo.GetTeacherIDForStudent(ctx, userID)
-	if err != nil {
-		return Exercise{}, err
-	}
-	if !ok {
-		return Exercise{}, ErrForbidden
-	}
 	exercise, ok, err := s.repo.GetExercise(ctx, exerciseID)
 	if err != nil {
 		return Exercise{}, err
 	}
-	if !ok || exercise.OwnerTeacherID != teacherID {
+	if !ok {
+		_, enrolled, err := s.repo.GetTeacherIDForStudent(ctx, userID)
+		if err != nil {
+			return Exercise{}, err
+		}
+		if !enrolled {
+			return Exercise{}, ErrForbidden
+		}
+		return Exercise{}, ErrNotFound
+	}
+	canAccess, err := canAccessExercise(ctx, s.repo, userID, exercise)
+	if err != nil {
+		return Exercise{}, err
+	}
+	if !canAccess {
 		return Exercise{}, ErrNotFound
 	}
 	return exercise, nil
+}
+
+func canAccessExercise(ctx context.Context, repo Repository, userID string, exercise Exercise) (bool, error) {
+	if exercise.GeneratedByStudentID != "" {
+		return exercise.GeneratedByStudentID == userID, nil
+	}
+	teacherID, ok, err := repo.GetTeacherIDForStudent(ctx, userID)
+	if err != nil {
+		return false, err
+	}
+	if !ok {
+		return false, ErrForbidden
+	}
+	return exercise.OwnerTeacherID == teacherID, nil
 }
 
 func (s *Service) getOrCreateSession(ctx context.Context, userID string) (LearningSession, error) {
@@ -614,7 +734,10 @@ func (s *Service) updateTracking(ctx context.Context, repo Repository, userID st
 		return nil, err
 	}
 	if !ok {
-		return nil, nil
+		profile, err = repo.CreateProfile(ctx, userID, now)
+		if err != nil {
+			return nil, err
+		}
 	}
 	concepts := uniqueNonEmpty(exercise.ConceptIDs)
 	if len(concepts) == 0 {
@@ -709,6 +832,77 @@ func (s *Service) updateTracking(ctx context.Context, repo Repository, userID st
 		return nil, err
 	}
 	return masteryUpdate, nil
+}
+
+func (s *Service) checkExerciseAnswer(ctx context.Context, exercise Exercise, studentAnswer string, correctAnswer string) (AnswerCheckResult, error) {
+	if check, ok := deterministicMultipleChoiceCheck(exercise, studentAnswer, correctAnswer); ok {
+		return check, nil
+	}
+	return s.checker.CheckAnswer(ctx, studentAnswer, correctAnswer, metautil.String(exercise.Meta, "answer_type"))
+}
+
+func deterministicMultipleChoiceCheck(exercise Exercise, studentAnswer string, correctAnswer string) (AnswerCheckResult, bool) {
+	if metaStringDefault(exercise.Meta, "type", "short_answer") != "multiple_choice" {
+		return AnswerCheckResult{}, false
+	}
+	options := metautil.StringSlice(exercise.Meta, "options")
+	if len(options) == 0 {
+		return AnswerCheckResult{}, false
+	}
+
+	canonicalCorrect, ok := canonicalCorrectOption(exercise, options, correctAnswer)
+	if !ok {
+		return AnswerCheckResult{}, false
+	}
+	canonicalStudent, studentMatched := canonicalStudentOption(options, studentAnswer)
+	if studentMatched && normalizeAnswer(canonicalStudent) == normalizeAnswer(canonicalCorrect) {
+		return AnswerCheckResult{IsCorrect: true, Reason: "所选答案与标准选项一致", Confidence: 1}, true
+	}
+	return AnswerCheckResult{IsCorrect: false, Reason: "所选答案与标准选项不一致", Confidence: 1}, true
+}
+
+func canonicalCorrectOption(exercise Exercise, options []string, answer string) (string, bool) {
+	if exercise.GeneratedByStudentID == "" {
+		if option, ok := optionFromLabel(options, answer); ok {
+			return option, true
+		}
+	}
+	if option, ok := matchingOption(options, answer); ok {
+		return option, true
+	}
+	return optionFromLabel(options, answer)
+}
+
+func canonicalStudentOption(options []string, answer string) (string, bool) {
+	if option, ok := matchingOption(options, answer); ok {
+		return option, true
+	}
+	return optionFromLabel(options, answer)
+}
+
+func matchingOption(options []string, answer string) (string, bool) {
+	normalized := normalizeAnswer(answer)
+	if normalized == "" {
+		return "", false
+	}
+	for _, option := range options {
+		if normalizeAnswer(option) == normalized {
+			return option, true
+		}
+	}
+	return "", false
+}
+
+func optionFromLabel(options []string, answer string) (string, bool) {
+	label := strings.ToUpper(strings.TrimSpace(answer))
+	if len(label) != 1 || label[0] < 'A' || label[0] > 'D' {
+		return "", false
+	}
+	index := int(label[0] - 'A')
+	if index >= len(options) {
+		return "", false
+	}
+	return options[index], true
 }
 
 // NormalizedAnswerChecker is a deterministic local checker used when the Math Solver agent is unavailable.
@@ -817,11 +1011,73 @@ func toExerciseResponse(exercise Exercise) *ExerciseResponse {
 		Content:              exercise.Body,
 		Difficulty:           exercise.Difficulty,
 		Type:                 metaStringDefault(exercise.Meta, "type", "short_answer"),
+		Source:               exerciseSource(exercise),
 		KnowledgePoints:      sliceutil.CloneStrings(exercise.ConceptIDs),
+		KnowledgePointNames:  metautil.StringSlice(exercise.Meta, "knowledge_point_names"),
 		HintsAvailable:       len(metautil.StringSlice(exercise.Meta, "hints")) > 0,
 		EstimatedTimeSeconds: metautil.IntDefault(exercise.Meta, "estimated_time_seconds", 300),
 		Options:              metautil.OptionalStringSlice(exercise.Meta, "options"),
 	}
+}
+
+func exerciseSource(exercise Exercise) string {
+	if exercise.GeneratedByStudentID != "" {
+		return ExerciseSourceAIGenerated
+	}
+	return ExerciseSourceClass
+}
+
+func normalizeGeneratedQuestion(question GeneratedQuestion) GeneratedQuestion {
+	question.Title = strings.TrimSpace(question.Title)
+	question.Body = strings.TrimSpace(question.Body)
+	question.Type = strings.ToLower(strings.TrimSpace(question.Type))
+	question.Answer = strings.TrimSpace(question.Answer)
+	question.AnswerType = strings.ToLower(strings.TrimSpace(question.AnswerType))
+	question.Options = sliceutil.AppendUniqueNonEmptyStrings(nil, question.Options...)
+	question.Hints = sliceutil.AppendUniqueNonEmptyStrings(nil, question.Hints...)
+	question.SolutionSteps = sliceutil.AppendUniqueNonEmptyStrings(nil, question.SolutionSteps...)
+	question.ConceptIDs = sliceutil.AppendUniqueNonEmptyStrings(nil, question.ConceptIDs...)
+	question.KnowledgePointNames = sliceutil.AppendUniqueNonEmptyStrings(nil, question.KnowledgePointNames...)
+	for _, option := range question.Options {
+		if option == question.Answer {
+			question.Answer = option
+			break
+		}
+	}
+	return question
+}
+
+func validGeneratedQuestion(question GeneratedQuestion) bool {
+	if question.Title == "" || len(question.Title) > 500 || question.Body == "" || len(question.Body) > 20_000 {
+		return false
+	}
+	if question.Type != "multiple_choice" || question.AnswerType != "text" || question.Answer == "" || len(question.Answer) > 2_000 {
+		return false
+	}
+	if len(question.Options) != 4 || !slices.Contains(question.Options, question.Answer) {
+		return false
+	}
+	for _, option := range question.Options {
+		if len(option) > 2_000 {
+			return false
+		}
+	}
+	if len(question.Hints) == 0 || len(question.Hints) > 5 || len(question.SolutionSteps) == 0 || len(question.SolutionSteps) > 10 {
+		return false
+	}
+	for _, hint := range question.Hints {
+		if len(hint) > 2_000 {
+			return false
+		}
+	}
+	for _, step := range question.SolutionSteps {
+		if len(step) > 5_000 {
+			return false
+		}
+	}
+	return question.Difficulty >= 0 && question.Difficulty <= 1 &&
+		question.EstimatedTimeSeconds >= 30 && question.EstimatedTimeSeconds <= 3_600 &&
+		len(question.ConceptIDs) == 1 && len(question.KnowledgePointNames) == 1
 }
 
 type errorTaxonomy struct {

@@ -76,6 +76,34 @@ func TestUpdateAgentConfigValidatesModelAndBuildsRuntimeConfig(t *testing.T) {
 	}
 }
 
+func TestListAgentTypesIncludesQuestionGeneratorInStableOrder(t *testing.T) {
+	modelID := "model-1"
+	repo := &fakeRepo{
+		agentConfigs: map[string]AgentModelConfig{
+			"question_generator": {AgentType: "question_generator", ModelID: &modelID, IsActive: true},
+		},
+	}
+	service := newTestService(t, repo)
+
+	response, err := service.ListAgentTypes(context.Background())
+	if err != nil {
+		t.Fatalf("ListAgentTypes() error = %v", err)
+	}
+	wantTypes := []string{"math_solver", "tutor", "diagnostician", "portrait", "question_parser", "question_generator"}
+	if len(response.Items) != len(wantTypes) {
+		t.Fatalf("items = %#v", response.Items)
+	}
+	for index, wantType := range wantTypes {
+		if response.Items[index].Type != wantType {
+			t.Fatalf("items[%d].Type = %q, want %q", index, response.Items[index].Type, wantType)
+		}
+	}
+	last := response.Items[len(response.Items)-1]
+	if last.Name != "题目生成智能体" || !last.Configured {
+		t.Fatalf("question generator info = %#v", last)
+	}
+}
+
 func TestFetchModelsByCredentialsReadsOpenAICompatibleList(t *testing.T) {
 	service := newTestService(t, &fakeRepo{})
 	service.httpClient = fakeHTTPDoer(func(req *http.Request) (*http.Response, error) {

@@ -34,6 +34,7 @@ import { useChatStream } from './hooks/useChatStream';
 import { useImageUpload } from './hooks/useImageUpload';
 import { useFileUpload } from './hooks/useFileUpload';
 import { CHAT_MODES, QUICK_ACTIONS } from './constants.tsx';
+import type { ExerciseTutorLaunchState } from '../exerciseTutorLaunch';
 
 export const SessionChatPage: React.FC = () => {
   const { sessionId } = useParams<{ sessionId?: string }>();
@@ -42,7 +43,7 @@ export const SessionChatPage: React.FC = () => {
   const dispatch = useAppDispatch();
 
   // 从刷题页面跳转时携带的初始消息
-  const locationState = location.state as { initialMessage?: string } | null;
+  const locationState = location.state as Partial<ExerciseTutorLaunchState> | null;
   const initialMessageHandled = useRef(false);
 
   // Redux state
@@ -140,13 +141,20 @@ export const SessionChatPage: React.FC = () => {
         if (existingSession) {
           dispatch(setCurrentSession(existingSession));
         }
-      } else if (!currentSession) {
+      } else {
         if (initStarted.current) return;
         initStarted.current = true;
 
-        const result = await dispatch(createSessionAsync({ mode: currentMode }));
+        const launchMode = locationState?.mode ?? currentMode;
+        const result = await dispatch(createSessionAsync({
+          topic: locationState?.topic,
+          mode: launchMode,
+        }));
         if (createSessionAsync.fulfilled.match(result)) {
-          navigate(`/session/${result.payload.session.id}`, { replace: true });
+          navigate(`/session/${result.payload.session.id}`, {
+            replace: true,
+            state: locationState,
+          });
           dispatch(fetchSessionsAsync({}));
         }
       }
@@ -180,7 +188,9 @@ export const SessionChatPage: React.FC = () => {
   // 从刷题页面跳转时，自动发送初始消息
   useEffect(() => {
     if (
-      currentSession &&
+      sessionId &&
+      sessionId !== 'new' &&
+      currentSession?.id === sessionId &&
       locationState?.initialMessage &&
       !initialMessageHandled.current &&
       !isStreaming
@@ -190,7 +200,7 @@ export const SessionChatPage: React.FC = () => {
       // 清除 state 防止刷新后重复发送（用 replaceState 避免触发 React Router 重渲染）
       window.history.replaceState(null, '', location.pathname);
     }
-  }, [currentSession, locationState, isStreaming, handleSendMessage, location.pathname]);
+  }, [currentSession, locationState, isStreaming, handleSendMessage, location.pathname, sessionId]);
 
   // 取消响应
   const handleCancelResponse = useCallback(() => {

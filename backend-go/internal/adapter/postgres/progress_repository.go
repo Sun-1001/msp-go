@@ -294,20 +294,22 @@ func (r ProgressRepository) CountErrorsByType(ctx context.Context, userID string
 	return counts, rows.Err()
 }
 
-// ListClassStudentIDs returns students in the current user's class.
-func (r ProgressRepository) ListClassStudentIDs(ctx context.Context, userID string) ([]string, bool, error) {
+// ListClassStudentIDs returns students and the teacher in the current user's class.
+func (r ProgressRepository) ListClassStudentIDs(ctx context.Context, userID string) ([]string, string, bool, error) {
 	var classID string
+	var teacherID string
 	err := r.DB().QueryRow(ctx, `
-		SELECT class_id
-		FROM public.class_enrollments
-		WHERE student_id = $1`,
+		SELECT ce.class_id, c.teacher_id
+		FROM public.class_enrollments ce
+		JOIN public.classes c ON c.id = ce.class_id
+		WHERE ce.student_id = $1`,
 		userID,
-	).Scan(&classID)
+	).Scan(&classID, &teacherID)
 	if err != nil {
 		if err == pgx.ErrNoRows {
-			return nil, false, nil
+			return nil, "", false, nil
 		}
-		return nil, false, err
+		return nil, "", false, err
 	}
 
 	rows, err := r.DB().Query(ctx, `
@@ -317,7 +319,7 @@ func (r ProgressRepository) ListClassStudentIDs(ctx context.Context, userID stri
 		classID,
 	)
 	if err != nil {
-		return nil, false, err
+		return nil, "", false, err
 	}
 	defer rows.Close()
 
@@ -325,27 +327,31 @@ func (r ProgressRepository) ListClassStudentIDs(ctx context.Context, userID stri
 	for rows.Next() {
 		var studentID string
 		if err := rows.Scan(&studentID); err != nil {
-			return nil, false, err
+			return nil, "", false, err
 		}
 		studentIDs = append(studentIDs, studentID)
 	}
-	return studentIDs, true, rows.Err()
+	return studentIDs, teacherID, true, rows.Err()
 }
 
-// AttemptStatsForStudents returns ranking stats for a group of students.
-func (r ProgressRepository) AttemptStatsForStudents(ctx context.Context, studentIDs []string) (map[string]progressapp.StudentAttemptStats, error) {
+// AttemptStatsForStudents returns teacher-owned ranking stats for a group of students.
+func (r ProgressRepository) AttemptStatsForStudents(ctx context.Context, teacherID string, studentIDs []string) (map[string]progressapp.StudentAttemptStats, error) {
 	stats := map[string]progressapp.StudentAttemptStats{}
 	if len(studentIDs) == 0 {
 		return stats, nil
 	}
 	rows, err := r.DB().Query(ctx, `
 		SELECT
-			student_id,
-			coalesce(sum(time_spent_seconds), 0)::int AS total_seconds,
-			count(id)::int AS attempt_count
-		FROM public.content_attempts
-		WHERE student_id = ANY($1::varchar[])
-		GROUP BY student_id`,
+			ca.student_id,
+			coalesce(sum(ca.time_spent_seconds), 0)::int AS total_seconds,
+			count(ca.id)::int AS attempt_count
+		FROM public.content_attempts ca
+		JOIN public.contents c ON c.id = ca.content_id
+		WHERE c.owner_teacher_id = $1
+			AND c.generated_by_student_id IS NULL
+			AND ca.student_id = ANY($2::varchar[])
+		GROUP BY ca.student_id`,
+		teacherID,
 		studentIDs,
 	)
 	if err != nil {

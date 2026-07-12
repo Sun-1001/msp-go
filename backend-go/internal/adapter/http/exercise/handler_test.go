@@ -11,6 +11,7 @@ import (
 	"os"
 	"strings"
 	"testing"
+	"time"
 
 	authapp "mathstudy/backend-go/internal/application/auth"
 	exerciseapp "mathstudy/backend-go/internal/application/exercise"
@@ -80,6 +81,97 @@ func TestNextRejectsInvalidDifficultyBeforeServiceCall(t *testing.T) {
 	}
 	if service.lastUserID != "" {
 		t.Fatalf("service was called for invalid difficulty: %#v", service)
+	}
+}
+
+func TestGenerateCreatesStudentAIExercise(t *testing.T) {
+	service := &fakeExerciseService{generateResponse: &exerciseapp.ExerciseResponse{ID: "generated-1", Source: exerciseapp.ExerciseSourceAIGenerated}}
+	auth := &fakeAuthenticator{principal: authapp.Principal{UserID: "student-1", Role: user.RoleStudent}}
+	handler := newTestHandler(t, service, auth)
+	mux := http.NewServeMux()
+	handler.Register(mux, "/api/v1/exercise")
+
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodPost, "/api/v1/exercise/generate", strings.NewReader(`{"concept_id":"limit","difficulty":0.5}`))
+	request.Header.Set("Authorization", "Bearer token")
+	mux.ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusCreated {
+		t.Fatalf("status = %d body=%s", recorder.Code, recorder.Body.String())
+	}
+	if !service.generateCalled || service.lastGenerateRequest.ConceptID != "limit" || service.lastGenerateRequest.Difficulty != 0.5 {
+		t.Fatalf("service = %#v", service)
+	}
+	if !strings.Contains(recorder.Body.String(), `"source":"ai_generated"`) {
+		t.Fatalf("body = %s", recorder.Body.String())
+	}
+}
+
+func TestGenerateRequiresStudentRole(t *testing.T) {
+	service := &fakeExerciseService{}
+	auth := &fakeAuthenticator{principal: authapp.Principal{UserID: "teacher-1", Role: user.RoleTeacher}}
+	handler := newTestHandler(t, service, auth)
+	mux := http.NewServeMux()
+	handler.Register(mux, "/api/v1/exercise")
+
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodPost, "/api/v1/exercise/generate", strings.NewReader(`{"concept_id":"limit","difficulty":0.5}`))
+	request.Header.Set("Authorization", "Bearer token")
+	mux.ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusForbidden || service.generateCalled {
+		t.Fatalf("status=%d service=%#v", recorder.Code, service)
+	}
+}
+
+func TestGenerateValidatesRequestBeforeServiceCall(t *testing.T) {
+	service := &fakeExerciseService{}
+	auth := &fakeAuthenticator{principal: authapp.Principal{UserID: "student-1", Role: user.RoleStudent}}
+	handler := newTestHandler(t, service, auth)
+	mux := http.NewServeMux()
+	handler.Register(mux, "/api/v1/exercise")
+
+	for _, body := range []string{
+		`{"concept_id":"","difficulty":0.5}`,
+		`{"concept_id":"limit"}`,
+		`{"concept_id":"limit","difficulty":1.1}`,
+	} {
+		recorder := httptest.NewRecorder()
+		request := httptest.NewRequest(http.MethodPost, "/api/v1/exercise/generate", strings.NewReader(body))
+		request.Header.Set("Authorization", "Bearer token")
+		mux.ServeHTTP(recorder, request)
+		if recorder.Code != http.StatusUnprocessableEntity {
+			t.Fatalf("body=%s status=%d response=%s", body, recorder.Code, recorder.Body.String())
+		}
+	}
+	if service.generateCalled {
+		t.Fatal("service was called for invalid request")
+	}
+}
+
+func TestGenerateMapsUnavailableAndRateLimit(t *testing.T) {
+	service := &fakeExerciseService{generateErr: exerciseapp.ErrAIGenerationUnavailable}
+	auth := &fakeAuthenticator{principal: authapp.Principal{UserID: "student-1", Role: user.RoleStudent}}
+	handler := newTestHandler(t, service, auth)
+	handler.limiter = newGenerationRateLimiter(1, time.Minute)
+	mux := http.NewServeMux()
+	handler.Register(mux, "/api/v1/exercise")
+	body := `{"concept_id":"limit","difficulty":0.5}`
+
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodPost, "/api/v1/exercise/generate", strings.NewReader(body))
+	request.Header.Set("Authorization", "Bearer token")
+	mux.ServeHTTP(recorder, request)
+	if recorder.Code != http.StatusServiceUnavailable || !strings.Contains(recorder.Body.String(), "AI_GENERATION_UNAVAILABLE") {
+		t.Fatalf("first status=%d body=%s", recorder.Code, recorder.Body.String())
+	}
+
+	recorder = httptest.NewRecorder()
+	request = httptest.NewRequest(http.MethodPost, "/api/v1/exercise/generate", strings.NewReader(body))
+	request.Header.Set("Authorization", "Bearer token")
+	mux.ServeHTTP(recorder, request)
+	if recorder.Code != http.StatusTooManyRequests || !strings.Contains(recorder.Body.String(), "RATE_LIMITED") {
+		t.Fatalf("second status=%d body=%s", recorder.Code, recorder.Body.String())
 	}
 }
 
@@ -291,27 +383,38 @@ func (a *fakeAuthenticator) DecodeAccessToken(string) (authapp.Principal, bool) 
 }
 
 type fakeExerciseService struct {
-	nextResponse      *exerciseapp.ExerciseResponse
-	submitResponse    exerciseapp.SubmitResponse
-	detailResponse    exerciseapp.ExerciseDetailResponse
-	solutionResponse  exerciseapp.SolutionResponse
-	nextErr           error
-	submitErr         error
-	detailErr         error
-	solutionErr       error
-	lastUserID        string
-	lastNextQuery     exerciseapp.NextQuery
-	lastSubmitRequest exerciseapp.SubmitRequest
-	lastExerciseID    string
-	submitCalled      bool
-	detailCalled      bool
-	solutionCalled    bool
+	nextResponse        *exerciseapp.ExerciseResponse
+	generateResponse    *exerciseapp.ExerciseResponse
+	submitResponse      exerciseapp.SubmitResponse
+	detailResponse      exerciseapp.ExerciseDetailResponse
+	solutionResponse    exerciseapp.SolutionResponse
+	nextErr             error
+	generateErr         error
+	submitErr           error
+	detailErr           error
+	solutionErr         error
+	lastUserID          string
+	lastNextQuery       exerciseapp.NextQuery
+	lastGenerateRequest exerciseapp.GenerateExerciseRequest
+	lastSubmitRequest   exerciseapp.SubmitRequest
+	lastExerciseID      string
+	submitCalled        bool
+	generateCalled      bool
+	detailCalled        bool
+	solutionCalled      bool
 }
 
 func (s *fakeExerciseService) GetNextExercise(_ context.Context, userID string, query exerciseapp.NextQuery) (*exerciseapp.ExerciseResponse, error) {
 	s.lastUserID = userID
 	s.lastNextQuery = query
 	return s.nextResponse, s.nextErr
+}
+
+func (s *fakeExerciseService) GenerateExercise(_ context.Context, userID string, request exerciseapp.GenerateExerciseRequest) (*exerciseapp.ExerciseResponse, error) {
+	s.lastUserID = userID
+	s.lastGenerateRequest = request
+	s.generateCalled = true
+	return s.generateResponse, s.generateErr
 }
 
 func (s *fakeExerciseService) SubmitAnswer(_ context.Context, userID string, request exerciseapp.SubmitRequest) (exerciseapp.SubmitResponse, error) {

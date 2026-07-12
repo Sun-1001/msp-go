@@ -150,18 +150,21 @@ func (r TeacherRepository) CountActiveSessionsSince(ctx context.Context, student
 	return count, err
 }
 
-// AverageAttemptScore returns the average attempt score for students, optionally after since.
-func (r TeacherRepository) AverageAttemptScore(ctx context.Context, studentIDs []string, since *time.Time) (float64, bool, error) {
+// AverageAttemptScore returns the average score on teacher-owned content, optionally after since.
+func (r TeacherRepository) AverageAttemptScore(ctx context.Context, teacherID string, studentIDs []string, since *time.Time) (float64, bool, error) {
 	if len(studentIDs) == 0 {
 		return 0, false, nil
 	}
 	query := `
-		SELECT avg(score)::double precision
-		FROM public.content_attempts
-		WHERE student_id = ANY($1::varchar[])`
-	args := []any{studentIDs}
+		SELECT avg(ca.score)::double precision
+		FROM public.content_attempts ca
+		JOIN public.contents c ON c.id = ca.content_id
+		WHERE c.owner_teacher_id = $1
+			AND c.generated_by_student_id IS NULL
+			AND ca.student_id = ANY($2::varchar[])`
+	args := []any{teacherID, studentIDs}
 	if since != nil {
-		query += ` AND started_at >= $2`
+		query += ` AND ca.started_at >= $3`
 		args = append(args, *since)
 	}
 	var avg pgtype.Float8
@@ -171,18 +174,21 @@ func (r TeacherRepository) AverageAttemptScore(ctx context.Context, studentIDs [
 	return avg.Float64, avg.Valid, nil
 }
 
-// SumAttemptSeconds sums attempt time for students, optionally after since.
-func (r TeacherRepository) SumAttemptSeconds(ctx context.Context, studentIDs []string, since *time.Time) (int, error) {
+// SumAttemptSeconds sums time spent on teacher-owned content, optionally after since.
+func (r TeacherRepository) SumAttemptSeconds(ctx context.Context, teacherID string, studentIDs []string, since *time.Time) (int, error) {
 	if len(studentIDs) == 0 {
 		return 0, nil
 	}
 	query := `
-		SELECT coalesce(sum(time_spent_seconds), 0)::int
-		FROM public.content_attempts
-		WHERE student_id = ANY($1::varchar[])`
-	args := []any{studentIDs}
+		SELECT coalesce(sum(ca.time_spent_seconds), 0)::int
+		FROM public.content_attempts ca
+		JOIN public.contents c ON c.id = ca.content_id
+		WHERE c.owner_teacher_id = $1
+			AND c.generated_by_student_id IS NULL
+			AND ca.student_id = ANY($2::varchar[])`
+	args := []any{teacherID, studentIDs}
 	if since != nil {
-		query += ` AND started_at >= $2`
+		query += ` AND ca.started_at >= $3`
 		args = append(args, *since)
 	}
 	var total int
@@ -190,16 +196,21 @@ func (r TeacherRepository) SumAttemptSeconds(ctx context.Context, studentIDs []s
 	return total, err
 }
 
-// CountDistinctAttemptStudentsSince counts students with attempts after since.
-func (r TeacherRepository) CountDistinctAttemptStudentsSince(ctx context.Context, studentIDs []string, since time.Time) (int, error) {
+// CountDistinctAttemptStudentsSince counts students with teacher-owned attempts after since.
+func (r TeacherRepository) CountDistinctAttemptStudentsSince(ctx context.Context, teacherID string, studentIDs []string, since time.Time) (int, error) {
 	if len(studentIDs) == 0 {
 		return 0, nil
 	}
 	var count int
 	err := r.DB().QueryRow(ctx, `
-		SELECT count(DISTINCT student_id)::int
-		FROM public.content_attempts
-		WHERE student_id = ANY($1::varchar[]) AND started_at >= $2`,
+		SELECT count(DISTINCT ca.student_id)::int
+		FROM public.content_attempts ca
+		JOIN public.contents c ON c.id = ca.content_id
+		WHERE c.owner_teacher_id = $1
+			AND c.generated_by_student_id IS NULL
+			AND ca.student_id = ANY($2::varchar[])
+			AND ca.started_at >= $3`,
+		teacherID,
 		studentIDs,
 		since,
 	).Scan(&count)
@@ -290,18 +301,22 @@ func (r TeacherRepository) WeeklySessionActivity(ctx context.Context, studentIDs
 	return activity, rows.Err()
 }
 
-// TopStudentsByAverageScore returns students ordered by average score descending.
-func (r TeacherRepository) TopStudentsByAverageScore(ctx context.Context, studentIDs []string, limit int) ([]teacherapp.StudentScore, error) {
+// TopStudentsByAverageScore returns students ordered by their teacher-owned average score.
+func (r TeacherRepository) TopStudentsByAverageScore(ctx context.Context, teacherID string, studentIDs []string, limit int) ([]teacherapp.StudentScore, error) {
 	if len(studentIDs) == 0 || limit <= 0 {
 		return []teacherapp.StudentScore{}, nil
 	}
 	rows, err := r.DB().Query(ctx, `
-		SELECT student_id, avg(score)::double precision AS avg_score
-		FROM public.content_attempts
-		WHERE student_id = ANY($1::varchar[])
-		GROUP BY student_id
-		ORDER BY avg_score DESC, student_id
-		LIMIT $2`,
+		SELECT ca.student_id, avg(ca.score)::double precision AS avg_score
+		FROM public.content_attempts ca
+		JOIN public.contents c ON c.id = ca.content_id
+		WHERE c.owner_teacher_id = $1
+			AND c.generated_by_student_id IS NULL
+			AND ca.student_id = ANY($2::varchar[])
+		GROUP BY ca.student_id
+		ORDER BY avg_score DESC, ca.student_id
+		LIMIT $3`,
+		teacherID,
 		studentIDs,
 		limit,
 	)
@@ -356,8 +371,8 @@ func (r TeacherRepository) ClassOwnedByTeacher(ctx context.Context, teacherID st
 	)
 }
 
-// CommonErrors returns grouped diagnosis reports for students.
-func (r TeacherRepository) CommonErrors(ctx context.Context, studentIDs []string, limit int) ([]teacherapp.CommonErrorAggregate, error) {
+// CommonErrors returns grouped diagnosis reports for teacher-owned content.
+func (r TeacherRepository) CommonErrors(ctx context.Context, teacherID string, studentIDs []string, limit int) ([]teacherapp.CommonErrorAggregate, error) {
 	if len(studentIDs) == 0 || limit <= 0 {
 		return []teacherapp.CommonErrorAggregate{}, nil
 	}
@@ -369,10 +384,15 @@ func (r TeacherRepository) CommonErrors(ctx context.Context, studentIDs []string
 			count(*)::int AS cnt
 		FROM public.diagnosis_reports dr
 		JOIN public.content_attempts ca ON ca.id = dr.attempt_id
-		WHERE ca.student_id = ANY($1::varchar[]) AND dr.error_type IS NOT NULL
+		JOIN public.contents c ON c.id = ca.content_id
+		WHERE c.owner_teacher_id = $1
+			AND c.generated_by_student_id IS NULL
+			AND ca.student_id = ANY($2::varchar[])
+			AND dr.error_type IS NOT NULL
 		GROUP BY dr.error_type, dr.error_subtype, dr.explanation
 		ORDER BY cnt DESC, dr.error_type::text
-		LIMIT $2`,
+		LIMIT $3`,
+		teacherID,
 		studentIDs,
 		limit,
 	)
@@ -410,19 +430,23 @@ func (r TeacherRepository) CommonErrors(ctx context.Context, studentIDs []string
 	return items, rows.Err()
 }
 
-// LowScoreStudents returns students whose average score is below maxAverage.
-func (r TeacherRepository) LowScoreStudents(ctx context.Context, studentIDs []string, maxAverage float64) (map[string]float64, error) {
+// LowScoreStudents returns students whose teacher-owned average score is below maxAverage.
+func (r TeacherRepository) LowScoreStudents(ctx context.Context, teacherID string, studentIDs []string, maxAverage float64) (map[string]float64, error) {
 	result := map[string]float64{}
 	if len(studentIDs) == 0 {
 		return result, nil
 	}
 	rows, err := r.DB().Query(ctx, `
-		SELECT student_id, avg(score)::double precision AS avg_score
-		FROM public.content_attempts
-		WHERE student_id = ANY($1::varchar[])
-		GROUP BY student_id
-		HAVING avg(score) < $2
-		ORDER BY student_id`,
+		SELECT ca.student_id, avg(ca.score)::double precision AS avg_score
+		FROM public.content_attempts ca
+		JOIN public.contents c ON c.id = ca.content_id
+		WHERE c.owner_teacher_id = $1
+			AND c.generated_by_student_id IS NULL
+			AND ca.student_id = ANY($2::varchar[])
+		GROUP BY ca.student_id
+		HAVING avg(ca.score) < $3
+		ORDER BY ca.student_id`,
+		teacherID,
 		studentIDs,
 		maxAverage,
 	)
@@ -512,12 +536,29 @@ func (r TeacherRepository) GetUser(ctx context.Context, userID string) (teachera
 	return user, true, nil
 }
 
-// GetProfile returns one student profile.
-func (r TeacherRepository) GetProfile(ctx context.Context, studentID string) (teacherapp.StudentProfile, bool, error) {
+// GetProfile returns one student profile with counters scoped to teacher-owned content.
+func (r TeacherRepository) GetProfile(ctx context.Context, teacherID string, studentID string) (teacherapp.StudentProfile, bool, error) {
 	row := r.DB().QueryRow(ctx, `
-		SELECT student_id, mastery_vector, total_exercises, correct_count, total_study_time_minutes
-		FROM public.student_profiles
-		WHERE student_id = $1`,
+		SELECT
+			sp.student_id,
+			sp.mastery_vector,
+			attempt_stats.total_exercises,
+			attempt_stats.correct_count,
+			attempt_stats.total_study_time_minutes
+		FROM public.student_profiles sp
+		CROSS JOIN LATERAL (
+			SELECT
+				count(ca.id)::int AS total_exercises,
+				(count(ca.id) FILTER (WHERE ca.is_correct))::int AS correct_count,
+				(coalesce(sum(ca.time_spent_seconds), 0) / 60)::int AS total_study_time_minutes
+			FROM public.content_attempts ca
+			JOIN public.contents c ON c.id = ca.content_id
+			WHERE c.owner_teacher_id = $1
+				AND c.generated_by_student_id IS NULL
+				AND ca.student_id = sp.student_id
+		) attempt_stats
+		WHERE sp.student_id = $2`,
+		teacherID,
 		studentID,
 	)
 	profile, err := scanTeacherProfile(row)
@@ -530,13 +571,17 @@ func (r TeacherRepository) GetProfile(ctx context.Context, studentID string) (te
 	return profile, true, nil
 }
 
-// AverageStudentScore returns one student's average score.
-func (r TeacherRepository) AverageStudentScore(ctx context.Context, studentID string) (float64, bool, error) {
+// AverageStudentScore returns one student's average score on teacher-owned content.
+func (r TeacherRepository) AverageStudentScore(ctx context.Context, teacherID string, studentID string) (float64, bool, error) {
 	var avg pgtype.Float8
 	err := r.DB().QueryRow(ctx, `
-		SELECT avg(score)::double precision
-		FROM public.content_attempts
-		WHERE student_id = $1`,
+		SELECT avg(ca.score)::double precision
+		FROM public.content_attempts ca
+		JOIN public.contents c ON c.id = ca.content_id
+		WHERE c.owner_teacher_id = $1
+			AND c.generated_by_student_id IS NULL
+			AND ca.student_id = $2`,
+		teacherID,
 		studentID,
 	).Scan(&avg)
 	if err != nil {
@@ -545,17 +590,21 @@ func (r TeacherRepository) AverageStudentScore(ctx context.Context, studentID st
 	return avg.Float64, avg.Valid, nil
 }
 
-// RankByAverageScore returns all scored students ordered by average score descending.
-func (r TeacherRepository) RankByAverageScore(ctx context.Context, studentIDs []string) ([]teacherapp.StudentScore, error) {
+// RankByAverageScore returns students ranked by their teacher-owned average score.
+func (r TeacherRepository) RankByAverageScore(ctx context.Context, teacherID string, studentIDs []string) ([]teacherapp.StudentScore, error) {
 	if len(studentIDs) == 0 {
 		return []teacherapp.StudentScore{}, nil
 	}
 	rows, err := r.DB().Query(ctx, `
-		SELECT student_id, avg(score)::double precision AS avg_score
-		FROM public.content_attempts
-		WHERE student_id = ANY($1::varchar[])
-		GROUP BY student_id
-		ORDER BY avg_score DESC, student_id`,
+		SELECT ca.student_id, avg(ca.score)::double precision AS avg_score
+		FROM public.content_attempts ca
+		JOIN public.contents c ON c.id = ca.content_id
+		WHERE c.owner_teacher_id = $1
+			AND c.generated_by_student_id IS NULL
+			AND ca.student_id = ANY($2::varchar[])
+		GROUP BY ca.student_id
+		ORDER BY avg_score DESC, ca.student_id`,
+		teacherID,
 		studentIDs,
 	)
 	if err != nil {
@@ -608,14 +657,17 @@ func (r TeacherRepository) ListSessionDays(ctx context.Context, studentID string
 	return days, rows.Err()
 }
 
-// AttemptConceptCounts counts attempted content concept IDs for one student.
-func (r TeacherRepository) AttemptConceptCounts(ctx context.Context, studentID string) (map[string]int, error) {
+// AttemptConceptCounts counts teacher-owned attempted content concept IDs for one student.
+func (r TeacherRepository) AttemptConceptCounts(ctx context.Context, teacherID string, studentID string) (map[string]int, error) {
 	counts := map[string]int{}
 	rows, err := r.DB().Query(ctx, `
 		SELECT c.concept_ids
 		FROM public.contents c
 		JOIN public.content_attempts ca ON ca.content_id = c.id
-		WHERE ca.student_id = $1`,
+		WHERE c.owner_teacher_id = $1
+			AND c.generated_by_student_id IS NULL
+			AND ca.student_id = $2`,
+		teacherID,
 		studentID,
 	)
 	if err != nil {
@@ -638,8 +690,8 @@ func (r TeacherRepository) AttemptConceptCounts(ctx context.Context, studentID s
 	return counts, rows.Err()
 }
 
-// RecentAttempts returns the latest attempt activity rows.
-func (r TeacherRepository) RecentAttempts(ctx context.Context, studentID string, limit int) ([]teacherapp.RecentAttempt, error) {
+// RecentAttempts returns the latest attempt activity on teacher-owned content.
+func (r TeacherRepository) RecentAttempts(ctx context.Context, teacherID string, studentID string, limit int) ([]teacherapp.RecentAttempt, error) {
 	if limit <= 0 {
 		return []teacherapp.RecentAttempt{}, nil
 	}
@@ -647,9 +699,12 @@ func (r TeacherRepository) RecentAttempts(ctx context.Context, studentID string,
 		SELECT ca.id, ca.is_correct, ca.score, ca.started_at, c.title
 		FROM public.content_attempts ca
 		JOIN public.contents c ON c.id = ca.content_id
-		WHERE ca.student_id = $1
+		WHERE c.owner_teacher_id = $1
+			AND c.generated_by_student_id IS NULL
+			AND ca.student_id = $2
 		ORDER BY ca.started_at DESC, ca.id DESC
-		LIMIT $2`,
+		LIMIT $3`,
+		teacherID,
 		studentID,
 		limit,
 	)
@@ -700,8 +755,8 @@ func (r TeacherRepository) RecentSessions(ctx context.Context, studentID string,
 	return sessions, rows.Err()
 }
 
-// RecentMistakes returns latest incorrect attempts with optional diagnosis.
-func (r TeacherRepository) RecentMistakes(ctx context.Context, studentID string, limit int) ([]teacherapp.StudentMistake, error) {
+// RecentMistakes returns latest incorrect attempts on teacher-owned content.
+func (r TeacherRepository) RecentMistakes(ctx context.Context, teacherID string, studentID string, limit int) ([]teacherapp.StudentMistake, error) {
 	if limit <= 0 {
 		return []teacherapp.StudentMistake{}, nil
 	}
@@ -710,9 +765,13 @@ func (r TeacherRepository) RecentMistakes(ctx context.Context, studentID string,
 		FROM public.content_attempts ca
 		JOIN public.contents c ON c.id = ca.content_id
 		LEFT JOIN public.diagnosis_reports dr ON dr.attempt_id = ca.id
-		WHERE ca.student_id = $1 AND ca.is_correct = false
+		WHERE c.owner_teacher_id = $1
+			AND c.generated_by_student_id IS NULL
+			AND ca.student_id = $2
+			AND ca.is_correct = false
 		ORDER BY ca.started_at DESC, ca.id DESC
-		LIMIT $2`,
+		LIMIT $3`,
+		teacherID,
 		studentID,
 		limit,
 	)

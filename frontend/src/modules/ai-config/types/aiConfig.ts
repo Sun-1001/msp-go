@@ -251,7 +251,7 @@ export interface ErrorResponse {
 // ========== 智能体类型常量 ==========
 
 /**
- * 智能体类型枚举（精简版 - 4 个 LLM 配置类型）
+ * 智能体类型枚举
  */
 export const AgentTypes = {
   MATH_SOLVER: 'math_solver',
@@ -259,6 +259,7 @@ export const AgentTypes = {
   DIAGNOSTICIAN: 'diagnostician',
   PORTRAIT: 'portrait',
   QUESTION_PARSER: 'question_parser',
+  QUESTION_GENERATOR: 'question_generator',
 } as const;
 
 export type AgentType = (typeof AgentTypes)[keyof typeof AgentTypes];
@@ -272,6 +273,7 @@ export const AgentTypeDisplayNames: Record<AgentType, string> = {
   [AgentTypes.DIAGNOSTICIAN]: '诊断智能体',
   [AgentTypes.PORTRAIT]: '学生画像',
   [AgentTypes.QUESTION_PARSER]: '题目解析智能体',
+  [AgentTypes.QUESTION_GENERATOR]: '题目生成智能体',
 };
 
 /**

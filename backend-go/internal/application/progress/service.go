@@ -37,8 +37,8 @@ type Repository interface {
 	ListLearningStatsByDay(context.Context, string, time.Time, time.Time) ([]PeriodStat, error)
 	ListLearningStatsByWeek(context.Context, string, time.Time, time.Time) ([]PeriodStat, error)
 	CountErrorsByType(context.Context, string, time.Time, time.Time) (map[string]int, error)
-	ListClassStudentIDs(context.Context, string) ([]string, bool, error)
-	AttemptStatsForStudents(context.Context, []string) (map[string]StudentAttemptStats, error)
+	ListClassStudentIDs(context.Context, string) ([]string, string, bool, error)
+	AttemptStatsForStudents(context.Context, string, []string) (map[string]StudentAttemptStats, error)
 	DistinctChapters(context.Context) ([]string, error)
 }
 
@@ -587,7 +587,7 @@ func (s *Service) GetStatistics(ctx context.Context, userID string, rangeType st
 
 // GetClassRanking returns the current student's class ranking.
 func (s *Service) GetClassRanking(ctx context.Context, userID string) (ClassRankingResponse, error) {
-	studentIDs, inClass, err := s.repo.ListClassStudentIDs(ctx, userID)
+	studentIDs, teacherID, inClass, err := s.repo.ListClassStudentIDs(ctx, userID)
 	if err != nil {
 		return ClassRankingResponse{}, err
 	}
@@ -598,7 +598,7 @@ func (s *Service) GetClassRanking(ctx context.Context, userID string) (ClassRank
 		return ClassRankingResponse{InClass: true, Total: 0}, nil
 	}
 
-	stats, err := s.repo.AttemptStatsForStudents(ctx, studentIDs)
+	stats, err := s.repo.AttemptStatsForStudents(ctx, teacherID, studentIDs)
 	if err != nil {
 		return ClassRankingResponse{}, err
 	}

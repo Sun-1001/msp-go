@@ -156,6 +156,7 @@ func TestGetLearningPathPrunesTargetAndLocksMissingPrerequisite(t *testing.T) {
 func TestGetClassRankingRanksByStudyTimeThenAttemptCount(t *testing.T) {
 	repo := &fakeProgressRepo{
 		classStudentIDs: []string{"student-1", "student-2", "student-3"},
+		classTeacherID:  "teacher-1",
 		inClass:         true,
 		studentAttemptStats: map[string]StudentAttemptStats{
 			"student-1": {StudySeconds: 3600, AttemptCount: 3},
@@ -174,6 +175,12 @@ func TestGetClassRankingRanksByStudyTimeThenAttemptCount(t *testing.T) {
 	}
 	if ranking.Percentile == nil || *ranking.Percentile != 66.7 {
 		t.Fatalf("percentile = %#v", ranking.Percentile)
+	}
+	if repo.attemptStatsTeacherID != "teacher-1" {
+		t.Fatalf("attempt stats teacher ID = %q, want teacher-1", repo.attemptStatsTeacherID)
+	}
+	if len(repo.attemptStatsStudentIDs) != 3 || repo.attemptStatsStudentIDs[0] != "student-1" {
+		t.Fatalf("attempt stats student IDs = %#v", repo.attemptStatsStudentIDs)
 	}
 }
 
@@ -203,8 +210,11 @@ type fakeProgressRepo struct {
 	weekStats              []PeriodStat
 	errorCounts            map[string]int
 	classStudentIDs        []string
+	classTeacherID         string
 	inClass                bool
 	studentAttemptStats    map[string]StudentAttemptStats
+	attemptStatsTeacherID  string
+	attemptStatsStudentIDs []string
 	chapters               []string
 }
 
@@ -272,11 +282,13 @@ func (r *fakeProgressRepo) CountErrorsByType(context.Context, string, time.Time,
 	return r.errorCounts, nil
 }
 
-func (r *fakeProgressRepo) ListClassStudentIDs(context.Context, string) ([]string, bool, error) {
-	return r.classStudentIDs, r.inClass, nil
+func (r *fakeProgressRepo) ListClassStudentIDs(context.Context, string) ([]string, string, bool, error) {
+	return r.classStudentIDs, r.classTeacherID, r.inClass, nil
 }
 
-func (r *fakeProgressRepo) AttemptStatsForStudents(context.Context, []string) (map[string]StudentAttemptStats, error) {
+func (r *fakeProgressRepo) AttemptStatsForStudents(_ context.Context, teacherID string, studentIDs []string) (map[string]StudentAttemptStats, error) {
+	r.attemptStatsTeacherID = teacherID
+	r.attemptStatsStudentIDs = append([]string(nil), studentIDs...)
 	return r.studentAttemptStats, nil
 }
 

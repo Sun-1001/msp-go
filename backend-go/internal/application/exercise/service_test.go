@@ -61,6 +61,86 @@ func TestGetNextExerciseSelectsWeakConceptCandidate(t *testing.T) {
 	}
 }
 
+func TestGenerateExercisePersistsStudentOwnedQuestion(t *testing.T) {
+	repo := &fakeExerciseRepo{
+		knowledgeConcept:    KnowledgeConcept{ID: "limit", Name: "函数极限", Description: "研究函数趋近行为", Chapter: "第一章"},
+		hasKnowledgeConcept: true,
+	}
+	generator := &fakeQuestionGenerator{question: GeneratedQuestion{
+		Title:                "函数极限判断",
+		Body:                 "下列关于函数极限的说法正确的是？",
+		Type:                 "multiple_choice",
+		Answer:               "极限描述函数在某点附近的趋近行为",
+		AnswerType:           "text",
+		Options:              []string{"极限只与函数在该点的值有关", "极限描述函数在某点附近的趋近行为", "所有函数处处存在极限", "极限只能是整数"},
+		Hints:                []string{"区分函数值与邻域内的变化趋势。"},
+		SolutionSteps:        []string{"根据极限定义判断每个选项。"},
+		EstimatedTimeSeconds: 120,
+	}}
+	service := newTestService(repo, WithQuestionGenerator(generator))
+
+	response, err := service.GenerateExercise(context.Background(), "student-1", GenerateExerciseRequest{ConceptID: " limit ", Difficulty: 0.5})
+	if err != nil {
+		t.Fatalf("GenerateExercise() error = %v", err)
+	}
+	if response == nil || response.Source != ExerciseSourceAIGenerated || response.Difficulty != 0.5 || response.ID != "generated-1" {
+		t.Fatalf("response = %#v", response)
+	}
+	if !generator.called || generator.input.Concept.ID != "limit" || generator.input.Difficulty != 0.5 {
+		t.Fatalf("generator = %#v", generator)
+	}
+	if repo.createdGeneratedStudentID != "student-1" || repo.createdGenerated.Difficulty != 0.5 || repo.createdGenerated.AnswerType != "text" {
+		t.Fatalf("persisted generated question = %#v student=%q", repo.createdGenerated, repo.createdGeneratedStudentID)
+	}
+	if len(repo.createdGenerated.ConceptIDs) != 1 || repo.createdGenerated.ConceptIDs[0] != "limit" || repo.createdGenerated.KnowledgePointNames[0] != "函数极限" {
+		t.Fatalf("generated concept context = %#v", repo.createdGenerated)
+	}
+}
+
+func TestGenerateExerciseFailsClosedWhenGeneratorFails(t *testing.T) {
+	repo := &fakeExerciseRepo{
+		knowledgeConcept:    KnowledgeConcept{ID: "limit", Name: "函数极限"},
+		hasKnowledgeConcept: true,
+	}
+	service := newTestService(repo, WithQuestionGenerator(&fakeQuestionGenerator{err: errors.New("model unavailable")}))
+
+	_, err := service.GenerateExercise(context.Background(), "student-1", GenerateExerciseRequest{ConceptID: "limit", Difficulty: 0.5})
+	if !errors.Is(err, ErrAIGenerationUnavailable) {
+		t.Fatalf("GenerateExercise() error = %v, want ErrAIGenerationUnavailable", err)
+	}
+	if repo.createdGeneratedStudentID != "" {
+		t.Fatalf("invalid generation was persisted: %#v", repo.createdGenerated)
+	}
+}
+
+func TestGenerateExerciseRejectsInvalidStructuredQuestion(t *testing.T) {
+	repo := &fakeExerciseRepo{
+		knowledgeConcept:    KnowledgeConcept{ID: "limit", Name: "函数极限"},
+		hasKnowledgeConcept: true,
+	}
+	service := newTestService(repo, WithQuestionGenerator(&fakeQuestionGenerator{question: GeneratedQuestion{
+		Title: "题目", Body: "题干", Type: "multiple_choice", Answer: "A", AnswerType: "text",
+		Options: []string{"A", "A", "B", "C"}, Hints: []string{"提示"}, SolutionSteps: []string{"解析"}, EstimatedTimeSeconds: 60,
+	}}))
+
+	_, err := service.GenerateExercise(context.Background(), "student-1", GenerateExerciseRequest{ConceptID: "limit", Difficulty: 0.5})
+	if !errors.Is(err, ErrAIGenerationUnavailable) {
+		t.Fatalf("GenerateExercise() error = %v, want ErrAIGenerationUnavailable", err)
+	}
+	if repo.createdGeneratedStudentID != "" {
+		t.Fatal("invalid generated question was persisted")
+	}
+}
+
+func TestGenerateExerciseRejectsMissingKnowledgeConcept(t *testing.T) {
+	service := newTestService(&fakeExerciseRepo{}, WithQuestionGenerator(&fakeQuestionGenerator{}))
+
+	_, err := service.GenerateExercise(context.Background(), "student-1", GenerateExerciseRequest{ConceptID: "missing", Difficulty: 0.5})
+	if !errors.Is(err, ErrNotFound) {
+		t.Fatalf("GenerateExercise() error = %v, want ErrNotFound", err)
+	}
+}
+
 func TestSubmitAnswerRecordsCorrectAttemptAndUpdatesTracking(t *testing.T) {
 	now := time.Date(2026, time.April, 25, 10, 0, 0, 0, time.UTC)
 	repo := &fakeExerciseRepo{
@@ -119,8 +199,209 @@ func TestSubmitAnswerRecordsCorrectAttemptAndUpdatesTracking(t *testing.T) {
 	if repo.profileUpdate.TotalExercises != 3 || repo.profileUpdate.CorrectCount != 2 {
 		t.Fatalf("profile update = %#v", repo.profileUpdate)
 	}
+	if repo.createdProfileUserID != "" {
+		t.Fatalf("existing profile was recreated for %q", repo.createdProfileUserID)
+	}
 	if len(repo.updatedAttempted) != 2 || repo.updatedAttempted[1] != "exercise-1" {
 		t.Fatalf("updated attempted = %#v", repo.updatedAttempted)
+	}
+}
+
+func TestSubmitAnswerAllowsOwnGeneratedQuestionWithoutClass(t *testing.T) {
+	pendingClassExerciseID := "class-pending"
+	repo := &fakeExerciseRepo{
+		session: LearningSession{
+			ID:               "session-1",
+			StudentID:        "student-1",
+			CurrentContentID: &pendingClassExerciseID,
+		},
+		hasSession: true,
+		exercises: map[string]Exercise{
+			"generated-1": {
+				ID: "generated-1", GeneratedByStudentID: "student-1", Status: "PUBLISHED", Title: "AI题", Body: "题干", Difficulty: 0.5,
+				ConceptIDs: []string{"limit"}, Meta: map[string]any{"answer": "B", "answer_type": "text"},
+			},
+		},
+	}
+	service := newTestService(repo)
+	service.newID = sequentialIDs("attempt-1", "dkt-1")
+
+	response, err := service.SubmitAnswer(context.Background(), "student-1", SubmitRequest{ExerciseID: "generated-1", AnswerText: "B"})
+	if err != nil {
+		t.Fatalf("SubmitAnswer() error = %v", err)
+	}
+	if !response.IsCorrect || repo.teacherLookupCount != 0 || len(repo.insertedAttempts) != 1 {
+		t.Fatalf("response=%#v repo=%#v", response, repo)
+	}
+	if repo.createdProfileUserID != "student-1" || len(repo.upsertedStates) != 1 || repo.upsertedStates[0].ConceptID != "limit" {
+		t.Fatalf("profile user=%q states=%#v", repo.createdProfileUserID, repo.upsertedStates)
+	}
+	if repo.profileUpdate.TotalExercises != 1 || repo.profileUpdate.CorrectCount != 1 || response.MasteryUpdate["limit"] == 0 {
+		t.Fatalf("profile update=%#v mastery=%#v", repo.profileUpdate, response.MasteryUpdate)
+	}
+	if repo.updatedAfterSubmitExerciseID != "generated-1" {
+		t.Fatalf("submitted exercise id = %q", repo.updatedAfterSubmitExerciseID)
+	}
+}
+
+func TestSubmitAnswerAcceptsClassOptionTextForLetterAnswer(t *testing.T) {
+	repo := &fakeExerciseRepo{
+		session:    LearningSession{ID: "session-1", StudentID: "student-1"},
+		hasSession: true,
+		teacherID:  "teacher-1",
+		hasTeacher: true,
+		exercises: map[string]Exercise{
+			"class-choice": newExercise("class-choice", "teacher-1", []string{"limit"}, map[string]any{
+				"type":        "multiple_choice",
+				"answer":      "A",
+				"answer_type": "text",
+				"options":     []any{"函数在该点附近趋近同一数值", "函数值必须等于极限", "极限只能是整数", "所有函数都有极限"},
+			}),
+		},
+		profile: StudentProfile{
+			MasteryVector:       map[string]float64{"limit": 0.4},
+			ErrorTendency:       map[string]float64{},
+			PreferredDifficulty: 0.5,
+			LearningPace:        1,
+		},
+		hasProfile: true,
+	}
+	service := newTestService(repo)
+	service.newID = sequentialIDs("attempt-1", "dkt-1")
+
+	response, err := service.SubmitAnswer(context.Background(), "student-1", SubmitRequest{
+		ExerciseID: "class-choice",
+		AnswerText: "函数在该点附近趋近同一数值",
+	})
+	if err != nil {
+		t.Fatalf("SubmitAnswer() error = %v", err)
+	}
+	if !response.IsCorrect || len(repo.insertedAttempts) != 1 || !repo.insertedAttempts[0].IsCorrect {
+		t.Fatalf("response=%#v attempts=%#v", response, repo.insertedAttempts)
+	}
+}
+
+func TestDeterministicMultipleChoiceCheckSupportsLabelsAndOptionText(t *testing.T) {
+	options := []any{"B", "A", "4", "8"}
+	tests := []struct {
+		name       string
+		exercise   Exercise
+		student    string
+		correct    string
+		wantResult bool
+	}{
+		{
+			name:       "class label maps before ambiguous option text",
+			exercise:   Exercise{Meta: map[string]any{"type": "multiple_choice", "options": options}},
+			student:    "B",
+			correct:    "A",
+			wantResult: true,
+		},
+		{
+			name:       "class text answer accepts option label",
+			exercise:   Exercise{Meta: map[string]any{"type": "multiple_choice", "options": options}},
+			student:    "c",
+			correct:    "4",
+			wantResult: true,
+		},
+		{
+			name:       "AI answer text wins over label ambiguity",
+			exercise:   Exercise{GeneratedByStudentID: "student-1", Meta: map[string]any{"type": "multiple_choice", "options": options}},
+			student:    "A",
+			correct:    "A",
+			wantResult: true,
+		},
+		{
+			name:       "AI text answer also accepts label client",
+			exercise:   Exercise{GeneratedByStudentID: "student-1", Meta: map[string]any{"type": "multiple_choice", "options": options}},
+			student:    "C",
+			correct:    "4",
+			wantResult: true,
+		},
+		{
+			name:       "different option remains incorrect",
+			exercise:   Exercise{Meta: map[string]any{"type": "multiple_choice", "options": options}},
+			student:    "D",
+			correct:    "C",
+			wantResult: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result, ok := deterministicMultipleChoiceCheck(tt.exercise, tt.student, tt.correct)
+			if !ok || result.IsCorrect != tt.wantResult || result.Confidence != 1 {
+				t.Fatalf("deterministicMultipleChoiceCheck() = %#v, %t", result, ok)
+			}
+		})
+	}
+}
+
+func TestSubmitAnswerReturnsProfileCreationErrorBeforeDKTUpdate(t *testing.T) {
+	wantErr := errors.New("create profile failed")
+	repo := &fakeExerciseRepo{
+		session:          LearningSession{ID: "session-1", StudentID: "student-1"},
+		hasSession:       true,
+		createProfileErr: wantErr,
+		exercises: map[string]Exercise{
+			"generated-1": {
+				ID:                   "generated-1",
+				GeneratedByStudentID: "student-1",
+				Status:               "PUBLISHED",
+				ConceptIDs:           []string{"limit"},
+				Meta:                 map[string]any{"answer": "B", "answer_type": "text"},
+			},
+		},
+	}
+	service := newTestService(repo)
+	service.newID = sequentialIDs("attempt-1")
+
+	_, err := service.SubmitAnswer(
+		context.Background(),
+		"student-1",
+		SubmitRequest{ExerciseID: "generated-1", AnswerText: "B"},
+	)
+	if !errors.Is(err, wantErr) {
+		t.Fatalf("SubmitAnswer() error = %v, want %v", err, wantErr)
+	}
+	if len(repo.upsertedStates) != 0 || repo.profileUpdate.TotalExercises != 0 {
+		t.Fatalf("tracking continued after profile failure: states=%#v profile=%#v", repo.upsertedStates, repo.profileUpdate)
+	}
+}
+
+func TestCheckExerciseAnswerFallsBackWithoutStructuredOptions(t *testing.T) {
+	checker := &recordingAnswerChecker{result: AnswerCheckResult{IsCorrect: true, Reason: "fallback", Confidence: 0.8}}
+	service, err := NewService(&fakeExerciseRepo{}, checker)
+	if err != nil {
+		t.Fatalf("NewService() error = %v", err)
+	}
+
+	result, err := service.checkExerciseAnswer(
+		context.Background(),
+		Exercise{Meta: map[string]any{"type": "multiple_choice", "answer_type": "text"}},
+		"A",
+		"A",
+	)
+	if err != nil {
+		t.Fatalf("checkExerciseAnswer() error = %v", err)
+	}
+	if !checker.called || !result.IsCorrect {
+		t.Fatalf("checker called=%t result=%#v", checker.called, result)
+	}
+}
+
+func TestGetExerciseHidesAnotherStudentsGeneratedQuestion(t *testing.T) {
+	repo := &fakeExerciseRepo{exercises: map[string]Exercise{
+		"generated-1": {ID: "generated-1", GeneratedByStudentID: "student-2", Status: "PUBLISHED", Meta: map[string]any{}},
+	}}
+	service := newTestService(repo)
+
+	_, err := service.GetExercise(context.Background(), "student-1", "generated-1")
+	if !errors.Is(err, ErrNotFound) {
+		t.Fatalf("GetExercise() error = %v, want ErrNotFound", err)
+	}
+	if repo.teacherLookupCount != 0 {
+		t.Fatalf("generated access unexpectedly queried class teacher %d times", repo.teacherLookupCount)
 	}
 }
 
@@ -395,9 +676,35 @@ type fakeMathSolver struct {
 	err    error
 }
 
+type fakeQuestionGenerator struct {
+	question GeneratedQuestion
+	input    GenerationInput
+	called   bool
+	err      error
+}
+
+func (g *fakeQuestionGenerator) GenerateQuestion(_ context.Context, input GenerationInput) (GeneratedQuestion, error) {
+	g.called = true
+	g.input = input
+	if g.err != nil {
+		return GeneratedQuestion{}, g.err
+	}
+	return g.question, nil
+}
+
 type fakeAnswerChecker struct {
 	result AnswerCheckResult
 	err    error
+}
+
+type recordingAnswerChecker struct {
+	result AnswerCheckResult
+	called bool
+}
+
+func (c *recordingAnswerChecker) CheckAnswer(context.Context, string, string, string) (AnswerCheckResult, error) {
+	c.called = true
+	return c.result, nil
 }
 
 func (c fakeAnswerChecker) CheckAnswer(context.Context, string, string, string) (AnswerCheckResult, error) {
@@ -414,28 +721,36 @@ func (s *fakeMathSolver) CheckAnswer(_ context.Context, input AnswerCheckInput) 
 }
 
 type fakeExerciseRepo struct {
-	withTxCalled         bool
-	session              LearningSession
-	hasSession           bool
-	createdSession       LearningSession
-	teacherID            string
-	hasTeacher           bool
-	teacherLookupCount   int
-	exercises            map[string]Exercise
-	recentIDs            []string
-	candidateSet         []Exercise
-	lastCandidateFilters []CandidateFilter
-	profile              StudentProfile
-	hasProfile           bool
-	hasSubmitted         bool
-	dktStates            map[string]DKTState
-	interactions         []LearningInteraction
-	updatedCurrent       *string
-	updatedAttempted     []string
-	insertedAttempts     []AttemptRecord
-	insertedDiagnoses    []DiagnosisRecord
-	upsertedStates       []DKTState
-	profileUpdate        ProfileTrackingUpdate
+	withTxCalled                 bool
+	session                      LearningSession
+	hasSession                   bool
+	createdSession               LearningSession
+	teacherID                    string
+	hasTeacher                   bool
+	teacherLookupCount           int
+	exercises                    map[string]Exercise
+	knowledgeConcept             KnowledgeConcept
+	hasKnowledgeConcept          bool
+	createdGenerated             GeneratedQuestion
+	createdGeneratedStudentID    string
+	recentIDs                    []string
+	candidateSet                 []Exercise
+	lastCandidateFilters         []CandidateFilter
+	profile                      StudentProfile
+	hasProfile                   bool
+	createdProfileUserID         string
+	createdProfileAt             time.Time
+	createProfileErr             error
+	hasSubmitted                 bool
+	dktStates                    map[string]DKTState
+	interactions                 []LearningInteraction
+	updatedCurrent               *string
+	updatedAttempted             []string
+	updatedAfterSubmitExerciseID string
+	insertedAttempts             []AttemptRecord
+	insertedDiagnoses            []DiagnosisRecord
+	upsertedStates               []DKTState
+	profileUpdate                ProfileTrackingUpdate
 }
 
 func (r *fakeExerciseRepo) WithTx(ctx context.Context, fn func(context.Context, Repository) error) error {
@@ -469,7 +784,8 @@ func (r *fakeExerciseRepo) UpdateSessionCurrentContent(_ context.Context, _ stri
 	return nil
 }
 
-func (r *fakeExerciseRepo) UpdateSessionAfterSubmit(_ context.Context, _ string, attempted []string) error {
+func (r *fakeExerciseRepo) UpdateSessionAfterSubmit(_ context.Context, _ string, exerciseID string, attempted []string) error {
+	r.updatedAfterSubmitExerciseID = exerciseID
 	r.updatedAttempted = attempted
 	return nil
 }
@@ -477,6 +793,24 @@ func (r *fakeExerciseRepo) UpdateSessionAfterSubmit(_ context.Context, _ string,
 func (r *fakeExerciseRepo) GetExercise(_ context.Context, exerciseID string) (Exercise, bool, error) {
 	exercise, ok := r.exercises[exerciseID]
 	return exercise, ok, nil
+}
+
+func (r *fakeExerciseRepo) GetKnowledgeConcept(context.Context, string) (KnowledgeConcept, bool, error) {
+	return r.knowledgeConcept, r.hasKnowledgeConcept, nil
+}
+
+func (r *fakeExerciseRepo) CreateGeneratedExercise(_ context.Context, studentID string, generated GeneratedQuestion, _ time.Time) (Exercise, error) {
+	r.createdGeneratedStudentID = studentID
+	r.createdGenerated = generated
+	meta := map[string]any{
+		"type": generated.Type, "answer": generated.Answer, "answer_type": generated.AnswerType,
+		"options": generated.Options, "hints": generated.Hints, "solution_steps": generated.SolutionSteps,
+		"estimated_time_seconds": generated.EstimatedTimeSeconds, "knowledge_point_names": generated.KnowledgePointNames,
+	}
+	return Exercise{
+		ID: "generated-1", GeneratedByStudentID: studentID, Status: "PUBLISHED", Title: generated.Title,
+		Body: generated.Body, Difficulty: generated.Difficulty, ConceptIDs: generated.ConceptIDs, Meta: meta,
+	}, nil
 }
 
 func (r *fakeExerciseRepo) ListRecentContentIDs(context.Context, string, int) ([]string, error) {
@@ -490,6 +824,22 @@ func (r *fakeExerciseRepo) ListCandidateExercises(_ context.Context, filter Cand
 
 func (r *fakeExerciseRepo) GetProfile(context.Context, string) (StudentProfile, bool, error) {
 	return r.profile, r.hasProfile, nil
+}
+
+func (r *fakeExerciseRepo) CreateProfile(_ context.Context, userID string, now time.Time) (StudentProfile, error) {
+	r.createdProfileUserID = userID
+	r.createdProfileAt = now
+	if r.createProfileErr != nil {
+		return StudentProfile{}, r.createProfileErr
+	}
+	r.profile = StudentProfile{
+		MasteryVector:       map[string]float64{},
+		ErrorTendency:       map[string]float64{},
+		PreferredDifficulty: 0.5,
+		LearningPace:        1,
+	}
+	r.hasProfile = true
+	return r.profile, nil
 }
 
 func (r *fakeExerciseRepo) HasSubmittedAttempt(context.Context, string, string) (bool, error) {

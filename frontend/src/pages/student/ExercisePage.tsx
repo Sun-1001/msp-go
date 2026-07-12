@@ -1,85 +1,264 @@
-import React from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { ExercisePanel, useExerciseViewModel } from '@/modules/exercise';
-import { Card, CardContent, CardHeader, CardTitle } from '../../components/ui/Card';
-import { MainLayout } from '../../components/layout/MainLayout';
-import { MessageCircle, Sparkles } from 'lucide-react';
+import {
+  AIPracticeConfigurator,
+  ExercisePanel,
+  useExerciseViewModel,
+} from '@/modules/exercise';
+import { knowledgeService } from '@/modules/knowledge/services/knowledgeService';
+import type { KnowledgeNode } from '@/modules/knowledge/types/knowledge';
+import { Badge } from '@/components/ui/Badge';
+import { Button } from '@/components/ui/Button';
+import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/Card';
+import { MainLayout } from '@/components/layout/MainLayout';
+import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/Tabs';
+import {
+  Bot,
+  GraduationCap,
+  MessageCircle,
+  Sparkles,
+  Users,
+  WandSparkles,
+} from 'lucide-react';
+import { buildExerciseTutorLaunch } from './exerciseTutorLaunch';
+
+type ExerciseMode = 'class' | 'ai';
+
+const tutorCopy = {
+  class: {
+    title: '班级题辅导',
+    badge: '教师发布',
+    description: '围绕当前班级题提供分步提示、思路梳理和作答后的错因讲解。',
+    empty: '获取班级题后即可询问导师。',
+  },
+  ai: {
+    title: 'AI 练习教练',
+    badge: '自主生成',
+    description: '结合所选知识点与难度辅导当前生成题，并识别可能的题目歧义。',
+    empty: '生成自主练习题后即可询问导师。',
+  },
+} as const;
 
 export const ExercisePage: React.FC = () => {
   const navigate = useNavigate();
+  const {
+    currentQuestion: classQuestion,
+    isLoading: isClassLoading,
+    isSubmitting: isClassSubmitting,
+    submitResult: classSubmitResult,
+    error: classError,
+    errorType: classErrorType,
+    loadNextQuestion: loadNextClassQuestion,
+    submitAnswer: submitClassAnswer,
+  } = useExerciseViewModel();
+  const {
+    currentQuestion: aiQuestion,
+    isGenerating,
+    isSubmitting: isAISubmitting,
+    submitResult: aiSubmitResult,
+    error: aiError,
+    generateQuestion: requestAIQuestion,
+    submitAnswer: submitAIAnswer,
+  } = useExerciseViewModel();
+  const classLoadStarted = useRef(false);
+  const knowledgeLoaded = useRef(false);
+  const knowledgeLoadInFlight = useRef(false);
+  const knowledgeRequestId = useRef(0);
+  const [mode, setMode] = useState<ExerciseMode>('class');
+  const [knowledgeNodes, setKnowledgeNodes] = useState<KnowledgeNode[]>([]);
+  const [isLoadingKnowledge, setIsLoadingKnowledge] = useState(false);
+  const [knowledgeError, setKnowledgeError] = useState<string | null>(null);
+  const [selectedConceptId, setSelectedConceptId] = useState('');
+  const [difficulty, setDifficulty] = useState(0.5);
 
-  // 状态提升：在父组件调用 hook，以便侧边栏按钮访问题目数据
-  const exerciseVM = useExerciseViewModel();
-  const { currentQuestion } = exerciseVM;
+  useEffect(() => {
+    if (classLoadStarted.current) return;
+    classLoadStarted.current = true;
+    void loadNextClassQuestion();
+  }, [loadNextClassQuestion]);
 
-  // 呼叫 AI 导师
-  const handleCallAITutor = () => {
-    if (!currentQuestion) {
-      navigate('/session/new');
-      return;
+  useEffect(() => {
+    return () => {
+      knowledgeRequestId.current += 1;
+    };
+  }, []);
+
+  const loadKnowledgeNodes = async (force = false) => {
+    if ((!force && knowledgeLoaded.current) || knowledgeLoadInFlight.current) return;
+
+    const requestId = knowledgeRequestId.current + 1;
+    knowledgeRequestId.current = requestId;
+    knowledgeLoadInFlight.current = true;
+    setIsLoadingKnowledge(true);
+    setKnowledgeError(null);
+
+    try {
+      const graph = await knowledgeService.getKnowledgeGraph();
+      if (requestId !== knowledgeRequestId.current) return;
+      knowledgeLoaded.current = true;
+      setKnowledgeNodes(graph.nodes);
+      if (graph.nodes.length === 0) {
+        setSelectedConceptId('');
+        setKnowledgeError('暂无可用知识点，请联系管理员配置');
+        return;
+      }
+      setSelectedConceptId((current) => current || graph.nodes[0]?.id || '');
+    } catch {
+      if (requestId === knowledgeRequestId.current) {
+        setKnowledgeError('知识点加载失败，请稍后重试');
+      }
+    } finally {
+      if (requestId === knowledgeRequestId.current) {
+        knowledgeLoadInFlight.current = false;
+        setIsLoadingKnowledge(false);
+      }
     }
+  };
 
-    const knowledgePoints = currentQuestion.knowledgePoints?.length
-      ? currentQuestion.knowledgePoints.join('、')
-      : '未标注';
+  const knowledgeOptions = useMemo(
+    () => knowledgeNodes.map((node) => ({
+      value: node.id,
+      label: node.chapter ? `${node.chapter} · ${node.label}` : node.label,
+    })),
+    [knowledgeNodes],
+  );
 
-    const initialMessage = [
-      '请帮我分析这道题：',
-      '',
-      `**分组: ${currentQuestion.title || '未分类'}**`,
-      '',
-      currentQuestion.content,
-      '',
-      `难度：${Math.round(currentQuestion.difficulty * 100)}%  |  类型：${currentQuestion.type}`,
-      `知识点：${knowledgePoints}`,
-      '',
-      '请帮我理解解题思路。',
-    ].join('\n');
+  const generateQuestion = () => {
+    if (!selectedConceptId) return Promise.resolve();
+    return requestAIQuestion(selectedConceptId, difficulty);
+  };
 
-    navigate('/session/new', { state: { initialMessage } });
+  const retryKnowledgeLoad = () => {
+    knowledgeLoaded.current = false;
+    return loadKnowledgeNodes(true);
+  };
+
+  const handleModeChange = (value: string) => {
+    const nextMode: ExerciseMode = value === 'ai' ? 'ai' : 'class';
+    setMode(nextMode);
+    if (nextMode === 'ai') {
+      void loadKnowledgeNodes();
+    }
+  };
+
+  const activeQuestion = mode === 'class'
+    ? classQuestion
+    : aiQuestion;
+  const activeTutor = tutorCopy[mode];
+
+  const handleCallAITutor = () => {
+    if (!activeQuestion) return;
+    navigate('/session/new', { state: buildExerciseTutorLaunch(activeQuestion) });
   };
 
   return (
     <MainLayout>
-      <div className="container mx-auto p-6 max-w-6xl">
-        <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
-          {/* 主练习区域 */}
-          <div className="lg:col-span-8 space-y-6">
-            <div className="flex items-center justify-between mb-2">
-              <h1 className="text-3xl font-bold text-surface-900 dark:text-surface-100 tracking-tight">
+      <div className="container mx-auto max-w-6xl p-4 sm:p-6">
+        <div className="grid grid-cols-1 gap-6 lg:grid-cols-12">
+          <div className="space-y-6 lg:col-span-8">
+            <div>
+              <h1 className="text-3xl font-bold tracking-normal text-surface-900 dark:text-surface-100">
                 智能刷题
               </h1>
             </div>
 
-            <ExercisePanel {...exerciseVM} />
+            <Tabs
+              defaultValue="class"
+              value={mode}
+              onValueChange={handleModeChange}
+            >
+              <TabsList className="grid h-11 w-full grid-cols-2 sm:w-auto sm:min-w-[360px]">
+                <TabsTrigger value="class" className="gap-2">
+                  <Users className="h-4 w-4" />
+                  班级题目
+                </TabsTrigger>
+                <TabsTrigger value="ai" className="gap-2">
+                  <WandSparkles className="h-4 w-4" />
+                  AI 自主练习
+                </TabsTrigger>
+              </TabsList>
+
+              <TabsContent value="class" className="mt-6">
+                <ExercisePanel
+                  currentQuestion={classQuestion}
+                  isLoading={isClassLoading}
+                  isSubmitting={isClassSubmitting}
+                  submitResult={classSubmitResult}
+                  error={classError}
+                  errorType={classErrorType}
+                  onNextQuestion={loadNextClassQuestion}
+                  submitAnswer={submitClassAnswer}
+                />
+              </TabsContent>
+
+              <TabsContent value="ai" className="mt-6 space-y-6">
+                <AIPracticeConfigurator
+                  knowledgeOptions={knowledgeOptions}
+                  selectedConceptId={selectedConceptId}
+                  difficulty={difficulty}
+                  isLoadingKnowledge={isLoadingKnowledge}
+                  isGenerating={isGenerating}
+                  error={knowledgeError || aiError}
+                  hasQuestion={Boolean(aiQuestion)}
+                  onConceptChange={setSelectedConceptId}
+                  onDifficultyChange={setDifficulty}
+                  onGenerate={generateQuestion}
+                  onRetryKnowledge={retryKnowledgeLoad}
+                />
+                {aiQuestion ? (
+                  <ExercisePanel
+                    currentQuestion={aiQuestion}
+                    isLoading={isGenerating}
+                    isSubmitting={isAISubmitting}
+                    submitResult={aiSubmitResult}
+                    error={null}
+                    errorType={null}
+                    onNextQuestion={generateQuestion}
+                    submitAnswer={submitAIAnswer}
+                  />
+                ) : null}
+              </TabsContent>
+            </Tabs>
           </div>
 
-          {/* 侧边栏 */}
-          <div className="lg:col-span-4 space-y-6">
-            <Card className="border-primary-200 dark:border-primary-800 bg-linear-to-br from-primary-50 to-purple-50 dark:from-primary-950/50 dark:to-purple-950/50">
-              <CardHeader>
-                <CardTitle className="text-lg flex items-center gap-2">
-                  <Sparkles className="h-5 w-5 text-primary-500" />
-                  学习工具
-                </CardTitle>
+          <aside className="space-y-6 lg:col-span-4">
+            <Card className="border-surface-200 dark:border-surface-700">
+              <CardHeader className="border-b border-surface-100 dark:border-surface-800">
+                <div className="flex items-center justify-between gap-3">
+                  <CardTitle className="flex min-w-0 items-center gap-2 text-lg">
+                    {mode === 'class' ? (
+                      <GraduationCap className="h-5 w-5 shrink-0 text-primary-600 dark:text-primary-400" />
+                    ) : (
+                      <Bot className="h-5 w-5 shrink-0 text-emerald-600 dark:text-emerald-400" />
+                    )}
+                    <span className="truncate">{activeTutor.title}</span>
+                  </CardTitle>
+                  <Badge variant={mode === 'class' ? 'default' : 'success'}>
+                    {activeTutor.badge}
+                  </Badge>
+                </div>
               </CardHeader>
-              <CardContent>
-                <button
+              <CardContent className="space-y-4 p-5">
+                <p className="text-sm leading-6 text-surface-600 dark:text-surface-400">
+                  {activeTutor.description}
+                </p>
+                <Button
                   onClick={handleCallAITutor}
-                  className="w-full flex items-center justify-center gap-2 px-4 py-3 rounded-xl bg-linear-to-r from-primary-600 to-purple-600 hover:from-primary-700 hover:to-purple-700 text-white font-medium shadow-lg hover:shadow-xl transition-all duration-300 group"
+                  disabled={!activeQuestion}
+                  className="w-full gap-2"
                 >
-                  <MessageCircle className="h-5 w-5 group-hover:scale-110 transition-transform duration-300" />
-                  呼叫 AI 导师
-                  <Sparkles className="h-4 w-4 opacity-75 group-hover:opacity-100 transition-opacity duration-300" />
-                </button>
-                <p className="text-xs text-center text-surface-500 dark:text-surface-400 mt-3">
-                  {currentQuestion
-                    ? '点击向 AI 导师请教当前题目'
-                    : '点击开始与 AI 导师对话'}
+                  <MessageCircle className="h-4 w-4" />
+                  询问 AI 导师
+                  <Sparkles className="h-4 w-4 opacity-75" />
+                </Button>
+                <p className="text-center text-xs text-surface-500 dark:text-surface-400">
+                  {activeQuestion
+                    ? `当前辅导：${activeQuestion.knowledgePointNames[0] || activeQuestion.title || '练习题'}`
+                    : activeTutor.empty}
                 </p>
               </CardContent>
             </Card>
-          </div>
+          </aside>
         </div>
       </div>
     </MainLayout>
