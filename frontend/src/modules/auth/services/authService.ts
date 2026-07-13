@@ -5,11 +5,30 @@ export interface LoginCredentials {
   username: string;
   password: string;
   role: 'student' | 'teacher';
+  captchaToken: string;
 }
 
 export interface AdminLoginCredentials {
   username: string;
   password: string;
+  captchaToken: string;
+}
+
+export interface LoginCaptchaChallenge {
+  captcha_id: string;
+  background_image: string;
+  piece_image: string;
+  width: number;
+  height: number;
+  piece_width: number;
+  piece_height: number;
+  piece_y: number;
+  expires_in: number;
+}
+
+export interface LoginCaptchaVerification {
+  captcha_token: string;
+  expires_in: number;
 }
 
 /** 登录接口的原始响应（角色由服务端根据数据库返回，可能是任意角色） */
@@ -68,6 +87,7 @@ export const authService = {
     const response = await apiClient.post<LoginApiResponse>('/auth/login', {
       username: credentials.username,
       password: credentials.password,
+      captcha_token: credentials.captchaToken,
     });
 
     // 字段映射：后端返回格式 -> 前端期望格式（角色必须使用服务端返回的真实角色，不能使用表单选择）
@@ -82,7 +102,24 @@ export const authService = {
   },
 
   async adminLogin(credentials: AdminLoginCredentials): Promise<AdminAuthResponse> {
-    const response = await apiClient.post<AdminAuthResponse>('/auth/login', credentials);
+    const response = await apiClient.post<AdminAuthResponse>('/auth/login', {
+      username: credentials.username,
+      password: credentials.password,
+      captcha_token: credentials.captchaToken,
+    });
+    return response.data;
+  },
+
+  async getLoginCaptcha(): Promise<LoginCaptchaChallenge> {
+    const response = await apiClient.get<LoginCaptchaChallenge>('/auth/captcha');
+    return response.data;
+  },
+
+  async verifyLoginCaptcha(captchaId: string, position: number): Promise<LoginCaptchaVerification> {
+    const response = await apiClient.post<LoginCaptchaVerification>('/auth/captcha/verify', {
+      captcha_id: captchaId,
+      position,
+    });
     return response.data;
   },
 

@@ -99,9 +99,15 @@ apiClient.interceptors.response.use(
     }
 
     const originalRequest = error.config as CustomAxiosRequestConfig;
+    const isCaptchaEndpoint = originalRequest?.url?.includes('/auth/captcha') ?? false;
 
     // Handle 429 Too Many Requests — 自动重试（对用户透明）
     if (error.response?.status === 429 && originalRequest) {
+      if (isCaptchaEndpoint) {
+        const retryAfter = parseInt(error.response.headers['retry-after'] || '60', 10);
+        emitRateLimited({ retryAfter, url: originalRequest.url });
+        return Promise.reject(error);
+      }
       const retryCount = originalRequest._rateLimitRetryCount ?? 0;
 
       if (retryCount < RATE_LIMIT_MAX_RETRIES) {

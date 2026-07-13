@@ -37,7 +37,7 @@ func TestLoginSetsRefreshCookieAndReturnsAccessToken(t *testing.T) {
 	handler.Register(mux, "/api/v1/auth")
 
 	recorder := httptest.NewRecorder()
-	request := httptest.NewRequest(http.MethodPost, "/api/v1/auth/login", bytes.NewBufferString(`{"username":"alice","password":"Strong1!"}`))
+	request := httptest.NewRequest(http.MethodPost, "/api/v1/auth/login", bytes.NewBufferString(`{"username":"alice","password":"Strong1!","captcha_token":"proof"}`))
 	mux.ServeHTTP(recorder, request)
 
 	if recorder.Code != http.StatusOK {
@@ -72,7 +72,7 @@ func TestLoginFailureUsesFastAPICompatibleDetail(t *testing.T) {
 	handler.Register(mux, "/api/v1/auth")
 
 	recorder := httptest.NewRecorder()
-	request := httptest.NewRequest(http.MethodPost, "/api/v1/auth/login", bytes.NewBufferString(`{"username":"alice","password":"bad"}`))
+	request := httptest.NewRequest(http.MethodPost, "/api/v1/auth/login", bytes.NewBufferString(`{"username":"alice","password":"bad","captcha_token":"proof"}`))
 	mux.ServeHTTP(recorder, request)
 
 	if recorder.Code != http.StatusUnauthorized {
@@ -88,6 +88,90 @@ func TestLoginFailureUsesFastAPICompatibleDetail(t *testing.T) {
 	if got := recorder.Header().Get("WWW-Authenticate"); got != "Bearer" {
 		t.Fatalf("WWW-Authenticate = %q", got)
 	}
+}
+
+func TestLoginRequiresOneTimeCaptchaProof(t *testing.T) {
+	service := &fakeAuthService{loginResult: authapp.AuthResult{Success: true}}
+	handler := newTestHandlerWithCaptcha(t, service, &fakeCaptchaService{})
+	mux := http.NewServeMux()
+	handler.Register(mux, "/api/v1/auth")
+
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodPost, "/api/v1/auth/login", bytes.NewBufferString(`{"username":"alice","password":"Strong1!"}`))
+	mux.ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusBadRequest || service.authenticateCalls != 0 {
+		t.Fatalf("status/calls = %d/%d, body = %s", recorder.Code, service.authenticateCalls, recorder.Body.String())
+	}
+	assertDetailCode(t, recorder.Body.Bytes(), "CAPTCHA_REQUIRED")
+}
+
+func TestCaptchaChallengeAndVerificationRoutes(t *testing.T) {
+	captcha := &fakeCaptchaService{
+		challenge:    authapp.SliderCaptchaChallenge{ID: "challenge-1", Width: 320, Height: 160, ExpiresIn: 120},
+		proof:        "proof-1",
+		verified:     true,
+		consumeValid: true,
+	}
+	handler := newTestHandlerWithCaptcha(t, &fakeAuthService{}, captcha)
+	mux := http.NewServeMux()
+	handler.Register(mux, "/api/v1/auth")
+
+	challengeRecorder := httptest.NewRecorder()
+	challengeRequest := httptest.NewRequest(http.MethodGet, "/api/v1/auth/captcha", nil)
+	challengeRequest.RemoteAddr = "127.0.0.1:1234"
+	challengeRequest.Header.Set("X-Real-IP", "203.0.113.8")
+	mux.ServeHTTP(challengeRecorder, challengeRequest)
+	if challengeRecorder.Code != http.StatusOK || challengeRecorder.Header().Get("Cache-Control") != "no-store" {
+		t.Fatalf("challenge status/headers = %d/%v", challengeRecorder.Code, challengeRecorder.Header())
+	}
+	if captcha.clientKey != "203.0.113.8" {
+		t.Fatalf("captcha client key = %q", captcha.clientKey)
+	}
+
+	verifyRecorder := httptest.NewRecorder()
+	verifyRequest := httptest.NewRequest(http.MethodPost, "/api/v1/auth/captcha/verify", bytes.NewBufferString(`{"captcha_id":"challenge-1","position":93}`))
+	mux.ServeHTTP(verifyRecorder, verifyRequest)
+	if verifyRecorder.Code != http.StatusOK {
+		t.Fatalf("verify status = %d, body = %s", verifyRecorder.Code, verifyRecorder.Body.String())
+	}
+	var response verifyCaptchaResponse
+	if err := json.Unmarshal(verifyRecorder.Body.Bytes(), &response); err != nil || response.CaptchaToken != "proof-1" || response.ExpiresIn != 90 {
+		t.Fatalf("verify response = %#v, err = %v", response, err)
+	}
+}
+
+func TestCaptchaRoutesHandleInvalidAndRateLimitedRequests(t *testing.T) {
+	t.Run("missing position", func(t *testing.T) {
+		handler := newTestHandlerWithCaptcha(t, &fakeAuthService{}, &fakeCaptchaService{})
+		recorder := httptest.NewRecorder()
+		request := httptest.NewRequest(http.MethodPost, "/api/v1/auth/captcha/verify", bytes.NewBufferString(`{"captcha_id":"challenge-1"}`))
+		handler.verifyCaptcha(recorder, request)
+		if recorder.Code != http.StatusUnprocessableEntity {
+			t.Fatalf("status = %d, body = %s", recorder.Code, recorder.Body.String())
+		}
+	})
+
+	t.Run("wrong position", func(t *testing.T) {
+		handler := newTestHandlerWithCaptcha(t, &fakeAuthService{}, &fakeCaptchaService{})
+		recorder := httptest.NewRecorder()
+		request := httptest.NewRequest(http.MethodPost, "/api/v1/auth/captcha/verify", bytes.NewBufferString(`{"captcha_id":"challenge-1","position":1}`))
+		handler.verifyCaptcha(recorder, request)
+		if recorder.Code != http.StatusBadRequest {
+			t.Fatalf("status = %d, body = %s", recorder.Code, recorder.Body.String())
+		}
+		assertDetailCode(t, recorder.Body.Bytes(), "CAPTCHA_INVALID")
+	})
+
+	t.Run("rate limited", func(t *testing.T) {
+		handler := newTestHandlerWithCaptcha(t, &fakeAuthService{}, &fakeCaptchaService{err: authapp.ErrCaptchaRateLimited})
+		recorder := httptest.NewRecorder()
+		request := httptest.NewRequest(http.MethodGet, "/api/v1/auth/captcha", nil)
+		handler.captchaChallenge(recorder, request)
+		if recorder.Code != http.StatusTooManyRequests || recorder.Header().Get("Retry-After") != "60" {
+			t.Fatalf("status/Retry-After = %d/%q", recorder.Code, recorder.Header().Get("Retry-After"))
+		}
+	})
 }
 
 func TestSensitiveJSONRoutesRejectTrailingJSON(t *testing.T) {
@@ -287,8 +371,11 @@ func TestMeRequiresBearerToken(t *testing.T) {
 }
 
 func TestNewHandlerRejectsNilService(t *testing.T) {
-	if _, err := NewHandler(config.Config{}, nil, nil); err == nil {
+	if _, err := NewHandler(config.Config{}, nil, nil, &fakeCaptchaService{}); err == nil {
 		t.Fatal("NewHandler(nil service) error = nil, want error")
+	}
+	if _, err := NewHandler(config.Config{}, nil, &fakeAuthService{}, nil); err == nil {
+		t.Fatal("NewHandler(nil captcha) error = nil, want error")
 	}
 }
 
@@ -307,7 +394,7 @@ func TestInternalErrorsRedactLogs(t *testing.T) {
 			name:       "login",
 			method:     http.MethodPost,
 			path:       "/api/v1/auth/login",
-			body:       `{"username":"alice","password":"Strong1!"}`,
+			body:       `{"username":"alice","password":"Strong1!","captcha_token":"proof"}`,
 			wantStatus: http.StatusInternalServerError,
 		},
 		{
@@ -385,7 +472,7 @@ func TestInternalErrorsRedactLogs(t *testing.T) {
 				Environment:           "development",
 				APIV1Prefix:           "/api/v1",
 				JWTRefreshTokenExpire: 7 * 24 * time.Hour,
-			}, slog.New(slog.NewTextHandler(&logBuffer, nil)), &service)
+			}, slog.New(slog.NewTextHandler(&logBuffer, nil)), &service, &fakeCaptchaService{consumeValid: true})
 			if err != nil {
 				t.Fatalf("NewHandler() error = %v", err)
 			}
@@ -418,11 +505,16 @@ func TestInternalErrorsRedactLogs(t *testing.T) {
 
 func newTestHandler(t *testing.T, service Service) *Handler {
 	t.Helper()
+	return newTestHandlerWithCaptcha(t, service, &fakeCaptchaService{consumeValid: true, verified: true, proof: "proof"})
+}
+
+func newTestHandlerWithCaptcha(t *testing.T, service Service, captcha CaptchaService) *Handler {
+	t.Helper()
 	handler, err := NewHandler(config.Config{
 		Environment:           "development",
 		APIV1Prefix:           "/api/v1",
 		JWTRefreshTokenExpire: 7 * 24 * time.Hour,
-	}, slog.New(slog.NewTextHandler(os.Stdout, nil)), service)
+	}, slog.New(slog.NewTextHandler(os.Stdout, nil)), service, captcha)
 	if err != nil {
 		t.Fatalf("NewHandler() error = %v", err)
 	}
@@ -439,13 +531,47 @@ type fakeAuthService struct {
 	registrationSettings authapp.RegistrationSettings
 	revokedToken         string
 	err                  error
+	authenticateCalls    int
 }
 
 func (s *fakeAuthService) Authenticate(context.Context, string, string) (authapp.AuthResult, error) {
+	s.authenticateCalls++
 	if s.err != nil {
 		return authapp.AuthResult{}, s.err
 	}
 	return s.loginResult, nil
+}
+
+type fakeCaptchaService struct {
+	challenge    authapp.SliderCaptchaChallenge
+	proof        string
+	verified     bool
+	consumeValid bool
+	clientKey    string
+	err          error
+}
+
+func (s *fakeCaptchaService) NewChallenge(_ context.Context, clientKey string) (authapp.SliderCaptchaChallenge, error) {
+	s.clientKey = clientKey
+	return s.challenge, s.err
+}
+
+func (s *fakeCaptchaService) Verify(_ context.Context, _ string, _ int, clientKey string) (string, bool, error) {
+	s.clientKey = clientKey
+	return s.proof, s.verified, s.err
+}
+
+func (s *fakeCaptchaService) ConsumeProof(_ context.Context, _ string, clientKey string) (bool, error) {
+	s.clientKey = clientKey
+	return s.consumeValid, s.err
+}
+
+func (s *fakeCaptchaService) ProofTTL() time.Duration {
+	return 90 * time.Second
+}
+
+func (s *fakeCaptchaService) IssueWindow() time.Duration {
+	return time.Minute
 }
 
 func (s *fakeAuthService) Register(context.Context, string, string, string, string) (authapp.AuthResult, error) {
@@ -537,6 +663,17 @@ func assertNoAuthCredentialLeak(t *testing.T, value string) {
 		if strings.Contains(value, leaked) {
 			t.Fatalf("value leaked %q in %q", leaked, value)
 		}
+	}
+}
+
+func assertDetailCode(t *testing.T, payload []byte, want string) {
+	t.Helper()
+	var body map[string]string
+	if err := json.Unmarshal(payload, &body); err != nil {
+		t.Fatalf("invalid JSON: %v", err)
+	}
+	if body["code"] != want {
+		t.Fatalf("body code = %q, want %q", body["code"], want)
 	}
 }
 

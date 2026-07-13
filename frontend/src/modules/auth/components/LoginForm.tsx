@@ -21,6 +21,7 @@ import {
 } from '@/libs/form';
 import { ForgotPasswordModal } from './ForgotPasswordModal';
 import { AnimatedLoginCharacters } from './AnimatedLoginCharacters';
+import { SliderCaptcha } from './SliderCaptcha';
 
 const authLogger = logger.createContextLogger('Auth');
 
@@ -63,6 +64,8 @@ export const LoginForm: React.FC<LoginFormProps> = ({ onSuccess, onSwitchToRegis
   const shouldReduceMotion = useReducedMotion();
   const [showForgotPassword, setShowForgotPassword] = useState(false);
   const [showPassword, setShowPassword] = useState(false);
+  const [captchaToken, setCaptchaToken] = useState<string | null>(null);
+  const [captchaResetKey, setCaptchaResetKey] = useState(0);
 
   const {
     register,
@@ -84,11 +87,19 @@ export const LoginForm: React.FC<LoginFormProps> = ({ onSuccess, onSwitchToRegis
   const role = useWatch({ control, name: 'role' });
 
   const onSubmit = async (data: LoginFormData) => {
+    if (!captchaToken) {
+      setError('root', {
+        type: 'manual',
+        message: '请先完成安全验证',
+      });
+      return;
+    }
     try {
       const response = await authService.login({
         username: data.username,
         password: data.password,
         role: data.role,
+        captchaToken,
       });
 
       // 入口与身份一致：管理员不能在此入口登录，老师/学生不能交叉登录
@@ -99,6 +110,7 @@ export const LoginForm: React.FC<LoginFormProps> = ({ onSuccess, onSwitchToRegis
           type: 'manual',
           message: '管理员请使用管理员专用入口登录',
         });
+        setCaptchaResetKey((value) => value + 1);
         return;
       }
       if (selectedRole === 'student' && actualRole === 'teacher') {
@@ -106,6 +118,7 @@ export const LoginForm: React.FC<LoginFormProps> = ({ onSuccess, onSwitchToRegis
           type: 'manual',
           message: '您已注册为教师，请选择「教师」身份或使用教师入口登录',
         });
+        setCaptchaResetKey((value) => value + 1);
         return;
       }
       if (selectedRole === 'teacher' && actualRole === 'student') {
@@ -113,6 +126,7 @@ export const LoginForm: React.FC<LoginFormProps> = ({ onSuccess, onSwitchToRegis
           type: 'manual',
           message: '您已注册为学生，请选择「学生」身份或使用学生入口登录',
         });
+        setCaptchaResetKey((value) => value + 1);
         return;
       }
 
@@ -137,6 +151,8 @@ export const LoginForm: React.FC<LoginFormProps> = ({ onSuccess, onSwitchToRegis
         navigate('/course/overview');
       }
     } catch (err) {
+      setCaptchaToken(null);
+      setCaptchaResetKey((value) => value + 1);
       authLogger.security('Login failed', {
         username: data.username,
         role: data.role,
@@ -226,6 +242,12 @@ export const LoginForm: React.FC<LoginFormProps> = ({ onSuccess, onSwitchToRegis
                 忘记密码？
               </button>
             </div>
+
+            <SliderCaptcha
+              onTokenChange={setCaptchaToken}
+              resetKey={captchaResetKey}
+              disabled={isSubmitting}
+            />
 
             <FormRootError message={errors.root?.message} />
 

@@ -10,6 +10,7 @@ import { Shield, Lock, User, AlertCircle } from 'lucide-react';
 import { logger } from '../../libs/utils/logger';
 import { authService } from '@/modules/auth/services/authService';
 import { getApiErrorMessage } from '../../libs/http/apiClient';
+import { SliderCaptcha } from '@/modules/auth/components/SliderCaptcha';
 
 const adminLogger = logger.createContextLogger('AdminLogin');
 
@@ -20,18 +21,25 @@ export const AdminLoginPage: React.FC = () => {
   const [password, setPassword] = useState('');
   const [error, setError] = useState('');
   const [isLoading, setIsLoading] = useState(false);
+  const [captchaToken, setCaptchaToken] = useState<string | null>(null);
+  const [captchaResetKey, setCaptchaResetKey] = useState(0);
 
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
     setError('');
+    if (!captchaToken) {
+      setError('请先完成安全验证');
+      return;
+    }
     setIsLoading(true);
 
     try {
-      const response = await authService.adminLogin({ username, password });
+      const response = await authService.adminLogin({ username, password, captchaToken });
 
       // 校验服务端返回的真实角色是否为管理员
       if (response.user.role !== 'admin') {
         setError('该账户不是管理员，请使用对应身份的登录入口');
+        setCaptchaResetKey((value) => value + 1);
         return;
       }
 
@@ -52,6 +60,8 @@ export const AdminLoginPage: React.FC = () => {
     } catch (err) {
       const errorMessage = getApiErrorMessage(err, '登录失败，请稍后重试');
       setError(errorMessage);
+      setCaptchaToken(null);
+      setCaptchaResetKey((value) => value + 1);
       adminLogger.security('Admin login failed', { username, error: errorMessage });
     } finally {
       setIsLoading(false);
@@ -130,6 +140,12 @@ export const AdminLoginPage: React.FC = () => {
                   />
                 </div>
               </div>
+
+              <SliderCaptcha
+                onTokenChange={setCaptchaToken}
+                resetKey={captchaResetKey}
+                disabled={isLoading}
+              />
 
               {/* 安全提示 */}
               <div className="flex items-start gap-2 p-3 rounded-lg bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-800">
