@@ -18,7 +18,6 @@ import (
 // AdminAIConfigRepository persists LLM provider, model, and agent configuration.
 type AdminAIConfigRepository struct {
 	Repository
-	beginner pgxTxBeginner
 }
 
 // NewAdminAIConfigRepository creates a PostgreSQL-backed admin AI config repository.
@@ -27,11 +26,7 @@ func NewAdminAIConfigRepository(db Querier) (AdminAIConfigRepository, error) {
 	if err != nil {
 		return AdminAIConfigRepository{}, err
 	}
-	repo := AdminAIConfigRepository{Repository: base}
-	if beginner, ok := db.(pgxTxBeginner); ok {
-		repo.beginner = beginner
-	}
-	return repo, nil
+	return AdminAIConfigRepository{Repository: base}, nil
 }
 
 // ListProviders returns LLM providers without API keys.
@@ -649,35 +644,9 @@ func (r AdminAIConfigRepository) listProviderModelsForReplace(ctx context.Contex
 }
 
 func (r AdminAIConfigRepository) withTx(ctx context.Context, fn func(AdminAIConfigRepository) error) error {
-	if fn == nil {
-		return errors.New("admin ai config transaction function is nil")
-	}
-	if r.beginner == nil {
-		return fn(r)
-	}
-	tx, err := r.beginner.BeginTx(ctx, pgx.TxOptions{})
-	if err != nil {
-		return fmt.Errorf("begin admin ai config transaction: %w", err)
-	}
-	base, err := NewRepository(tx)
-	if err != nil {
-		_ = tx.Rollback(ctx)
-		return err
-	}
-	txRepo := AdminAIConfigRepository{Repository: base}
-	if err := fn(txRepo); err != nil {
-		if rollbackErr := tx.Rollback(ctx); rollbackErr != nil && !errors.Is(rollbackErr, pgx.ErrTxClosed) {
-			return errors.Join(err, fmt.Errorf("rollback admin ai config transaction: %w", rollbackErr))
-		}
-		return err
-	}
-	if err := tx.Commit(ctx); err != nil {
-		if rollbackErr := tx.Rollback(ctx); rollbackErr != nil && !errors.Is(rollbackErr, pgx.ErrTxClosed) {
-			return errors.Join(fmt.Errorf("commit admin ai config transaction: %w", err), fmt.Errorf("rollback admin ai config transaction: %w", rollbackErr))
-		}
-		return fmt.Errorf("commit admin ai config transaction: %w", err)
-	}
-	return nil
+	return withRepositoryTx(ctx, "admin ai config", r.Repository, func(base Repository) AdminAIConfigRepository {
+		return AdminAIConfigRepository{Repository: base}
+	}, fn)
 }
 
 const llmModelSelectColumns = `

@@ -175,19 +175,7 @@ func (h *Handler) reviewNext(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) requirePrincipal(w http.ResponseWriter, r *http.Request) (authapp.Principal, bool) {
-	token, ok := httpauth.BearerToken(r)
-	if !ok {
-		w.Header().Set("WWW-Authenticate", "Bearer")
-		writeMistakeError(w, http.StatusUnauthorized, "UNAUTHORIZED", "未认证，请先登录")
-		return authapp.Principal{}, false
-	}
-	principal, ok := h.auth.DecodeAccessToken(token)
-	if !ok {
-		w.Header().Set("WWW-Authenticate", "Bearer")
-		writeMistakeError(w, http.StatusUnauthorized, "UNAUTHORIZED", "未认证，请先登录")
-		return authapp.Principal{}, false
-	}
-	return principal, true
+	return httpauth.RequireBearerAccess(w, r, h.auth.DecodeAccessToken, nil, "", writeMistakeError)
 }
 
 func (h *Handler) logMistakeError(message string, err error) {

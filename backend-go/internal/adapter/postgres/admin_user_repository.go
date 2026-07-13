@@ -2,12 +2,10 @@ package postgres
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"strings"
 	"time"
 
-	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
 
 	adminuserapp "mathstudy/backend-go/internal/application/adminuser"
@@ -190,35 +188,9 @@ func (r UserRepository) ExportUsers(ctx context.Context, filter adminuserapp.Lis
 }
 
 func (r UserRepository) withTx(ctx context.Context, fn func(UserRepository) error) error {
-	if fn == nil {
-		return errors.New("user transaction function is nil")
-	}
-	if r.beginner == nil {
-		return fn(r)
-	}
-	tx, err := r.beginner.BeginTx(ctx, pgx.TxOptions{})
-	if err != nil {
-		return fmt.Errorf("begin user transaction: %w", err)
-	}
-	base, err := NewRepository(tx)
-	if err != nil {
-		_ = tx.Rollback(ctx)
-		return err
-	}
-	txRepo := UserRepository{Repository: base}
-	if err := fn(txRepo); err != nil {
-		if rollbackErr := tx.Rollback(ctx); rollbackErr != nil && !errors.Is(rollbackErr, pgx.ErrTxClosed) {
-			return errors.Join(err, fmt.Errorf("rollback user transaction: %w", rollbackErr))
-		}
-		return err
-	}
-	if err := tx.Commit(ctx); err != nil {
-		if rollbackErr := tx.Rollback(ctx); rollbackErr != nil && !errors.Is(rollbackErr, pgx.ErrTxClosed) {
-			return errors.Join(fmt.Errorf("commit user transaction: %w", err), fmt.Errorf("rollback user transaction: %w", rollbackErr))
-		}
-		return fmt.Errorf("commit user transaction: %w", err)
-	}
-	return nil
+	return withRepositoryTx(ctx, "user", r.Repository, func(base Repository) UserRepository {
+		return UserRepository{Repository: base}
+	}, fn)
 }
 
 func adminUserWhereClause(filter adminuserapp.ListFilter, excludeAdmins bool) (string, []any) {

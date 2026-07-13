@@ -437,19 +437,7 @@ func (h *Handler) forgotPasswordStatus(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) requirePrincipal(w http.ResponseWriter, r *http.Request) (authapp.Principal, bool) {
-	token, ok := httpauth.BearerToken(r)
-	if !ok {
-		w.Header().Set("WWW-Authenticate", "Bearer")
-		writeAuthError(w, http.StatusUnauthorized, "UNAUTHORIZED", "未认证，请先登录")
-		return authapp.Principal{}, false
-	}
-	principal, ok := h.service.DecodeAccessToken(token)
-	if !ok {
-		w.Header().Set("WWW-Authenticate", "Bearer")
-		writeAuthError(w, http.StatusUnauthorized, "UNAUTHORIZED", "未认证，请先登录")
-		return authapp.Principal{}, false
-	}
-	return principal, true
+	return httpauth.RequireBearerAccess(w, r, h.service.DecodeAccessToken, nil, "", writeAuthError)
 }
 
 func (h *Handler) setAuthCookies(w http.ResponseWriter, refreshToken string) bool {

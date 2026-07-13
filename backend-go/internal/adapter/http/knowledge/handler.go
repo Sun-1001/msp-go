@@ -345,23 +345,10 @@ func (h *Handler) deleteRelation(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) requireAdmin(w http.ResponseWriter, r *http.Request) (authapp.Principal, bool) {
-	token, ok := httpauth.BearerToken(r)
-	if !ok {
-		w.Header().Set("WWW-Authenticate", "Bearer")
-		writeKnowledgeError(w, http.StatusUnauthorized, "UNAUTHORIZED", "未认证，请先登录")
-		return authapp.Principal{}, false
-	}
-	principal, ok := h.auth.DecodeAccessToken(token)
-	if !ok {
-		w.Header().Set("WWW-Authenticate", "Bearer")
-		writeKnowledgeError(w, http.StatusUnauthorized, "UNAUTHORIZED", "未认证，请先登录")
-		return authapp.Principal{}, false
-	}
-	if !authapp.IsAdmin(principal) {
-		writeKnowledgeError(w, http.StatusForbidden, "FORBIDDEN", "权限不足，需要管理员权限")
-		return authapp.Principal{}, false
-	}
-	return principal, true
+	return httpauth.RequireBearerAccess(
+		w, r, h.auth.DecodeAccessToken, authapp.IsAdmin,
+		"权限不足，需要管理员权限", writeKnowledgeError,
+	)
 }
 
 func (h *Handler) logKnowledgeError(message string, err error) {

@@ -13,14 +13,9 @@ import (
 	exerciseapp "mathstudy/backend-go/internal/application/exercise"
 )
 
-type pgxTxBeginner interface {
-	BeginTx(context.Context, pgx.TxOptions) (pgx.Tx, error)
-}
-
 // ExerciseRepository persists adaptive exercise flow data in PostgreSQL.
 type ExerciseRepository struct {
 	Repository
-	beginner pgxTxBeginner
 }
 
 // NewExerciseRepository creates a PostgreSQL-backed exercise repository.
@@ -29,11 +24,7 @@ func NewExerciseRepository(db Querier) (ExerciseRepository, error) {
 	if err != nil {
 		return ExerciseRepository{}, err
 	}
-	repo := ExerciseRepository{Repository: base}
-	if beginner, ok := db.(pgxTxBeginner); ok {
-		repo.beginner = beginner
-	}
-	return repo, nil
+	return ExerciseRepository{Repository: base}, nil
 }
 
 // WithTx runs fn in one database transaction when the repository is pool-backed.
@@ -41,32 +32,11 @@ func (r ExerciseRepository) WithTx(ctx context.Context, fn func(context.Context,
 	if fn == nil {
 		return errors.New("exercise transaction function is nil")
 	}
-	if r.beginner == nil {
-		return fn(ctx, r)
-	}
-	tx, err := r.beginner.BeginTx(ctx, pgx.TxOptions{})
-	if err != nil {
-		return fmt.Errorf("begin exercise transaction: %w", err)
-	}
-	base, err := NewRepository(tx)
-	if err != nil {
-		_ = tx.Rollback(ctx)
-		return err
-	}
-	txRepo := ExerciseRepository{Repository: base}
-	if err := fn(ctx, txRepo); err != nil {
-		if rollbackErr := tx.Rollback(ctx); rollbackErr != nil && !errors.Is(rollbackErr, pgx.ErrTxClosed) {
-			return errors.Join(err, fmt.Errorf("rollback exercise transaction: %w", rollbackErr))
-		}
-		return err
-	}
-	if err := tx.Commit(ctx); err != nil {
-		if rollbackErr := tx.Rollback(ctx); rollbackErr != nil && !errors.Is(rollbackErr, pgx.ErrTxClosed) {
-			return errors.Join(fmt.Errorf("commit exercise transaction: %w", err), fmt.Errorf("rollback exercise transaction: %w", rollbackErr))
-		}
-		return fmt.Errorf("commit exercise transaction: %w", err)
-	}
-	return nil
+	return withRepositoryTx(ctx, "exercise", r.Repository, func(base Repository) ExerciseRepository {
+		return ExerciseRepository{Repository: base}
+	}, func(txRepo ExerciseRepository) error {
+		return fn(ctx, txRepo)
+	})
 }
 
 // GetTeacherIDForStudent returns the teacher for the student's current class.

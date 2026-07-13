@@ -3,7 +3,6 @@ package postgres
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -20,7 +19,6 @@ import (
 // ResourceRepository persists resource center data in PostgreSQL.
 type ResourceRepository struct {
 	Repository
-	beginner pgxTxBeginner
 }
 
 // NewResourceRepository creates a PostgreSQL-backed resource repository.
@@ -29,11 +27,7 @@ func NewResourceRepository(db Querier) (ResourceRepository, error) {
 	if err != nil {
 		return ResourceRepository{}, err
 	}
-	repo := ResourceRepository{Repository: base}
-	if beginner, ok := db.(pgxTxBeginner); ok {
-		repo.beginner = beginner
-	}
-	return repo, nil
+	return ResourceRepository{Repository: base}, nil
 }
 
 // ListResources returns published video/document resources and total count.
@@ -375,35 +369,9 @@ func (r ResourceRepository) GetStats(ctx context.Context, userID string) (resour
 }
 
 func (r ResourceRepository) withTx(ctx context.Context, fn func(ResourceRepository) error) error {
-	if fn == nil {
-		return errors.New("resource transaction function is nil")
-	}
-	if r.beginner == nil {
-		return fn(r)
-	}
-	tx, err := r.beginner.BeginTx(ctx, pgx.TxOptions{})
-	if err != nil {
-		return fmt.Errorf("begin resource transaction: %w", err)
-	}
-	base, err := NewRepository(tx)
-	if err != nil {
-		_ = tx.Rollback(ctx)
-		return err
-	}
-	txRepo := ResourceRepository{Repository: base}
-	if err := fn(txRepo); err != nil {
-		if rollbackErr := tx.Rollback(ctx); rollbackErr != nil && !errors.Is(rollbackErr, pgx.ErrTxClosed) {
-			return errors.Join(err, fmt.Errorf("rollback resource transaction: %w", rollbackErr))
-		}
-		return err
-	}
-	if err := tx.Commit(ctx); err != nil {
-		if rollbackErr := tx.Rollback(ctx); rollbackErr != nil && !errors.Is(rollbackErr, pgx.ErrTxClosed) {
-			return errors.Join(fmt.Errorf("commit resource transaction: %w", err), fmt.Errorf("rollback resource transaction: %w", rollbackErr))
-		}
-		return fmt.Errorf("commit resource transaction: %w", err)
-	}
-	return nil
+	return withRepositoryTx(ctx, "resource", r.Repository, func(base Repository) ResourceRepository {
+		return ResourceRepository{Repository: base}
+	}, fn)
 }
 
 func (r ResourceRepository) insertResource(ctx context.Context, ownerID string, input resourceapp.ResourceInput, now time.Time) (string, error) {

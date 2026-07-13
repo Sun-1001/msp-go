@@ -3,7 +3,6 @@ package postgres
 import (
 	"context"
 	"errors"
-	"fmt"
 	"strings"
 	"time"
 
@@ -18,7 +17,6 @@ import (
 // ClassRepository persists class management data in PostgreSQL.
 type ClassRepository struct {
 	Repository
-	beginner pgxTxBeginner
 }
 
 // NewClassRepository creates a PostgreSQL-backed class repository.
@@ -27,11 +25,7 @@ func NewClassRepository(db Querier) (ClassRepository, error) {
 	if err != nil {
 		return ClassRepository{}, err
 	}
-	repo := ClassRepository{Repository: base}
-	if beginner, ok := db.(pgxTxBeginner); ok {
-		repo.beginner = beginner
-	}
-	return repo, nil
+	return ClassRepository{Repository: base}, nil
 }
 
 // GetUser returns one user by ID for class role checks and response decoration.
@@ -344,35 +338,9 @@ func (r ClassRepository) listClassStudents(ctx context.Context, classID string) 
 }
 
 func (r ClassRepository) withTx(ctx context.Context, fn func(ClassRepository) error) error {
-	if fn == nil {
-		return errors.New("classroom transaction function is nil")
-	}
-	if r.beginner == nil {
-		return fn(r)
-	}
-	tx, err := r.beginner.BeginTx(ctx, pgx.TxOptions{})
-	if err != nil {
-		return fmt.Errorf("begin classroom transaction: %w", err)
-	}
-	base, err := NewRepository(tx)
-	if err != nil {
-		_ = tx.Rollback(ctx)
-		return err
-	}
-	txRepo := ClassRepository{Repository: base}
-	if err := fn(txRepo); err != nil {
-		if rollbackErr := tx.Rollback(ctx); rollbackErr != nil && !errors.Is(rollbackErr, pgx.ErrTxClosed) {
-			return errors.Join(err, fmt.Errorf("rollback classroom transaction: %w", rollbackErr))
-		}
-		return err
-	}
-	if err := tx.Commit(ctx); err != nil {
-		if rollbackErr := tx.Rollback(ctx); rollbackErr != nil && !errors.Is(rollbackErr, pgx.ErrTxClosed) {
-			return errors.Join(fmt.Errorf("commit classroom transaction: %w", err), fmt.Errorf("rollback classroom transaction: %w", rollbackErr))
-		}
-		return fmt.Errorf("commit classroom transaction: %w", err)
-	}
-	return nil
+	return withRepositoryTx(ctx, "classroom", r.Repository, func(base Repository) ClassRepository {
+		return ClassRepository{Repository: base}
+	}, fn)
 }
 
 func scanOptionalClassUser(row pgx.Row) (classroomapp.UserRef, bool, error) {

@@ -29,7 +29,6 @@ const userColumns = `
 // UserRepository persists users, auth settings, and public password reset requests.
 type UserRepository struct {
 	Repository
-	beginner pgxTxBeginner
 }
 
 // NewUserRepository creates a PostgreSQL-backed user repository.
@@ -38,11 +37,7 @@ func NewUserRepository(db Querier) (UserRepository, error) {
 	if err != nil {
 		return UserRepository{}, err
 	}
-	repo := UserRepository{Repository: base}
-	if beginner, ok := db.(pgxTxBeginner); ok {
-		repo.beginner = beginner
-	}
-	return repo, nil
+	return UserRepository{Repository: base}, nil
 }
 
 // GetByUsername returns a user by username.

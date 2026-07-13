@@ -254,43 +254,21 @@ func (h *Handler) myClass(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) requirePrincipal(w http.ResponseWriter, r *http.Request) (authapp.Principal, bool) {
-	token, ok := httpauth.BearerToken(r)
-	if !ok {
-		w.Header().Set("WWW-Authenticate", "Bearer")
-		writeClassError(w, http.StatusUnauthorized, "UNAUTHORIZED", "未认证，请先登录")
-		return authapp.Principal{}, false
-	}
-	principal, ok := h.auth.DecodeAccessToken(token)
-	if !ok {
-		w.Header().Set("WWW-Authenticate", "Bearer")
-		writeClassError(w, http.StatusUnauthorized, "UNAUTHORIZED", "未认证，请先登录")
-		return authapp.Principal{}, false
-	}
-	return principal, true
+	return httpauth.RequireBearerAccess(w, r, h.auth.DecodeAccessToken, nil, "", writeClassError)
 }
 
 func (h *Handler) requireTeacher(w http.ResponseWriter, r *http.Request) (authapp.Principal, bool) {
-	principal, ok := h.requirePrincipal(w, r)
-	if !ok {
-		return authapp.Principal{}, false
-	}
-	if !authapp.IsTeacherOrAdmin(principal) {
-		writeClassError(w, http.StatusForbidden, "FORBIDDEN", "权限不足，需要教师权限")
-		return authapp.Principal{}, false
-	}
-	return principal, true
+	return httpauth.RequireBearerAccess(
+		w, r, h.auth.DecodeAccessToken, authapp.IsTeacherOrAdmin,
+		"权限不足，需要教师权限", writeClassError,
+	)
 }
 
 func (h *Handler) requireStudent(w http.ResponseWriter, r *http.Request) (authapp.Principal, bool) {
-	principal, ok := h.requirePrincipal(w, r)
-	if !ok {
-		return authapp.Principal{}, false
-	}
-	if !authapp.IsStudent(principal) {
-		writeClassError(w, http.StatusForbidden, "FORBIDDEN", "权限不足，需要学生权限")
-		return authapp.Principal{}, false
-	}
-	return principal, true
+	return httpauth.RequireBearerAccess(
+		w, r, h.auth.DecodeAccessToken, authapp.IsStudent,
+		"权限不足，需要学生权限", writeClassError,
+	)
 }
 
 func (h *Handler) logClassroomError(message string, err error) {

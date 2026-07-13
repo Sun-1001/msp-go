@@ -3,7 +3,6 @@ package postgres
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -42,7 +41,6 @@ const knowledgeRelationColumns = `
 // KnowledgeRepository persists admin knowledge graph data in PostgreSQL.
 type KnowledgeRepository struct {
 	Repository
-	beginner pgxTxBeginner
 }
 
 // NewKnowledgeRepository creates a PostgreSQL-backed knowledge repository.
@@ -51,11 +49,7 @@ func NewKnowledgeRepository(db Querier) (KnowledgeRepository, error) {
 	if err != nil {
 		return KnowledgeRepository{}, err
 	}
-	repo := KnowledgeRepository{Repository: base}
-	if beginner, ok := db.(pgxTxBeginner); ok {
-		repo.beginner = beginner
-	}
-	return repo, nil
+	return KnowledgeRepository{Repository: base}, nil
 }
 
 // Stats returns aggregate knowledge graph counters.
@@ -469,35 +463,9 @@ func (r KnowledgeRepository) getRelationByID(ctx context.Context, relationID str
 }
 
 func (r KnowledgeRepository) withTx(ctx context.Context, fn func(KnowledgeRepository) error) error {
-	if fn == nil {
-		return errors.New("knowledge transaction function is nil")
-	}
-	if r.beginner == nil {
-		return fn(r)
-	}
-	tx, err := r.beginner.BeginTx(ctx, pgx.TxOptions{})
-	if err != nil {
-		return fmt.Errorf("begin knowledge transaction: %w", err)
-	}
-	base, err := NewRepository(tx)
-	if err != nil {
-		_ = tx.Rollback(ctx)
-		return err
-	}
-	txRepo := KnowledgeRepository{Repository: base}
-	if err := fn(txRepo); err != nil {
-		if rollbackErr := tx.Rollback(ctx); rollbackErr != nil && !errors.Is(rollbackErr, pgx.ErrTxClosed) {
-			return errors.Join(err, fmt.Errorf("rollback knowledge transaction: %w", rollbackErr))
-		}
-		return err
-	}
-	if err := tx.Commit(ctx); err != nil {
-		if rollbackErr := tx.Rollback(ctx); rollbackErr != nil && !errors.Is(rollbackErr, pgx.ErrTxClosed) {
-			return errors.Join(fmt.Errorf("commit knowledge transaction: %w", err), fmt.Errorf("rollback knowledge transaction: %w", rollbackErr))
-		}
-		return fmt.Errorf("commit knowledge transaction: %w", err)
-	}
-	return nil
+	return withRepositoryTx(ctx, "knowledge", r.Repository, func(base Repository) KnowledgeRepository {
+		return KnowledgeRepository{Repository: base}
+	}, fn)
 }
 
 func knowledgeNodeWhere(filter knowledgeapp.NodeFilter) (string, []any) {

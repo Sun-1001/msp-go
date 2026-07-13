@@ -211,31 +211,14 @@ func (h *Handler) solution(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) requirePrincipal(w http.ResponseWriter, r *http.Request) (authapp.Principal, bool) {
-	token, ok := httpauth.BearerToken(r)
-	if !ok {
-		w.Header().Set("WWW-Authenticate", "Bearer")
-		writeExerciseError(w, http.StatusUnauthorized, "UNAUTHORIZED", "未认证，请先登录")
-		return authapp.Principal{}, false
-	}
-	principal, ok := h.auth.DecodeAccessToken(token)
-	if !ok {
-		w.Header().Set("WWW-Authenticate", "Bearer")
-		writeExerciseError(w, http.StatusUnauthorized, "UNAUTHORIZED", "未认证，请先登录")
-		return authapp.Principal{}, false
-	}
-	return principal, true
+	return httpauth.RequireBearerAccess(w, r, h.auth.DecodeAccessToken, nil, "", writeExerciseError)
 }
 
 func (h *Handler) requireStudent(w http.ResponseWriter, r *http.Request) (authapp.Principal, bool) {
-	principal, ok := h.requirePrincipal(w, r)
-	if !ok {
-		return authapp.Principal{}, false
-	}
-	if !authapp.IsStudent(principal) {
-		writeExerciseError(w, http.StatusForbidden, "FORBIDDEN", "权限不足，需要学生身份")
-		return authapp.Principal{}, false
-	}
-	return principal, true
+	return httpauth.RequireBearerAccess(
+		w, r, h.auth.DecodeAccessToken, authapp.IsStudent,
+		"权限不足，需要学生身份", writeExerciseError,
+	)
 }
 
 func (h *Handler) writeExerciseError(w http.ResponseWriter, err error, fallback string) {

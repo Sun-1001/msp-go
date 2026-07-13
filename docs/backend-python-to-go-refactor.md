@@ -1326,3 +1326,15 @@ pytest
 - 验证结果（2026-07-12）：Go 全仓测试（含 auth/route/frontend route 契约）和 vet 通过；前端 53 个测试文件共 340 项测试、ESLint、TypeScript 与 Vite 生产构建通过；浏览器确认背景图 `320x160`、拼图块 `48x48` 均成功解码，普通/管理员入口滑块可用，键盘位移同步更新 `aria-valuenow`，移动宽度无横向溢出且长表单使用内部纵向滚动。
 - 交付物：`backend-go/internal/application/auth/captcha.go`、`backend-go/internal/application/auth/captcha_test.go`、`backend-go/internal/adapter/http/auth/handler.go`、`backend-go/internal/adapter/http/auth/handler_test.go`、`backend-go/internal/platform/config/config.go`、`backend-go/internal/platform/config/config_test.go`、`backend-go/cmd/api/main.go`、`frontend/src/modules/auth/components/SliderCaptcha.tsx`、`frontend/src/modules/auth/components/SliderCaptcha.test.tsx`、`frontend/src/modules/auth/components/LoginForm.tsx`、`frontend/src/pages/admin/AdminLoginPage.tsx`、`frontend/src/libs/http/apiClient.ts`、`frontend/src/modules/auth/services/authService.ts`、`.env.example`、`docs/technical/deployment.md`。
 - 残余风险：滑块验证码用于提高自动化成本，不能单独阻断计算机视觉识别、人工打码或分布式低频撞库，仍需保留账号失败锁定、边缘 WAF/全局 IP 限流和登录异常监控；生产环境依赖 Redis 保证多实例一次性消费，反向代理必须覆盖写入可信 `X-Real-IP`；本轮未执行多节点 Redis 故障切换和真实攻击流量压测。
+
+### 2026-07-13
+
+- 后端基础设施冗余收敛批次（P4/P7 横切）启动状态：`IN_PROGRESS`；启动日期：2026-07-13；当前状态：`BLOCKED`；阻断日期：2026-07-14。
+- 本批次范围：统一 PostgreSQL adapter 的事务提交/回滚边界，以及 HTTP handler 的 Bearer token 解码和角色校验机制；保持现有 API、错误响应、数据库 schema 与部署行为不变。
+- 启动证据：`dupl -t 120` 识别出 6 组完全重复的 repository `withTx` 实现和 9 组重复的 handler 权限校验实现；仓库启动时 `git status --short --branch` 为干净状态。
+- 验证命令：`gofmt -w <本批次 Go 文件>`；`go test ./internal/adapter/postgres -count=1`；`go test ./internal/platform/httpauth ./internal/adapter/http/... -count=1`；`go test ./... -count=1`；`go test -race ./cmd/... ./internal/... ./migrations -count=1`；排除目录存在性单测后执行其余 `tests/contract`；`go vet ./...`；`staticcheck ./...`；`go run github.com/mibk/dupl@latest -t 120 internal/adapter/postgres`；`go run github.com/mibk/dupl@latest -t 120 internal/adapter/http`；`git diff --check`。
+- 验证结果（2026-07-14）：PostgreSQL adapter、`httpauth`、全部 HTTP adapter、其余契约测试、全部实现包 race 检查、vet、staticcheck 和 diff 检查通过；`httpauth` 定向语句覆盖率为 100%，repository 事务重复组为 0，HTTP 鉴权重复组已消失。`go test ./... -count=1` 仅 `TestLegacyPythonBackendDirectoryIsAbsent` 失败，其余包通过。
+- 已完成实现：基础 `Repository` 统一识别事务能力并集中处理 begin、commit、rollback 及错误合并，7 个具体 repository 删除各自的 beginner 字段和事务模板；`httpauth.RequireBearerAccess` 统一缺失/无效 Bearer token、`WWW-Authenticate`、401 和可选角色 403，19 个 handler 删除本地重复机制；新增公共 helper 的成功、无 token、无效 token、无权限、无角色约束、提交失败和回滚失败测试。
+- 阻断原因：仓库根目录存在本批次开始前创建的空目录 `backend/uploads/`（创建时间 2026-07-13 20:48），它被 `.gitignore` 忽略但违反 Go-only 运行入口契约；当前无项目进程占用。根据并行任务安全规则，本批次不擅自删除该预存目录，需确认其不属于其他工具的工作后再删除并重跑全量测试。
+- 当前交付物：`backend-go/internal/adapter/postgres/repository.go`、`backend-go/internal/adapter/postgres/repository_test.go`、7 个事务型 repository、`backend-go/internal/platform/httpauth/access.go`、`backend-go/internal/platform/httpauth/access_test.go`、19 个 HTTP handler。
+- 残余风险：代码级验证未发现行为回归；唯一未闭合项是预存空目录导致的全量契约失败。前端未在本批次修改，前端 Knip 未使用导出和 G6 chunk 体积仍按 2026-07-12 记录保留为后续批次。

@@ -432,23 +432,10 @@ func (h *Handler) generateIsomorphic(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) requireTeacher(w http.ResponseWriter, r *http.Request) (authapp.Principal, bool) {
-	token, ok := httpauth.BearerToken(r)
-	if !ok {
-		w.Header().Set("WWW-Authenticate", "Bearer")
-		writeQuestionError(w, http.StatusUnauthorized, "UNAUTHORIZED", "未认证，请先登录")
-		return authapp.Principal{}, false
-	}
-	principal, ok := h.auth.DecodeAccessToken(token)
-	if !ok {
-		w.Header().Set("WWW-Authenticate", "Bearer")
-		writeQuestionError(w, http.StatusUnauthorized, "UNAUTHORIZED", "未认证，请先登录")
-		return authapp.Principal{}, false
-	}
-	if !authapp.IsTeacherOrAdmin(principal) {
-		writeQuestionError(w, http.StatusForbidden, "FORBIDDEN", "权限不足，需要教师权限")
-		return authapp.Principal{}, false
-	}
-	return principal, true
+	return httpauth.RequireBearerAccess(
+		w, r, h.auth.DecodeAccessToken, authapp.IsTeacherOrAdmin,
+		"权限不足，需要教师权限", writeQuestionError,
+	)
 }
 
 func (h *Handler) logQuestionError(message string, err error) {
