@@ -75,9 +75,22 @@ func (s *session) request(ctx context.Context, method string, rawURL string, par
 		if !isRetryable(err) || attempt == s.config.RetryCount {
 			return nil, err
 		}
-		time.Sleep(time.Duration(1<<attempt) * time.Second)
+		if err := waitForRetry(ctx, time.Duration(1<<attempt)*time.Second); err != nil {
+			return nil, err
+		}
 	}
 	return response, nil
+}
+
+func waitForRetry(ctx context.Context, delay time.Duration) error {
+	timer := time.NewTimer(delay)
+	defer timer.Stop()
+	select {
+	case <-timer.C:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
 }
 
 func (s *session) followRedirects(ctx context.Context, base *url.URL, location string, headers map[string]string) (*http.Response, error) {

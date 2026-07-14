@@ -258,8 +258,9 @@ func (r *maxBytesReader) Read(p []byte) (int, error) {
 }
 
 type textResourceReader struct {
-	reader  io.Reader
-	pending []byte
+	reader     io.Reader
+	pending    [utf8.UTFMax - 1]byte
+	pendingLen int
 }
 
 func (r *textResourceReader) Read(p []byte) (int, error) {
@@ -268,37 +269,56 @@ func (r *textResourceReader) Read(p []byte) (int, error) {
 		if bytes.Contains(p[:n], []byte{0}) {
 			return 0, ErrInvalidContentType
 		}
-		combined := make([]byte, len(r.pending)+n)
-		copy(combined, r.pending)
-		copy(combined[len(r.pending):], p[:n])
-		validLen, validateErr := validUTF8PrefixLen(combined, err == nil)
-		if validateErr != nil {
+		if validateErr := r.validateChunk(p[:n], err == nil); validateErr != nil {
 			return 0, validateErr
 		}
-		r.pending = append(r.pending[:0], combined[validLen:]...)
 	}
-	if err == io.EOF && len(r.pending) > 0 {
+	if err == io.EOF && r.pendingLen > 0 {
 		return 0, ErrInvalidContentType
 	}
 	return n, err
 }
 
-func validUTF8PrefixLen(data []byte, allowIncomplete bool) (int, error) {
-	index := 0
-	for index < len(data) {
-		if !utf8.FullRune(data[index:]) {
-			if allowIncomplete {
-				return index, nil
+func (r *textResourceReader) validateChunk(data []byte, allowIncomplete bool) error {
+	offset := 0
+	if r.pendingLen > 0 {
+		var runeBytes [utf8.UTFMax]byte
+		total := copy(runeBytes[:], r.pending[:r.pendingLen])
+		for total < len(runeBytes) && offset < len(data) && !utf8.FullRune(runeBytes[:total]) {
+			runeBytes[total] = data[offset]
+			total++
+			offset++
+		}
+		if !utf8.FullRune(runeBytes[:total]) {
+			if !allowIncomplete {
+				return ErrInvalidContentType
 			}
-			return 0, ErrInvalidContentType
+			copy(r.pending[:], runeBytes[:total])
+			r.pendingLen = total
+			return nil
 		}
-		r, size := utf8.DecodeRune(data[index:])
-		if r == utf8.RuneError && size == 1 {
-			return 0, ErrInvalidContentType
+		decoded, size := utf8.DecodeRune(runeBytes[:total])
+		if decoded == utf8.RuneError && size == 1 {
+			return ErrInvalidContentType
 		}
-		index += size
+		r.pendingLen = 0
 	}
-	return index, nil
+
+	for offset < len(data) {
+		if !utf8.FullRune(data[offset:]) {
+			if !allowIncomplete {
+				return ErrInvalidContentType
+			}
+			r.pendingLen = copy(r.pending[:], data[offset:])
+			return nil
+		}
+		decoded, size := utf8.DecodeRune(data[offset:])
+		if decoded == utf8.RuneError && size == 1 {
+			return ErrInvalidContentType
+		}
+		offset += size
+	}
+	return nil
 }
 
 type countingReader struct {

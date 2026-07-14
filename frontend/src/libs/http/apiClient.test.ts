@@ -1,5 +1,6 @@
-import { describe, expect, it, vi } from 'vitest';
-import { apiClient } from './apiClient';
+import axios from 'axios';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { apiClient, waitForRetryDelay } from './apiClient';
 
 vi.mock('../utils/logger', () => ({
   logger: {
@@ -38,5 +39,37 @@ describe('apiClient captcha rate limits', () => {
 
     expect(attempts).toBe(1);
     expect(adapter).toHaveBeenCalledOnce();
+  });
+});
+
+describe('waitForRetryDelay', () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it('resolves only after the configured delay', async () => {
+    vi.useFakeTimers();
+    let resolved = false;
+    const pending = waitForRetryDelay(1_000).then(() => {
+      resolved = true;
+    });
+
+    await vi.advanceTimersByTimeAsync(999);
+    expect(resolved).toBe(false);
+    await vi.advanceTimersByTimeAsync(1);
+    await pending;
+    expect(resolved).toBe(true);
+  });
+
+  it('cancels the delay and releases its timer when the request is aborted', async () => {
+    vi.useFakeTimers();
+    const controller = new AbortController();
+    const pending = waitForRetryDelay(60_000, controller.signal).catch((error: unknown) => error);
+
+    controller.abort();
+    const error = await pending;
+
+    expect(axios.isCancel(error)).toBe(true);
+    expect(vi.getTimerCount()).toBe(0);
   });
 });

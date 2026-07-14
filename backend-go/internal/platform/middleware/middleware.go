@@ -6,9 +6,12 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"fmt"
+	"io"
 	"log/slog"
 	"net/http"
+	"strconv"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -22,6 +25,7 @@ const maxRequestIDLength = 128
 var (
 	readRequestIDRandom     = rand.Read
 	requestIDFallbackSerial atomic.Uint64
+	gzipWriterPool          = sync.Pool{New: func() any { return gzip.NewWriter(io.Discard) }}
 )
 
 // Chain applies middleware in declaration order.
@@ -103,15 +107,75 @@ func CORS(origins, methods, headers []string) func(http.Handler) http.Handler {
 // Gzip compresses responses when the client supports gzip.
 func Gzip(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if !strings.Contains(r.Header.Get("Accept-Encoding"), "gzip") {
+		if !acceptsGzip(r.Header.Get("Accept-Encoding")) {
 			next.ServeHTTP(w, r)
 			return
 		}
+		w.Header().Add("Vary", "Accept-Encoding")
 		w.Header().Set("Content-Encoding", "gzip")
-		gzw := gzip.NewWriter(w)
-		defer gzw.Close()
+		gzw := gzipWriterPool.Get().(*gzip.Writer)
+		gzw.Reset(w)
+		defer func() {
+			_ = gzw.Close()
+			gzw.Reset(io.Discard)
+			gzipWriterPool.Put(gzw)
+		}()
 		next.ServeHTTP(gzipResponseWriter{ResponseWriter: w, writer: gzw}, r)
 	})
+}
+
+func acceptsGzip(value string) bool {
+	gzipQuality := -1.0
+	wildcardQuality := -1.0
+	for len(value) > 0 {
+		item := value
+		if comma := strings.IndexByte(value, ','); comma >= 0 {
+			item = value[:comma]
+			value = value[comma+1:]
+		} else {
+			value = ""
+		}
+		name, quality := parseEncodingQuality(item)
+		switch {
+		case strings.EqualFold(name, "gzip"):
+			gzipQuality = quality
+		case name == "*":
+			wildcardQuality = quality
+		}
+	}
+	if gzipQuality >= 0 {
+		return gzipQuality > 0
+	}
+	return wildcardQuality > 0
+}
+
+func parseEncodingQuality(item string) (string, float64) {
+	item = strings.TrimSpace(item)
+	quality := 1.0
+	name := item
+	if semicolon := strings.IndexByte(item, ';'); semicolon >= 0 {
+		name = strings.TrimSpace(item[:semicolon])
+		parameters := item[semicolon+1:]
+		for len(parameters) > 0 {
+			parameter := parameters
+			if next := strings.IndexByte(parameters, ';'); next >= 0 {
+				parameter = parameters[:next]
+				parameters = parameters[next+1:]
+			} else {
+				parameters = ""
+			}
+			key, raw, found := strings.Cut(parameter, "=")
+			if !found || !strings.EqualFold(strings.TrimSpace(key), "q") {
+				continue
+			}
+			parsed, err := strconv.ParseFloat(strings.TrimSpace(raw), 64)
+			if err != nil || parsed < 0 || parsed > 1 {
+				return name, 0
+			}
+			quality = parsed
+		}
+	}
+	return name, quality
 }
 
 // RequestMetrics increments the process request counter.
@@ -145,12 +209,37 @@ func RequestLogger(logger *slog.Logger) func(http.Handler) http.Handler {
 
 type statusRecorder struct {
 	http.ResponseWriter
-	status int
+	status      int
+	wroteHeader bool
 }
 
 func (r *statusRecorder) WriteHeader(status int) {
+	if r.wroteHeader {
+		return
+	}
+	r.wroteHeader = true
 	r.status = status
 	r.ResponseWriter.WriteHeader(status)
+}
+
+func (r *statusRecorder) Write(data []byte) (int, error) {
+	if !r.wroteHeader {
+		r.WriteHeader(http.StatusOK)
+	}
+	return r.ResponseWriter.Write(data)
+}
+
+func (r *statusRecorder) Flush() {
+	if !r.wroteHeader {
+		r.WriteHeader(http.StatusOK)
+	}
+	if flusher, ok := r.ResponseWriter.(http.Flusher); ok {
+		flusher.Flush()
+	}
+}
+
+func (r *statusRecorder) Unwrap() http.ResponseWriter {
+	return r.ResponseWriter
 }
 
 type gzipResponseWriter struct {
@@ -158,7 +247,13 @@ type gzipResponseWriter struct {
 	writer *gzip.Writer
 }
 
+func (w gzipResponseWriter) WriteHeader(status int) {
+	w.Header().Del("Content-Length")
+	w.ResponseWriter.WriteHeader(status)
+}
+
 func (w gzipResponseWriter) Write(data []byte) (int, error) {
+	w.Header().Del("Content-Length")
 	return w.writer.Write(data)
 }
 
@@ -167,6 +262,10 @@ func (w gzipResponseWriter) Flush() {
 	if flusher, ok := w.ResponseWriter.(http.Flusher); ok {
 		flusher.Flush()
 	}
+}
+
+func (w gzipResponseWriter) Unwrap() http.ResponseWriter {
+	return w.ResponseWriter
 }
 
 func set(values []string) map[string]bool {

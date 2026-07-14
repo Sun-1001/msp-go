@@ -60,24 +60,57 @@ func (c Checker) Detailed(ctx context.Context) DetailedStatus {
 	components := map[string]ComponentStatus{
 		"app": {Status: "healthy"},
 	}
-	status := "healthy"
-
+	checks := make([]componentCheck, 0, 2)
 	if c.db != nil {
-		components["postgres"] = pingComponent(checkCtx, c.db)
-		if components["postgres"].Status != "healthy" {
-			status = "degraded"
-		}
+		checks = append(checks, componentCheck{name: "postgres", pinger: c.db})
 	}
 	if c.redis != nil {
-		components["redis"] = pingComponent(checkCtx, c.redis)
-		if components["redis"].Status != "healthy" {
-			status = "degraded"
-		}
+		checks = append(checks, componentCheck{name: "redis", pinger: c.redis})
 	}
 
+	results := make(chan componentResult, len(checks))
+	for _, check := range checks {
+		go func() {
+			results <- componentResult{name: check.name, status: pingComponent(checkCtx, check.pinger)}
+		}()
+	}
+	for range checks {
+		select {
+		case result := <-results:
+			components[result.name] = result.status
+		case <-checkCtx.Done():
+			for _, check := range checks {
+				if _, exists := components[check.name]; !exists {
+					components[check.name] = ComponentStatus{Status: "unhealthy", Error: checkCtx.Err().Error()}
+				}
+			}
+			return detailedStatus(c.version, components)
+		}
+	}
+	return detailedStatus(c.version, components)
+}
+
+type componentCheck struct {
+	name   string
+	pinger Pinger
+}
+
+type componentResult struct {
+	name   string
+	status ComponentStatus
+}
+
+func detailedStatus(version string, components map[string]ComponentStatus) DetailedStatus {
+	status := "healthy"
+	for name, component := range components {
+		if name != "app" && component.Status != "healthy" {
+			status = "degraded"
+			break
+		}
+	}
 	return DetailedStatus{
 		Status:     status,
-		Version:    c.version,
+		Version:    version,
 		CheckedAt:  time.Now().UTC(),
 		Components: components,
 	}

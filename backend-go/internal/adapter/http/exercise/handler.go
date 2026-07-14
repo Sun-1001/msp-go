@@ -6,8 +6,9 @@ import (
 	"log/slog"
 	"net/http"
 	"strings"
-	"sync"
 	"time"
+
+	goredis "github.com/redis/go-redis/v9"
 
 	authapp "mathstudy/backend-go/internal/application/auth"
 	exerciseapp "mathstudy/backend-go/internal/application/exercise"
@@ -15,6 +16,7 @@ import (
 	"mathstudy/backend-go/internal/platform/httpjson"
 	"mathstudy/backend-go/internal/platform/httpquery"
 	"mathstudy/backend-go/internal/platform/ptrutil"
+	"mathstudy/backend-go/internal/platform/ratelimit"
 	"mathstudy/backend-go/internal/platform/redact"
 )
 
@@ -37,16 +39,39 @@ type Handler struct {
 	service Service
 	auth    Authenticator
 	logger  *slog.Logger
-	limiter *generationRateLimiter
+	limiter *ratelimit.Limiter
 }
 
 const (
-	generationRateLimitMax    = 10
-	generationRateLimitWindow = time.Minute
+	generationRateLimitMax          = 10
+	generationRateLimitWindow       = time.Minute
+	generationRateLimitLocalMaxKeys = 500
 )
 
+// Option customizes the exercise HTTP handler.
+type Option func(*Handler) error
+
+// WithRedisRateLimit shares exercise generation limits across API instances.
+func WithRedisRateLimit(client *goredis.Client, maxLocalKeys int) Option {
+	return func(handler *Handler) error {
+		limiter, err := ratelimit.New(
+			client,
+			"msp:exercise_generation",
+			generationRateLimitMax,
+			generationRateLimitWindow,
+			maxLocalKeys,
+			handler.logger,
+		)
+		if err != nil {
+			return err
+		}
+		handler.limiter = limiter
+		return nil
+	}
+}
+
 // NewHandler creates an exercise HTTP handler.
-func NewHandler(logger *slog.Logger, service Service, auth Authenticator) (*Handler, error) {
+func NewHandler(logger *slog.Logger, service Service, auth Authenticator, options ...Option) (*Handler, error) {
 	if service == nil {
 		return nil, errors.New("exercise service is nil")
 	}
@@ -56,12 +81,21 @@ func NewHandler(logger *slog.Logger, service Service, auth Authenticator) (*Hand
 	if logger == nil {
 		logger = slog.Default()
 	}
-	return &Handler{
+	handler := &Handler{
 		service: service,
 		auth:    auth,
 		logger:  logger,
 		limiter: newGenerationRateLimiter(generationRateLimitMax, generationRateLimitWindow),
-	}, nil
+	}
+	for _, option := range options {
+		if option == nil {
+			continue
+		}
+		if err := option(handler); err != nil {
+			return nil, err
+		}
+	}
+	return handler, nil
 }
 
 // Register attaches exercise routes under prefix, for example /api/v1/exercise.
@@ -121,7 +155,7 @@ func (h *Handler) generate(w http.ResponseWriter, r *http.Request) {
 		writeExerciseError(w, http.StatusUnprocessableEntity, "VALIDATION_ERROR", "difficulty 必须在 0 到 1 之间")
 		return
 	}
-	if h.limiter != nil && !h.limiter.Allow(principal.UserID) {
+	if h.limiter != nil && !h.limiter.Allow(r.Context(), principal.UserID) {
 		writeExerciseError(w, http.StatusTooManyRequests, "RATE_LIMITED", "AI 出题过于频繁，请稍后重试")
 		return
 	}
@@ -264,60 +298,16 @@ func writeExerciseError(w http.ResponseWriter, status int, code, message string)
 	httpjson.WriteDetailError(w, status, code, message)
 }
 
-type generationRateLimiter struct {
-	mu     sync.Mutex
-	limit  int
-	window time.Duration
-	now    func() time.Time
-	hits   map[string][]time.Time
-}
-
-func newGenerationRateLimiter(limit int, window time.Duration) *generationRateLimiter {
+func newGenerationRateLimiter(limit int, window time.Duration) *ratelimit.Limiter {
 	if limit <= 0 {
 		limit = generationRateLimitMax
 	}
 	if window <= 0 {
 		window = generationRateLimitWindow
 	}
-	return &generationRateLimiter{
-		limit:  limit,
-		window: window,
-		now:    func() time.Time { return time.Now().UTC() },
-		hits:   map[string][]time.Time{},
+	limiter, err := ratelimit.New(nil, "msp:exercise_generation", limit, window, generationRateLimitLocalMaxKeys, nil)
+	if err != nil {
+		panic(err)
 	}
-}
-
-func (l *generationRateLimiter) Allow(key string) bool {
-	if l == nil {
-		return true
-	}
-	l.mu.Lock()
-	defer l.mu.Unlock()
-
-	if l.limit <= 0 {
-		l.limit = generationRateLimitMax
-	}
-	if l.window <= 0 {
-		l.window = generationRateLimitWindow
-	}
-	if l.now == nil {
-		l.now = func() time.Time { return time.Now().UTC() }
-	}
-	if l.hits == nil {
-		l.hits = map[string][]time.Time{}
-	}
-	now := l.now()
-	cutoff := now.Add(-l.window)
-	recent := l.hits[key][:0]
-	for _, hit := range l.hits[key] {
-		if hit.After(cutoff) {
-			recent = append(recent, hit)
-		}
-	}
-	if len(recent) >= l.limit {
-		l.hits[key] = recent
-		return false
-	}
-	l.hits[key] = append(recent, now)
-	return true
+	return limiter
 }

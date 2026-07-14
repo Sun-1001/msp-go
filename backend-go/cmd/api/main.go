@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"errors"
 	"log/slog"
 	"net/http"
 	"os"
@@ -127,6 +126,7 @@ func main() {
 		redisClient,
 		logger,
 		authapp.WithStrictRefreshSessions(cfg.RequiresSharedRefreshSessionStore()),
+		authapp.WithMaxLocalRefreshSessions(cfg.RedisFallbackCacheMaxSize),
 	)
 	authService, err := authapp.NewService(
 		userRepo,
@@ -279,7 +279,12 @@ func main() {
 		logger.Error("configure exercise service", "error", err)
 		os.Exit(1)
 	}
-	exerciseHandler, err := exercisehttp.NewHandler(logger, exerciseService, authService)
+	exerciseHandler, err := exercisehttp.NewHandler(
+		logger,
+		exerciseService,
+		authService,
+		exercisehttp.WithRedisRateLimit(redisClient, cfg.RedisFallbackCacheMaxSize),
+	)
 	if err != nil {
 		logger.Error("configure exercise handler", "error", err)
 		os.Exit(1)
@@ -474,7 +479,12 @@ func main() {
 		logger.Error("configure upload service", "error", err)
 		os.Exit(1)
 	}
-	uploadHandler, err := uploadhttp.NewHandler(logger, uploadService, authService)
+	uploadHandler, err := uploadhttp.NewHandler(
+		logger,
+		uploadService,
+		authService,
+		uploadhttp.WithRedisRateLimit(redisClient, cfg.RedisFallbackCacheMaxSize),
+	)
 	if err != nil {
 		logger.Error("configure upload handler", "error", err)
 		os.Exit(1)
@@ -498,7 +508,7 @@ func main() {
 		logger.Error("configure xidian portal client", "error", err)
 		os.Exit(1)
 	}
-	xidianService, err := xidianapp.NewService(xidianRepo, xidianPortalClient, appCipher, xidianapp.NewMemoryChallengeStore(), xidianapp.Config{
+	xidianService, err := xidianapp.NewService(xidianRepo, xidianPortalClient, appCipher, xidianapp.NewMemoryChallengeStore(cfg.RedisFallbackCacheMaxSize), xidianapp.Config{
 		ChallengeTTL:            cfg.XidianChallengeTTL,
 		SnapshotFallbackEnabled: cfg.XidianSnapshotFallbackEnabled,
 		CaptchaWidth:            cfg.XidianCaptchaWidth,
@@ -562,32 +572,14 @@ func main() {
 		IdleTimeout:       cfg.IdleTimeout,
 	}
 
-	errCh := make(chan error, 1)
-	go func() {
-		logger.Info("Go API listening", "addr", cfg.HTTPAddr(), "environment", cfg.Environment)
-		errCh <- server.ListenAndServe()
-	}()
-
 	stopCh := make(chan os.Signal, 1)
 	signal.Notify(stopCh, os.Interrupt, syscall.SIGTERM)
+	defer signal.Stop(stopCh)
 
-	select {
-	case sig := <-stopCh:
-		logger.Info("shutdown requested", "signal", sig.String())
-	case err := <-errCh:
-		if err != nil && !errors.Is(err, http.ErrServerClosed) {
-			logger.Error("server stopped", "error", err)
-			os.Exit(1)
-		}
-	}
-
-	shutdownCtx, cancel := context.WithTimeout(context.Background(), cfg.ShutdownTimeout)
-	defer cancel()
-	if err := server.Shutdown(shutdownCtx); err != nil {
-		logger.Error("graceful shutdown failed", "error", err)
+	logger.Info("Go API listening", "addr", cfg.HTTPAddr(), "environment", cfg.Environment)
+	if err := serveHTTP(server, stopCh, cfg.ShutdownTimeout, logger); err != nil {
 		os.Exit(1)
 	}
-	logger.Info("server shutdown complete")
 }
 
 func newLogger(cfg config.Config) *slog.Logger {

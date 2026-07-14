@@ -211,9 +211,10 @@ export const systemSettingService = {
   /**
    * 获取数据库监控数据（管理员接口）
    */
-  async getDatabaseMonitor(): Promise<DatabaseMonitorResponse> {
+  async getDatabaseMonitor(signal?: AbortSignal): Promise<DatabaseMonitorResponse> {
     const response = await apiClient.get<DatabaseMonitorResponse>(
-      '/admin/settings/database/monitor'
+      '/admin/settings/database/monitor',
+      { signal }
     );
     return response.data;
   },

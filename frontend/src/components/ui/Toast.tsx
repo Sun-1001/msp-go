@@ -1,5 +1,5 @@
 /* eslint-disable react-refresh/only-export-components */
-import React, { createContext, useContext, useState, useCallback, useEffect } from 'react';
+import React, { createContext, useContext, useState, useCallback, useEffect, useMemo, useRef } from 'react';
 import { X, CheckCircle, AlertCircle, Info, AlertTriangle } from 'lucide-react';
 import { cn } from '../../libs/utils/cn';
 import { animationDuration } from '../../libs/animations';
@@ -47,13 +47,13 @@ export interface Toast {
 /**
  * Toast Context 接口
  */
-interface ToastContextType {
-  toasts: Toast[];
+interface ToastActionsContextType {
   addToast: (toast: Omit<Toast, 'id'>) => void;
   removeToast: (id: string) => void;
 }
 
-const ToastContext = createContext<ToastContextType | undefined>(undefined);
+const ToastActionsContext = createContext<ToastActionsContextType | undefined>(undefined);
+const ToastStateContext = createContext<Toast[] | undefined>(undefined);
 
 /**
  * useToast Hook
@@ -73,16 +73,24 @@ const ToastContext = createContext<ToastContextType | undefined>(undefined);
  * ```
  */
 export const useToast = () => {
-  const context = useContext(ToastContext);
-  if (!context) {
+  const actions = useContext(ToastActionsContext);
+  if (!actions) {
     throw new Error('useToast must be used within ToastProvider');
   }
 
   const toast = useCallback((options: Omit<Toast, 'id'>) => {
-    context.addToast(options);
-  }, [context]);
+    actions.addToast(options);
+  }, [actions]);
 
-  return { toast, toasts: context.toasts, removeToast: context.removeToast };
+  return { toast, removeToast: actions.removeToast };
+};
+
+const useToastState = (): Toast[] => {
+  const toasts = useContext(ToastStateContext);
+  if (!toasts) {
+    throw new Error('useToastState must be used within ToastProvider');
+  }
+  return toasts;
 };
 
 /**
@@ -107,11 +115,15 @@ export const ToastProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     setToasts((prev) => prev.filter((toast) => toast.id !== id));
   }, []);
 
+  const actions = useMemo(() => ({ addToast, removeToast }), [addToast, removeToast]);
+
   return (
-    <ToastContext.Provider value={{ toasts, addToast, removeToast }}>
-      {children}
-      <ToastContainer />
-    </ToastContext.Provider>
+    <ToastActionsContext.Provider value={actions}>
+      <ToastStateContext.Provider value={toasts}>
+        {children}
+        <ToastContainer />
+      </ToastStateContext.Provider>
+    </ToastActionsContext.Provider>
   );
 };
 
@@ -121,7 +133,7 @@ export const ToastProvider: React.FC<{ children: React.ReactNode }> = ({ childre
  * 负责渲染所有 Toast 通知
  */
 const ToastContainer: React.FC = () => {
-  const { toasts } = useToast();
+  const toasts = useToastState();
 
   return (
     <div className="fixed top-4 right-4 z-50 flex flex-col gap-2 pointer-events-none">
@@ -138,22 +150,32 @@ const ToastContainer: React.FC = () => {
 const ToastItem: React.FC<{ toast: Toast }> = ({ toast }) => {
   const { removeToast } = useToast();
   const [isExiting, setIsExiting] = useState(false);
+  const removalTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const startExit = useCallback(() => {
+    if (removalTimerRef.current !== null) return;
+    setIsExiting(true);
+    removalTimerRef.current = setTimeout(() => {
+      removalTimerRef.current = null;
+      removeToast(toast.id);
+    }, animationDuration.normal);
+  }, [removeToast, toast.id]);
 
   useEffect(() => {
+    let timer: ReturnType<typeof setTimeout> | undefined;
     if (toast.duration && toast.duration > 0) {
-      const timer = setTimeout(() => {
-        setIsExiting(true);
-        setTimeout(() => removeToast(toast.id), animationDuration.normal);
-      }, toast.duration);
-
-      return () => clearTimeout(timer);
+      timer = setTimeout(startExit, toast.duration);
     }
-  }, [toast.id, toast.duration, removeToast]);
+    return () => {
+      if (timer !== undefined) clearTimeout(timer);
+      if (removalTimerRef.current !== null) {
+        clearTimeout(removalTimerRef.current);
+        removalTimerRef.current = null;
+      }
+    };
+  }, [toast.duration, startExit]);
 
-  const handleClose = () => {
-    setIsExiting(true);
-    setTimeout(() => removeToast(toast.id), animationDuration.normal);
-  };
+  const handleClose = startExit;
 
   return (
     <div

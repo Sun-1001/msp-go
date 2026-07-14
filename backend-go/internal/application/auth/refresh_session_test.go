@@ -45,3 +45,31 @@ func TestRefreshSessionStoreStrictRequiresRedis(t *testing.T) {
 		t.Fatal("Revoke(strict without redis) error = nil, want error")
 	}
 }
+
+func TestRefreshSessionStoreBoundsAndPrunesLocalSessions(t *testing.T) {
+	now := time.Date(2026, 7, 14, 2, 0, 0, 0, time.UTC)
+	store := NewRefreshSessionStore(nil, nil, WithMaxLocalRefreshSessions(2))
+	store.now = func() time.Time { return now }
+	ctx := context.Background()
+
+	for index, ttl := range []time.Duration{time.Hour, 2 * time.Hour, 3 * time.Hour} {
+		jti := "jti-" + string(rune('1'+index))
+		if err := store.Remember(ctx, "user-1", jti, now.Add(ttl)); err != nil {
+			t.Fatalf("Remember(%q) error = %v", jti, err)
+		}
+	}
+	if len(store.sessions) != 2 {
+		t.Fatalf("local session count = %d, want 2", len(store.sessions))
+	}
+	if active, err := store.Consume(ctx, "user-1", "jti-1"); err != nil || active {
+		t.Fatalf("evicted Consume() = %t, %v", active, err)
+	}
+
+	now = now.Add(4 * time.Hour)
+	if err := store.Remember(ctx, "user-1", "jti-4", now.Add(time.Hour)); err != nil {
+		t.Fatalf("Remember(after expiry) error = %v", err)
+	}
+	if len(store.sessions) != 1 {
+		t.Fatalf("pruned local session count = %d, want 1", len(store.sessions))
+	}
+}

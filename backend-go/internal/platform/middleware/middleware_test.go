@@ -1,7 +1,10 @@
 package middleware
 
 import (
+	"compress/gzip"
 	"errors"
+	"io"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -121,3 +124,99 @@ func TestNewRequestIDFallbackIsUnique(t *testing.T) {
 		t.Fatalf("fallback request IDs = %q, %q; want 32 hex characters", first, second)
 	}
 }
+
+func TestGzipHonorsEncodingQualityAndBoundaries(t *testing.T) {
+	tests := []struct {
+		header string
+		want   bool
+	}{
+		{header: "gzip", want: true},
+		{header: "br, GZip; q=0.5", want: true},
+		{header: "gzip;q=0, *;q=1", want: false},
+		{header: "*;q=0.5", want: true},
+		{header: "xgzip", want: false},
+		{header: "gzip;q=invalid", want: false},
+	}
+	for _, test := range tests {
+		if got := acceptsGzip(test.header); got != test.want {
+			t.Errorf("acceptsGzip(%q) = %t, want %t", test.header, got, test.want)
+		}
+	}
+}
+
+func TestGzipRemovesContentLengthAndPreservesStreamingFlush(t *testing.T) {
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	handler := Gzip(RequestLogger(logger)(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.Header().Set("Content-Length", "999")
+		_, _ = w.Write([]byte("data: ready\n\n"))
+		flusher, ok := w.(http.Flusher)
+		if !ok {
+			t.Error("wrapped response writer does not implement http.Flusher")
+			return
+		}
+		flusher.Flush()
+	})))
+	request := httptest.NewRequest(http.MethodGet, "/stream", nil)
+	request.Header.Set("Accept-Encoding", "gzip")
+	recorder := httptest.NewRecorder()
+
+	handler.ServeHTTP(recorder, request)
+
+	if !recorder.Flushed {
+		t.Fatal("stream response was not flushed")
+	}
+	if got := recorder.Header().Get("Content-Length"); got != "" {
+		t.Fatalf("Content-Length = %q, want empty", got)
+	}
+	if got := recorder.Header().Get("Content-Encoding"); got != "gzip" {
+		t.Fatalf("Content-Encoding = %q", got)
+	}
+	reader, err := gzip.NewReader(recorder.Body)
+	if err != nil {
+		t.Fatalf("gzip.NewReader() error = %v", err)
+	}
+	body, err := io.ReadAll(reader)
+	if err != nil {
+		t.Fatalf("ReadAll(gzip) error = %v", err)
+	}
+	if err := reader.Close(); err != nil {
+		t.Fatalf("Close(gzip) error = %v", err)
+	}
+	if string(body) != "data: ready\n\n" {
+		t.Fatalf("decoded body = %q", body)
+	}
+}
+
+func TestStatusRecorderKeepsFirstStatusCode(t *testing.T) {
+	recorder := httptest.NewRecorder()
+	wrapped := &statusRecorder{ResponseWriter: recorder, status: http.StatusOK}
+	wrapped.WriteHeader(http.StatusCreated)
+	wrapped.WriteHeader(http.StatusInternalServerError)
+	if wrapped.status != http.StatusCreated || recorder.Code != http.StatusCreated {
+		t.Fatalf("status = %d, recorder = %d", wrapped.status, recorder.Code)
+	}
+}
+
+func BenchmarkGzipMiddleware(b *testing.B) {
+	payload := []byte(strings.Repeat("benchmark-response-", 128))
+	handler := Gzip(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write(payload)
+	}))
+	request := httptest.NewRequest(http.MethodGet, "/benchmark", nil)
+	request.Header.Set("Accept-Encoding", "gzip")
+	writer := &discardResponseWriter{header: make(http.Header)}
+	b.ReportAllocs()
+	for range b.N {
+		clear(writer.header)
+		handler.ServeHTTP(writer, request)
+	}
+}
+
+type discardResponseWriter struct {
+	header http.Header
+}
+
+func (w *discardResponseWriter) Header() http.Header            { return w.header }
+func (w *discardResponseWriter) Write(data []byte) (int, error) { return len(data), nil }
+func (*discardResponseWriter) WriteHeader(int)                  {}

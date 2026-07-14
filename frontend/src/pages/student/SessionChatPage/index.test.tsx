@@ -10,6 +10,7 @@ const mocks = vi.hoisted(() => ({
   createSession: vi.fn(),
   getSessions: vi.fn(),
   sendMessage: vi.fn().mockResolvedValue(undefined),
+  closeSSE: vi.fn(),
 }));
 
 vi.mock('@/modules/session/services/sessionService', () => ({
@@ -50,9 +51,18 @@ vi.mock('./hooks/useFileUpload', () => ({
   }),
 }));
 vi.mock('./hooks/useChatStream', () => ({
-  useChatStream: ({ currentSession }: { currentSession: LearningSession | null }) => ({
-    handleSendMessage: (message: string) => mocks.sendMessage(currentSession?.id, message),
-  }),
+  useChatStream: ({
+    currentSession,
+    sseControllerRef,
+  }: {
+    currentSession: LearningSession | null;
+    sseControllerRef: { current: { close: () => void; getTaskId: () => null } | null };
+  }) => {
+    sseControllerRef.current = { close: mocks.closeSSE, getTaskId: () => null };
+    return {
+      handleSendMessage: (message: string) => mocks.sendMessage(currentSession?.id, message),
+    };
+  },
 }));
 
 import { store } from '@/store';
@@ -143,5 +153,21 @@ describe('SessionChatPage exercise tutor launch', () => {
     ));
     expect(mocks.sendMessage).not.toHaveBeenCalledWith('old-session', initialMessage);
     expect(store.getState().session.currentSession?.id).toBe('tutor-session');
+  });
+
+  it('closes the current SSE controller when the page unmounts', () => {
+    const view = render(
+      <Provider store={store}>
+        <MemoryRouter initialEntries={['/session/old-session']}>
+          <Routes>
+            <Route path="/session/:sessionId" element={<SessionChatPage />} />
+          </Routes>
+        </MemoryRouter>
+      </Provider>,
+    );
+
+    view.unmount();
+
+    expect(mocks.closeSSE).toHaveBeenCalledOnce();
   });
 });

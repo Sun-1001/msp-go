@@ -32,8 +32,8 @@ export const passwordResetService = {
     return res.data;
   },
 
-  async getPendingCount(): Promise<{ pending_count: number }> {
-    const res = await apiClient.get<{ pending_count: number }>('/admin/inbox/pending-count');
+  async getPendingCount(signal?: AbortSignal): Promise<{ pending_count: number }> {
+    const res = await apiClient.get<{ pending_count: number }>('/admin/inbox/pending-count', { signal });
     return res.data;
   },
 

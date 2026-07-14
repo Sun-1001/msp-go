@@ -73,26 +73,20 @@ class RequestDeduplicationManager {
       return existing.promise as Promise<T>;
     }
 
-    // 创建新的请求
-    const promise = requestFn()
-      .then((result) => {
-        // 请求成功后，从缓存中移除
-        this.pendingRequests.delete(key);
-        return result;
-      })
-      .catch((error) => {
-        // 请求失败后，从缓存中移除
-        this.pendingRequests.delete(key);
-        throw error;
-      });
-
-    // 缓存请求
-    this.pendingRequests.set(key, {
-      promise,
+    const entry: PendingRequest<T> = {
+      promise: requestFn(),
       timestamp: Date.now(),
-    });
+    };
+    this.pendingRequests.set(key, entry);
 
-    return promise;
+    try {
+      return await entry.promise;
+    } finally {
+      // A slow expired request must not remove a newer request using the same key.
+      if (this.pendingRequests.get(key) === entry) {
+        this.pendingRequests.delete(key);
+      }
+    }
   }
 
   /**
@@ -107,7 +101,7 @@ class RequestDeduplicationManager {
    */
   clearByUrl(url: string): void {
     for (const key of this.pendingRequests.keys()) {
-      if (key.startsWith(url)) {
+      if (key.startsWith(`${url}:`)) {
         this.pendingRequests.delete(key);
       }
     }

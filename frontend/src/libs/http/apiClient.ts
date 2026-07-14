@@ -1,4 +1,4 @@
-import axios, { type AxiosError, type InternalAxiosRequestConfig } from 'axios';
+import axios, { type AxiosError, type GenericAbortSignal, type InternalAxiosRequestConfig } from 'axios';
 import { logger } from '../utils/logger';
 import { handle401Error } from './tokenRefresh';
 import { emitAuthExpired } from '../auth/authEvents';
@@ -50,6 +50,30 @@ interface CustomAxiosRequestConfig extends InternalAxiosRequestConfig {
 // 429 重试配置
 const RATE_LIMIT_MAX_RETRIES = 2;
 const RATE_LIMIT_BASE_DELAY_MS = 1000;
+
+export function waitForRetryDelay(delayMs: number, signal?: GenericAbortSignal): Promise<void> {
+  if (signal?.aborted) {
+    return Promise.reject(new axios.CanceledError('Request canceled during rate limit retry'));
+  }
+  if (!Number.isFinite(delayMs) || delayMs <= 0) {
+    return Promise.resolve();
+  }
+  return new Promise((resolve, reject) => {
+    const cleanup = () => {
+      clearTimeout(timer);
+      signal?.removeEventListener?.('abort', handleAbort);
+    };
+    const handleAbort = () => {
+      cleanup();
+      reject(new axios.CanceledError('Request canceled during rate limit retry'));
+    };
+    signal?.addEventListener?.('abort', handleAbort, { once: true });
+    const timer = setTimeout(() => {
+      cleanup();
+      resolve();
+    }, delayMs);
+  });
+}
 
 // Base axios instance
 export const apiClient = axios.create({
@@ -124,7 +148,7 @@ apiClient.interceptors.response.use(
           url: originalRequest.url,
         });
 
-        await new Promise((resolve) => setTimeout(resolve, delayMs));
+        await waitForRetryDelay(delayMs, originalRequest.signal);
         return apiClient(originalRequest);
       }
 

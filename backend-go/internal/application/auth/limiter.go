@@ -7,11 +7,14 @@ import (
 	"time"
 
 	goredis "github.com/redis/go-redis/v9"
+
+	"mathstudy/backend-go/internal/platform/ratelimit"
 )
 
 const (
-	loginFailPrefix = "msp:login_fail:"
-	loginLockPrefix = "msp:login_lock:"
+	loginFailPrefix          = "msp:login_fail:"
+	loginLockPrefix          = "msp:login_lock:"
+	defaultMaxLocalLoginKeys = 500
 )
 
 // LoginLimiter tracks failed login attempts and temporarily locks accounts.
@@ -21,8 +24,10 @@ type LoginLimiter struct {
 	lockout     time.Duration
 	logger      *slog.Logger
 
-	mu          sync.Mutex
-	localCounts map[string][]time.Time
+	mu           sync.Mutex
+	localCounts  map[string][]time.Time
+	maxLocalKeys int
+	now          func() time.Time
 }
 
 // NewLoginLimiter creates a Redis-backed limiter with an in-memory fallback.
@@ -37,11 +42,13 @@ func NewLoginLimiter(client *goredis.Client, maxAttempts int, lockout time.Durat
 		logger = slog.Default()
 	}
 	return &LoginLimiter{
-		client:      client,
-		maxAttempts: maxAttempts,
-		lockout:     lockout,
-		logger:      logger,
-		localCounts: make(map[string][]time.Time),
+		client:       client,
+		maxAttempts:  maxAttempts,
+		lockout:      lockout,
+		logger:       logger,
+		localCounts:  make(map[string][]time.Time),
+		maxLocalKeys: defaultMaxLocalLoginKeys,
+		now:          func() time.Time { return time.Now().UTC() },
 	}
 }
 
@@ -57,7 +64,7 @@ func (l *LoginLimiter) IsLocked(ctx context.Context, username string) bool {
 		}
 		l.logger.Warn("redis login lock check failed, using local fallback", "error", err)
 	}
-	return l.localLocked(username, time.Now())
+	return l.localLocked(username, l.now())
 }
 
 // RecordFailure increments failed attempts and locks the username when the limit is reached.
@@ -67,10 +74,9 @@ func (l *LoginLimiter) RecordFailure(ctx context.Context, username string) {
 	}
 	if l.client != nil {
 		failKey := loginFailPrefix + username
-		count, err := l.client.Incr(ctx, failKey).Result()
+		count, err := ratelimit.IncrementWithRefreshedExpiry(ctx, l.client, failKey, l.lockout)
 		if err == nil {
-			_ = l.client.Expire(ctx, failKey, l.lockout).Err()
-			if int(count) >= l.maxAttempts {
+			if count >= int64(l.maxAttempts) {
 				if err := l.client.Set(ctx, loginLockPrefix+username, "1", l.lockout).Err(); err != nil {
 					l.logger.Warn("redis login lock set failed", "username", username, "error", err)
 				}
@@ -79,7 +85,7 @@ func (l *LoginLimiter) RecordFailure(ctx context.Context, username string) {
 		}
 		l.logger.Warn("redis login failure record failed, using local fallback", "error", err)
 	}
-	l.localRecordFailure(username, time.Now())
+	l.localRecordFailure(username, l.now())
 }
 
 // Clear removes failed login state after successful authentication or password reset.
@@ -110,6 +116,10 @@ func (l *LoginLimiter) localLocked(username string, now time.Time) bool {
 	defer l.mu.Unlock()
 
 	attempts := l.recentAttempts(username, now)
+	if len(attempts) == 0 {
+		delete(l.localCounts, username)
+		return false
+	}
 	l.localCounts[username] = attempts
 	return len(attempts) >= l.maxAttempts
 }
@@ -118,6 +128,12 @@ func (l *LoginLimiter) localRecordFailure(username string, now time.Time) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 
+	if _, exists := l.localCounts[username]; !exists && len(l.localCounts) >= l.maxLocalKeys {
+		l.pruneLocalCounts(now)
+		if len(l.localCounts) >= l.maxLocalKeys {
+			l.evictOldestLocalCount()
+		}
+	}
 	attempts := append(l.recentAttempts(username, now), now)
 	l.localCounts[username] = attempts
 	if len(attempts) >= l.maxAttempts {
@@ -135,4 +151,34 @@ func (l *LoginLimiter) recentAttempts(username string, now time.Time) []time.Tim
 		}
 	}
 	return recent
+}
+
+func (l *LoginLimiter) pruneLocalCounts(now time.Time) {
+	for username := range l.localCounts {
+		recent := l.recentAttempts(username, now)
+		if len(recent) == 0 {
+			delete(l.localCounts, username)
+			continue
+		}
+		l.localCounts[username] = recent
+	}
+}
+
+func (l *LoginLimiter) evictOldestLocalCount() {
+	var oldestUsername string
+	var oldestAttempt time.Time
+	for username, attempts := range l.localCounts {
+		if len(attempts) == 0 {
+			delete(l.localCounts, username)
+			return
+		}
+		lastAttempt := attempts[len(attempts)-1]
+		if oldestUsername == "" || lastAttempt.Before(oldestAttempt) {
+			oldestUsername = username
+			oldestAttempt = lastAttempt
+		}
+	}
+	if oldestUsername != "" {
+		delete(l.localCounts, oldestUsername)
+	}
 }

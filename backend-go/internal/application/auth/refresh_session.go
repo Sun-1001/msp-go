@@ -13,6 +13,8 @@ import (
 
 const refreshSessionPrefix = "msp:refresh_session:"
 
+const defaultMaxLocalRefreshSessions = 500
+
 // RefreshSessionStore tracks server-issued refresh token IDs so refresh tokens
 // can be revoked and rotated instead of remaining valid until JWT expiration.
 type RefreshSessionStore struct {
@@ -20,9 +22,10 @@ type RefreshSessionStore struct {
 	logger *slog.Logger
 	strict bool
 
-	mu       sync.Mutex
-	sessions map[string]refreshSession
-	now      func() time.Time
+	mu               sync.Mutex
+	sessions         map[string]refreshSession
+	now              func() time.Time
+	maxLocalSessions int
 }
 
 type refreshSession struct {
@@ -40,6 +43,15 @@ func WithStrictRefreshSessions(strict bool) RefreshSessionStoreOption {
 	}
 }
 
+// WithMaxLocalRefreshSessions bounds refresh state retained during Redis degradation.
+func WithMaxLocalRefreshSessions(maxSessions int) RefreshSessionStoreOption {
+	return func(s *RefreshSessionStore) {
+		if maxSessions > 0 {
+			s.maxLocalSessions = maxSessions
+		}
+	}
+}
+
 // NewRefreshSessionStore creates a Redis-backed refresh session store with a
 // local fallback for development and degraded Redis availability.
 func NewRefreshSessionStore(client *goredis.Client, logger *slog.Logger, options ...RefreshSessionStoreOption) *RefreshSessionStore {
@@ -47,10 +59,11 @@ func NewRefreshSessionStore(client *goredis.Client, logger *slog.Logger, options
 		logger = slog.Default()
 	}
 	store := &RefreshSessionStore{
-		client:   client,
-		logger:   logger,
-		sessions: make(map[string]refreshSession),
-		now:      func() time.Time { return time.Now().UTC() },
+		client:           client,
+		logger:           logger,
+		sessions:         make(map[string]refreshSession),
+		now:              func() time.Time { return time.Now().UTC() },
+		maxLocalSessions: defaultMaxLocalRefreshSessions,
 	}
 	for _, option := range options {
 		if option != nil {
@@ -65,14 +78,15 @@ func (s *RefreshSessionStore) Remember(ctx context.Context, userID, jti string, 
 	if s == nil {
 		return nil
 	}
-	if userID == "" || jti == "" || !expiresAt.After(s.now()) {
+	now := s.now()
+	if userID == "" || jti == "" || !expiresAt.After(now) {
 		return errInvalidToken
 	}
 	if s.strict && s.client == nil {
 		return errors.New("strict refresh session store requires redis client")
 	}
 
-	ttl := time.Until(expiresAt)
+	ttl := expiresAt.Sub(now)
 	if s.client != nil {
 		if err := s.client.Set(ctx, refreshSessionPrefix+jti, userID, ttl).Err(); err == nil {
 			s.localRevoke(jti)
@@ -147,6 +161,12 @@ func (s *RefreshSessionStore) Revoke(ctx context.Context, jti string) error {
 func (s *RefreshSessionStore) localRemember(userID, jti string, expiresAt time.Time) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if _, exists := s.sessions[jti]; !exists && len(s.sessions) >= s.maxLocalSessions {
+		s.pruneLocalSessionsLocked(s.now())
+		if len(s.sessions) >= s.maxLocalSessions {
+			s.evictEarliestLocalSessionLocked()
+		}
+	}
 	s.sessions[jti] = refreshSession{UserID: userID, ExpiresAt: expiresAt}
 }
 
@@ -166,4 +186,26 @@ func (s *RefreshSessionStore) localRevoke(jti string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	delete(s.sessions, jti)
+}
+
+func (s *RefreshSessionStore) pruneLocalSessionsLocked(now time.Time) {
+	for jti, session := range s.sessions {
+		if !session.ExpiresAt.After(now) {
+			delete(s.sessions, jti)
+		}
+	}
+}
+
+func (s *RefreshSessionStore) evictEarliestLocalSessionLocked() {
+	var earliestJTI string
+	var earliestExpiry time.Time
+	for jti, session := range s.sessions {
+		if earliestJTI == "" || session.ExpiresAt.Before(earliestExpiry) {
+			earliestJTI = jti
+			earliestExpiry = session.ExpiresAt
+		}
+	}
+	if earliestJTI != "" {
+		delete(s.sessions, earliestJTI)
+	}
 }

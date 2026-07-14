@@ -21,6 +21,14 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const initialAuthenticationState = useRef(isAuthenticated);
 
   useEffect(() => {
+    // StrictMode replays this effect; the second setup re-enables the active mount.
+    sessionRestoreCancelled.current = false;
+    return () => {
+      sessionRestoreCancelled.current = true;
+    };
+  }, []);
+
+  useEffect(() => {
     // 会话恢复只属于应用初始化。主动退出后的未认证状态不能再次触发 refresh。
     if (!sessionRestoreStarted.current) {
       sessionRestoreStarted.current = true;

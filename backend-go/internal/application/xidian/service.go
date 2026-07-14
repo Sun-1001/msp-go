@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"sync"
 	"time"
 
@@ -342,9 +343,10 @@ func copyPayload(payload map[string]any) map[string]any {
 
 // MemoryChallengeStore stores challenges in process memory.
 type MemoryChallengeStore struct {
-	mu    sync.Mutex
-	items map[string]memoryChallenge
-	now   func() time.Time
+	mu      sync.Mutex
+	items   map[string]memoryChallenge
+	now     func() time.Time
+	maxSize int
 }
 
 type memoryChallenge struct {
@@ -352,19 +354,38 @@ type memoryChallenge struct {
 	expiresAt time.Time
 }
 
-// NewMemoryChallengeStore creates an in-process challenge store.
-func NewMemoryChallengeStore() *MemoryChallengeStore {
+// NewMemoryChallengeStore creates a bounded in-process challenge store.
+func NewMemoryChallengeStore(maxSizes ...int) *MemoryChallengeStore {
+	maxSize := 500
+	if len(maxSizes) > 0 && maxSizes[0] > 0 {
+		maxSize = maxSizes[0]
+	}
 	return &MemoryChallengeStore{
-		items: map[string]memoryChallenge{},
-		now:   func() time.Time { return time.Now().UTC() },
+		items:   map[string]memoryChallenge{},
+		now:     func() time.Time { return time.Now().UTC() },
+		maxSize: maxSize,
 	}
 }
 
 // Set stores one challenge.
 func (s *MemoryChallengeStore) Set(_ context.Context, id string, state ChallengeState, ttl time.Duration) error {
+	id = strings.TrimSpace(id)
+	if id == "" {
+		return errors.New("xidian challenge ID is empty")
+	}
+	if ttl <= 0 {
+		return errors.New("xidian challenge TTL must be greater than 0")
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.items[id] = memoryChallenge{state: state, expiresAt: s.now().Add(ttl)}
+	now := s.now()
+	if _, exists := s.items[id]; !exists && len(s.items) >= s.maxSize {
+		s.pruneExpiredLocked(now)
+		if len(s.items) >= s.maxSize {
+			s.evictEarliestLocked()
+		}
+	}
+	s.items[id] = memoryChallenge{state: state, expiresAt: now.Add(ttl)}
 	return nil
 }
 
@@ -376,7 +397,7 @@ func (s *MemoryChallengeStore) Get(_ context.Context, id string) (ChallengeState
 	if !ok {
 		return ChallengeState{}, false, nil
 	}
-	if item.expiresAt.Before(s.now()) {
+	if !item.expiresAt.After(s.now()) {
 		delete(s.items, id)
 		return ChallengeState{}, false, nil
 	}
@@ -389,6 +410,28 @@ func (s *MemoryChallengeStore) Delete(_ context.Context, id string) error {
 	defer s.mu.Unlock()
 	delete(s.items, id)
 	return nil
+}
+
+func (s *MemoryChallengeStore) pruneExpiredLocked(now time.Time) {
+	for id, item := range s.items {
+		if !item.expiresAt.After(now) {
+			delete(s.items, id)
+		}
+	}
+}
+
+func (s *MemoryChallengeStore) evictEarliestLocked() {
+	var earliestID string
+	var earliestExpiry time.Time
+	for id, item := range s.items {
+		if earliestID == "" || item.expiresAt.Before(earliestExpiry) {
+			earliestID = id
+			earliestExpiry = item.expiresAt
+		}
+	}
+	if earliestID != "" {
+		delete(s.items, earliestID)
+	}
 }
 
 func (e ServiceError) Error() string {

@@ -73,6 +73,48 @@ func TestSaveResourceFileRejectsBinaryAfterTextPrefix(t *testing.T) {
 	}
 }
 
+func TestTextResourceReaderValidatesUTF8AcrossReadBoundaries(t *testing.T) {
+	content := []byte("逐字节读取高等数学")
+	reader := &textResourceReader{reader: &singleByteReader{data: content}}
+	got, err := io.ReadAll(reader)
+	if err != nil {
+		t.Fatalf("ReadAll(valid UTF-8) error = %v", err)
+	}
+	if !bytes.Equal(got, content) {
+		t.Fatalf("ReadAll(valid UTF-8) = %q", got)
+	}
+
+	invalid := &textResourceReader{reader: &singleByteReader{data: []byte{'a', 0xe4, 0xb8}}}
+	if _, err := io.ReadAll(invalid); !errors.Is(err, ErrInvalidContentType) {
+		t.Fatalf("ReadAll(truncated UTF-8) error = %v", err)
+	}
+
+	malformed := &textResourceReader{reader: &singleByteReader{data: []byte{'a', 0xe4, 0x20, 0xad}}}
+	if _, err := io.ReadAll(malformed); !errors.Is(err, ErrInvalidContentType) {
+		t.Fatalf("ReadAll(malformed UTF-8) error = %v", err)
+	}
+}
+
+func BenchmarkTextResourceReader(b *testing.B) {
+	content := bytes.Repeat([]byte("高等数学 calculus\n"), 4096)
+	buffer := make([]byte, 32*1024)
+	b.SetBytes(int64(len(content)))
+	b.ReportAllocs()
+	b.ResetTimer()
+	for range b.N {
+		reader := textResourceReader{reader: bytes.NewReader(content)}
+		for {
+			_, err := reader.Read(buffer)
+			if err == io.EOF {
+				break
+			}
+			if err != nil {
+				b.Fatal(err)
+			}
+		}
+	}
+}
+
 func TestSaveResourceFilePreservesPrefixBytesAfterValidation(t *testing.T) {
 	storage := &fakeStorage{object: StoredObject{URL: "/uploads/documents/id-1.pdf", ContentType: "application/pdf"}}
 	service := newTestService(storage, "id-1")
@@ -181,6 +223,23 @@ type fakeStorage struct {
 	data        []byte
 	key         string
 	contentType string
+}
+
+type singleByteReader struct {
+	data   []byte
+	offset int
+}
+
+func (r *singleByteReader) Read(target []byte) (int, error) {
+	if r.offset >= len(r.data) {
+		return 0, io.EOF
+	}
+	if len(target) == 0 {
+		return 0, nil
+	}
+	target[0] = r.data[r.offset]
+	r.offset++
+	return 1, nil
 }
 
 func (s *fakeStorage) UploadStream(_ context.Context, reader io.Reader, key string, contentType string, _ int64) (StoredObject, error) {

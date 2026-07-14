@@ -114,4 +114,21 @@ describe('AuthProvider session restoration', () => {
     expect(store.getState().auth.token).toBe('new-login-token');
     expect(store.getState().auth.user?.id).toBe('user-2');
   });
+
+  it('ignores a late initial refresh after the provider unmounts', async () => {
+    const refreshRequest = createDeferred<string | null>();
+    authMocks.refreshAccessToken.mockReturnValue(refreshRequest.promise);
+    const store = createAuthStore();
+    const view = renderProvider(store);
+    await waitFor(() => expect(authMocks.refreshAccessToken).toHaveBeenCalledOnce());
+
+    view.unmount();
+    await act(async () => {
+      refreshRequest.resolve('late-token');
+      await refreshRequest.promise;
+    });
+
+    expect(store.getState().auth.token).toBeNull();
+    expect(authMocks.getCurrentUser).not.toHaveBeenCalled();
+  });
 });

@@ -260,6 +260,41 @@ func newTestService(repo Repository, portal PortalClient, cipher Cipher) *Servic
 	return service
 }
 
+func TestMemoryChallengeStoreBoundsExpiryAndInputs(t *testing.T) {
+	now := time.Date(2026, 7, 14, 3, 0, 0, 0, time.UTC)
+	store := NewMemoryChallengeStore(2)
+	store.now = func() time.Time { return now }
+	ctx := context.Background()
+
+	if err := store.Set(ctx, "", ChallengeState{}, time.Minute); err == nil {
+		t.Fatal("Set(empty ID) error = nil")
+	}
+	if err := store.Set(ctx, "invalid-ttl", ChallengeState{}, 0); err == nil {
+		t.Fatal("Set(invalid TTL) error = nil")
+	}
+	if err := store.Set(ctx, "first", ChallengeState{PasswordSalt: "first"}, time.Minute); err != nil {
+		t.Fatal(err)
+	}
+	now = now.Add(time.Second)
+	if err := store.Set(ctx, "second", ChallengeState{PasswordSalt: "second"}, 2*time.Minute); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Set(ctx, "third", ChallengeState{PasswordSalt: "third"}, 3*time.Minute); err != nil {
+		t.Fatal(err)
+	}
+	if len(store.items) != 2 {
+		t.Fatalf("challenge count = %d, want 2", len(store.items))
+	}
+	if _, found, err := store.Get(ctx, "first"); err != nil || found {
+		t.Fatalf("evicted Get() found = %t, error = %v", found, err)
+	}
+
+	now = now.Add(2 * time.Minute)
+	if _, found, err := store.Get(ctx, "second"); err != nil || found {
+		t.Fatalf("expired Get() found = %t, error = %v", found, err)
+	}
+}
+
 type fakeRepo struct {
 	account        Account
 	accountFound   bool

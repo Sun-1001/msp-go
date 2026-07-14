@@ -166,8 +166,9 @@ export const SessionChatPage: React.FC = () => {
 
   // 清理 SSE 连接和 rAF
   useEffect(() => {
-    const controller = sseControllerRef.current;
     return () => {
+      const controller = sseControllerRef.current;
+      sseControllerRef.current = null;
       controller?.close();
       if (scrollRafRef.current !== null) {
         cancelAnimationFrame(scrollRafRef.current);

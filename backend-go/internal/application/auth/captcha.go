@@ -19,6 +19,7 @@ import (
 
 	goredis "github.com/redis/go-redis/v9"
 
+	"mathstudy/backend-go/internal/platform/ratelimit"
 	"mathstudy/backend-go/internal/platform/securerand"
 )
 
@@ -222,19 +223,9 @@ func (m *SliderCaptchaManager) IssueWindow() time.Duration {
 func (m *SliderCaptchaManager) allowIssue(ctx context.Context, clientKey string) (bool, error) {
 	if m.client != nil {
 		key := captchaIssuePrefix + clientKey
-		count, err := m.client.Incr(ctx, key).Result()
+		count, err := ratelimit.IncrementWithExpiry(ctx, m.client, key, m.config.IssueWindow)
 		if err == nil {
-			if count == 1 {
-				if expireErr := m.client.Expire(ctx, key, m.config.IssueWindow).Err(); expireErr != nil {
-					_ = m.client.Del(ctx, key).Err()
-					if m.config.Strict {
-						return false, fmt.Errorf("expire captcha rate limit in redis: %w", expireErr)
-					}
-					m.logger.Warn("redis captcha rate limit expiry failed, using local fallback", "error", expireErr)
-					return m.allowIssueLocal(clientKey), nil
-				}
-			}
-			return int(count) <= m.config.IssueLimit, nil
+			return count <= int64(m.config.IssueLimit), nil
 		}
 		if m.config.Strict {
 			return false, fmt.Errorf("rate limit captcha in redis: %w", err)
@@ -438,8 +429,8 @@ func paintCaptchaScene(target *image.RGBA) error {
 	if err != nil {
 		return err
 	}
-	start.R += uint8(shift / 3)
-	end.B += uint8(shift / 2)
+	start.R = addColorShift(start.R, shift, 3)
+	end.B = addColorShift(end.B, shift, 2)
 	for y := 0; y < captchaHeight; y++ {
 		for x := 0; x < captchaWidth; x++ {
 			ratio := float64(x+y) / float64(captchaWidth+captchaHeight)
@@ -539,8 +530,13 @@ func secureInt(max int) (int, error) {
 	if max <= 0 {
 		return 0, errors.New("secure integer maximum must be greater than 0")
 	}
+	// #nosec G115 -- max is positive after the validation above.
+	maxUint := uint64(max)
 	limit := uint64(math.MaxUint32) + 1
-	limit -= limit % uint64(max)
+	if maxUint > limit {
+		return 0, errors.New("secure integer maximum exceeds the 32-bit sampling range")
+	}
+	limit -= limit % maxUint
 	for {
 		data, err := securerand.Bytes(4)
 		if err != nil {
@@ -548,9 +544,22 @@ func secureInt(max int) (int, error) {
 		}
 		value := uint64(binary.BigEndian.Uint32(data))
 		if value < limit {
-			return int(value % uint64(max)), nil
+			// #nosec G115 -- modulo maxUint is strictly less than the positive int max.
+			return int(value % maxUint), nil
 		}
 	}
+}
+
+func addColorShift(channel uint8, shift, divisor int) uint8 {
+	if shift <= 0 || divisor <= 0 {
+		return channel
+	}
+	delta := shift / divisor
+	if delta > int(math.MaxUint8-channel) {
+		return math.MaxUint8
+	}
+	// #nosec G115 -- delta is non-negative and bounded by the remaining channel range.
+	return channel + uint8(delta)
 }
 
 func mixColor(left, right color.RGBA, ratio float64) color.RGBA {

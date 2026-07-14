@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useCallback, useState, useEffect } from 'react';
 import { AdminLayout } from '@/modules/admin/components/AdminLayout';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '../../components/ui/Card';
 import { Button } from '../../components/ui/Button';
@@ -32,6 +32,7 @@ import {
 } from '@/modules/admin/services/systemSettingService';
 import { getApiErrorMessage } from '../../libs/http/apiClient';
 import { base64ToBlob, downloadBlob } from '@/libs/utils/download';
+import { useSerialPolling } from '@/hooks/useSerialPolling';
 
 export const SystemSettingsPage: React.FC = () => {
   return (
@@ -711,25 +712,26 @@ const DatabaseMonitorCard: React.FC = () => {
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [error, setError] = useState('');
 
-  const loadMonitor = async (showRefreshing = false) => {
+  const loadMonitor = useCallback(async (showRefreshing = false, signal?: AbortSignal) => {
     if (showRefreshing) setIsRefreshing(true);
     try {
-      const data = await systemSettingService.getDatabaseMonitor();
+      const data = await systemSettingService.getDatabaseMonitor(signal);
+      if (signal?.aborted) return;
       setMonitorData(data);
       setError('');
     } catch {
+      if (signal?.aborted) return;
       setError('加载监控数据失败');
     } finally {
-      setIsLoading(false);
-      setIsRefreshing(false);
+      if (!signal?.aborted) {
+        setIsLoading(false);
+        setIsRefreshing(false);
+      }
     }
-  };
-
-  useEffect(() => {
-    loadMonitor();
-    const interval = setInterval(() => loadMonitor(), 30000);
-    return () => clearInterval(interval);
   }, []);
+
+  const pollMonitor = useCallback((signal: AbortSignal) => loadMonitor(false, signal), [loadMonitor]);
+  useSerialPolling(pollMonitor, 30_000);
 
   const healthColor = {
     healthy: 'text-emerald-600 dark:text-emerald-400',

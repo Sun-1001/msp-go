@@ -8,20 +8,23 @@ import (
 	"net"
 	"net/http"
 	"strings"
-	"sync"
 	"time"
+
+	goredis "github.com/redis/go-redis/v9"
 
 	authapp "mathstudy/backend-go/internal/application/auth"
 	uploadapp "mathstudy/backend-go/internal/application/upload"
 	"mathstudy/backend-go/internal/platform/httpauth"
 	"mathstudy/backend-go/internal/platform/httpjson"
+	"mathstudy/backend-go/internal/platform/ratelimit"
 	"mathstudy/backend-go/internal/platform/redact"
 )
 
 const (
-	multipartMemory       = 32 << 20
-	uploadRateLimitWindow = time.Minute
-	uploadRateLimitMax    = 60
+	multipartMemory        = 32 << 20
+	uploadRateLimitWindow  = time.Minute
+	uploadRateLimitMax     = 60
+	uploadRateLimitMaxKeys = 500
 )
 
 // Service is the upload application surface used by HTTP handlers.
@@ -40,11 +43,33 @@ type Handler struct {
 	service Service
 	auth    Authenticator
 	logger  *slog.Logger
-	limiter *uploadRateLimiter
+	limiter *ratelimit.Limiter
+}
+
+// Option customizes the upload HTTP handler.
+type Option func(*Handler) error
+
+// WithRedisRateLimit shares upload limits across API instances.
+func WithRedisRateLimit(client *goredis.Client, maxLocalKeys int) Option {
+	return func(handler *Handler) error {
+		limiter, err := ratelimit.New(
+			client,
+			"msp:upload",
+			uploadRateLimitMax,
+			uploadRateLimitWindow,
+			maxLocalKeys,
+			handler.logger,
+		)
+		if err != nil {
+			return err
+		}
+		handler.limiter = limiter
+		return nil
+	}
 }
 
 // NewHandler creates an upload HTTP handler.
-func NewHandler(logger *slog.Logger, service Service, auth Authenticator) (*Handler, error) {
+func NewHandler(logger *slog.Logger, service Service, auth Authenticator, options ...Option) (*Handler, error) {
 	if service == nil {
 		return nil, errors.New("upload service is nil")
 	}
@@ -54,7 +79,16 @@ func NewHandler(logger *slog.Logger, service Service, auth Authenticator) (*Hand
 	if logger == nil {
 		logger = slog.Default()
 	}
-	return &Handler{service: service, auth: auth, logger: logger, limiter: newUploadRateLimiter(uploadRateLimitMax, uploadRateLimitWindow)}, nil
+	handler := &Handler{service: service, auth: auth, logger: logger, limiter: newUploadRateLimiter(uploadRateLimitMax, uploadRateLimitWindow)}
+	for _, option := range options {
+		if option == nil {
+			continue
+		}
+		if err := option(handler); err != nil {
+			return nil, err
+		}
+	}
+	return handler, nil
 }
 
 // Register attaches upload routes under prefix, for example /api/v1/upload.
@@ -129,7 +163,7 @@ func (h *Handler) requireTeacher(w http.ResponseWriter, r *http.Request) (authap
 }
 
 func (h *Handler) allowUpload(w http.ResponseWriter, r *http.Request, principal authapp.Principal) bool {
-	if h.limiter == nil || h.limiter.Allow(uploadRateKey(r, principal)) {
+	if h.limiter == nil || h.limiter.Allow(r.Context(), uploadRateKey(r, principal)) {
 		return true
 	}
 	writeUploadError(w, http.StatusTooManyRequests, "RATE_LIMITED", "上传过于频繁，请稍后重试")
@@ -166,60 +200,16 @@ func uploadRateKey(r *http.Request, principal authapp.Principal) string {
 	return "ip:" + host
 }
 
-type uploadRateLimiter struct {
-	mu     sync.Mutex
-	limit  int
-	window time.Duration
-	now    func() time.Time
-	hits   map[string][]time.Time
-}
-
-func newUploadRateLimiter(limit int, window time.Duration) *uploadRateLimiter {
+func newUploadRateLimiter(limit int, window time.Duration) *ratelimit.Limiter {
 	if limit <= 0 {
 		limit = uploadRateLimitMax
 	}
 	if window <= 0 {
 		window = uploadRateLimitWindow
 	}
-	return &uploadRateLimiter{
-		limit:  limit,
-		window: window,
-		now:    func() time.Time { return time.Now().UTC() },
-		hits:   map[string][]time.Time{},
+	limiter, err := ratelimit.New(nil, "msp:upload", limit, window, uploadRateLimitMaxKeys, nil)
+	if err != nil {
+		panic(err)
 	}
-}
-
-func (l *uploadRateLimiter) Allow(key string) bool {
-	if l == nil {
-		return true
-	}
-	l.mu.Lock()
-	defer l.mu.Unlock()
-
-	if l.limit <= 0 {
-		l.limit = uploadRateLimitMax
-	}
-	if l.window <= 0 {
-		l.window = uploadRateLimitWindow
-	}
-	if l.now == nil {
-		l.now = func() time.Time { return time.Now().UTC() }
-	}
-	if l.hits == nil {
-		l.hits = map[string][]time.Time{}
-	}
-	now := l.now()
-	cutoff := now.Add(-l.window)
-	recent := l.hits[key][:0]
-	for _, hit := range l.hits[key] {
-		if hit.After(cutoff) {
-			recent = append(recent, hit)
-		}
-	}
-	if len(recent) >= l.limit {
-		l.hits[key] = recent
-		return false
-	}
-	l.hits[key] = append(recent, now)
-	return true
+	return limiter
 }

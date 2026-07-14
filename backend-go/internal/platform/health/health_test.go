@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"testing"
+	"time"
 )
 
 type pingerFunc func(context.Context) error
@@ -38,5 +39,42 @@ func TestCheckerSimple(t *testing.T) {
 
 	if got["status"] != "healthy" || got["version"] != "0.1.0" {
 		t.Fatalf("Simple() = %#v", got)
+	}
+}
+
+func TestCheckerDetailedChecksDependenciesConcurrently(t *testing.T) {
+	started := make(chan struct{}, 2)
+	release := make(chan struct{})
+	pinger := pingerFunc(func(ctx context.Context) error {
+		started <- struct{}{}
+		select {
+		case <-release:
+			return nil
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	})
+	checker := NewChecker("test", pinger, pinger)
+	done := make(chan DetailedStatus, 1)
+	go func() {
+		done <- checker.Detailed(context.Background())
+	}()
+
+	for range 2 {
+		select {
+		case <-started:
+		case <-time.After(500 * time.Millisecond):
+			close(release)
+			t.Fatal("dependency checks did not start concurrently")
+		}
+	}
+	close(release)
+	select {
+	case status := <-done:
+		if status.Status != "healthy" {
+			t.Fatalf("Status = %q", status.Status)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("Detailed() did not return after dependency checks completed")
 	}
 }

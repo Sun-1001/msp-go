@@ -1,4 +1,4 @@
-import { useCallback, useRef } from 'react';
+import { useCallback, useEffect, useRef } from 'react';
 import { useAppDispatch } from '@/store';
 import {
   addMessage,
@@ -58,6 +58,11 @@ export const useChatStream = ({
       contentBufferRef.current = '';
     }
   }, [dispatch, cancelPendingFlush]);
+
+  useEffect(() => () => {
+    flushBuffer();
+  }, [flushBuffer]);
+
   // 发送消息
   const handleSendMessage = useCallback(
     async (messageContent: string) => {

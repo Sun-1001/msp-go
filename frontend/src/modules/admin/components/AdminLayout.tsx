@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useCallback, useState } from 'react';
 import { useNavigate, useLocation } from 'react-router-dom';
 import { useAppSelector } from '@/store';
 import { selectCurrentUser } from '@/modules/auth/store/authSlice';
@@ -21,6 +21,7 @@ import {
 } from 'lucide-react';
 import { ThemeToggle } from '@/components/ui/ThemeToggle';
 import { passwordResetService } from '@/modules/password-reset/services/passwordResetService';
+import { useSerialPolling } from '@/hooks/useSerialPolling';
 
 interface AdminLayoutProps {
   children: React.ReactNode;
@@ -35,20 +36,17 @@ export const AdminLayout: React.FC<AdminLayoutProps> = ({ children, className = 
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const [inboxPendingCount, setInboxPendingCount] = useState(0);
 
-  // 定时获取信箱待处理数量
-  useEffect(() => {
-    const fetchPendingCount = async () => {
-      try {
-        const res = await passwordResetService.getPendingCount();
+  const fetchPendingCount = useCallback(async (signal: AbortSignal) => {
+    try {
+      const res = await passwordResetService.getPendingCount(signal);
+      if (!signal.aborted) {
         setInboxPendingCount(res.pending_count);
-      } catch {
-        // 静默处理
       }
-    };
-    fetchPendingCount();
-    const interval = setInterval(fetchPendingCount, 60_000);
-    return () => clearInterval(interval);
+    } catch {
+      // 静默处理
+    }
   }, []);
+  useSerialPolling(fetchPendingCount, 60_000);
 
   const menuItems = [
     {

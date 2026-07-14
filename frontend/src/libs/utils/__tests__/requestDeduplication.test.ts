@@ -1,9 +1,13 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { afterEach, describe, it, expect, vi, beforeEach } from 'vitest';
 import { requestDeduplication, createDedupedRequest } from '@/libs/utils/requestDeduplication';
 
 // 每个测试前清空缓存，避免测试间相互影响
 beforeEach(() => {
   requestDeduplication.clear();
+});
+
+afterEach(() => {
+  vi.useRealTimers();
 });
 
 describe('requestDeduplication.dedupe', () => {
@@ -82,6 +86,30 @@ describe('requestDeduplication.dedupe', () => {
     // 失败后缓存应已清除，size 应为 0
     expect(requestDeduplication.size).toBe(0);
   });
+
+  it('过期旧请求完成时不会删除同键的新请求', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-07-14T00:00:00Z'));
+    let resolveOld!: (value: string) => void;
+    let resolveCurrent!: (value: string) => void;
+    const oldRequest = new Promise<string>((resolve) => { resolveOld = resolve; });
+    const currentRequest = new Promise<string>((resolve) => { resolveCurrent = resolve; });
+    const oldResult = requestDeduplication.dedupe('/api/slow', () => oldRequest);
+
+    vi.setSystemTime(new Date('2026-07-14T00:00:06Z'));
+    const currentFn = vi.fn(() => currentRequest);
+    const currentResult = requestDeduplication.dedupe('/api/slow', currentFn);
+    resolveOld('old');
+    await expect(oldResult).resolves.toBe('old');
+
+    const duplicateFn = vi.fn(() => Promise.resolve('duplicate'));
+    const duplicateResult = requestDeduplication.dedupe('/api/slow', duplicateFn);
+    expect(currentFn).toHaveBeenCalledOnce();
+    expect(duplicateFn).not.toHaveBeenCalled();
+
+    resolveCurrent('current');
+    await expect(Promise.all([currentResult, duplicateResult])).resolves.toEqual(['current', 'current']);
+  });
 });
 
 describe('requestDeduplication.clear', () => {
@@ -122,6 +150,16 @@ describe('requestDeduplication.clearByUrl', () => {
     // 清理
     resolve1('done');
     resolve2('done');
+  });
+
+  it('不会清除仅 URL 前缀相同的请求', () => {
+    const pending = new Promise<string>(() => undefined);
+    void requestDeduplication.dedupe('/api/user', () => pending);
+    void requestDeduplication.dedupe('/api/users', () => pending);
+
+    requestDeduplication.clearByUrl('/api/user');
+
+    expect(requestDeduplication.size).toBe(1);
   });
 });
 

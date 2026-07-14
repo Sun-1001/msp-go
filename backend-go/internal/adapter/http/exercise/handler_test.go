@@ -351,6 +351,9 @@ func TestNewHandlerRejectsMissingDependencies(t *testing.T) {
 	if _, err := NewHandler(nil, &fakeExerciseService{}, nil); err == nil {
 		t.Fatal("NewHandler(nil auth) error = nil, want error")
 	}
+	if _, err := NewHandler(nil, &fakeExerciseService{}, &fakeAuthenticator{}, WithRedisRateLimit(nil, 0)); err == nil {
+		t.Fatal("NewHandler(invalid rate limit) error = nil, want error")
+	}
 }
 
 func newTestHandler(t *testing.T, service Service, auth Authenticator) *Handler {

@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"image/png"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -172,6 +173,33 @@ func TestSliderCaptchaBoundsLocalIssueClients(t *testing.T) {
 	}
 	if len(manager.issues) != 1 {
 		t.Fatalf("local issue client count = %d, want 1", len(manager.issues))
+	}
+}
+
+func TestSecureIntAndColorShiftBounds(t *testing.T) {
+	if _, err := secureInt(0); err == nil {
+		t.Fatal("secureInt(0) error = nil")
+	}
+	if strconv.IntSize == 64 {
+		tooLarge, err := strconv.Atoi("4294967297")
+		if err != nil {
+			t.Fatalf("parse oversized secureInt bound: %v", err)
+		}
+		if _, err := secureInt(tooLarge); err == nil {
+			t.Fatal("secureInt() accepted a bound larger than its sampling range")
+		}
+	}
+	if got := addColorShift(24, 69, 3); got != 47 {
+		t.Fatalf("addColorShift() = %d, want 47", got)
+	}
+	if got := addColorShift(250, 69, 2); got != 255 {
+		t.Fatalf("saturated addColorShift() = %d, want 255", got)
+	}
+	if got := addColorShift(24, -1, 3); got != 24 {
+		t.Fatalf("negative addColorShift() = %d, want 24", got)
+	}
+	if got := addColorShift(24, 1, 0); got != 24 {
+		t.Fatalf("zero-divisor addColorShift() = %d, want 24", got)
 	}
 }
 
