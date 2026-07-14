@@ -79,8 +79,13 @@ type Config struct {
 	AdminEmail    string
 	AdminPassword string
 
-	LoginMaxAttempts int
-	LoginLockout     time.Duration
+	LoginMaxAttempts        int
+	LoginLockout            time.Duration
+	LoginCaptchaTTL         time.Duration
+	LoginCaptchaProofTTL    time.Duration
+	LoginCaptchaTolerance   int
+	LoginCaptchaIssueLimit  int
+	LoginCaptchaIssueWindow time.Duration
 
 	LogArchiveAfterDays int
 	LogDeleteAfterDays  int
@@ -188,6 +193,11 @@ func Load() (Config, error) {
 		AdminPassword:             envString("ADMIN_PASSWORD", defaultAdminPassword),
 		LoginMaxAttempts:          envInt("LOGIN_MAX_ATTEMPTS", 5),
 		LoginLockout:              time.Duration(envInt("LOGIN_LOCKOUT_MINUTES", 15)) * time.Minute,
+		LoginCaptchaTTL:           envSeconds("LOGIN_CAPTCHA_TTL_SECONDS", 2*time.Minute),
+		LoginCaptchaProofTTL:      envSeconds("LOGIN_CAPTCHA_PROOF_TTL_SECONDS", 2*time.Minute),
+		LoginCaptchaTolerance:     envInt("LOGIN_CAPTCHA_TOLERANCE_PIXELS", 6),
+		LoginCaptchaIssueLimit:    envInt("LOGIN_CAPTCHA_ISSUE_LIMIT", 10),
+		LoginCaptchaIssueWindow:   envSeconds("LOGIN_CAPTCHA_ISSUE_WINDOW_SECONDS", time.Minute),
 		LogArchiveAfterDays:       envInt("LOG_ARCHIVE_AFTER_DAYS", 30),
 		LogDeleteAfterDays:        envInt("LOG_DELETE_AFTER_DAYS", 90),
 		LogCleanupBatchSize:       envInt("LOG_CLEANUP_BATCH_SIZE", 500),
@@ -284,6 +294,21 @@ func Load() (Config, error) {
 	}
 	if cfg.LoginLockout <= 0 {
 		return Config{}, errors.New("LOGIN_LOCKOUT_MINUTES must be greater than 0")
+	}
+	if cfg.LoginCaptchaTTL <= 0 {
+		return Config{}, errors.New("LOGIN_CAPTCHA_TTL_SECONDS must be greater than 0")
+	}
+	if cfg.LoginCaptchaProofTTL <= 0 {
+		return Config{}, errors.New("LOGIN_CAPTCHA_PROOF_TTL_SECONDS must be greater than 0")
+	}
+	if cfg.LoginCaptchaTolerance <= 0 || cfg.LoginCaptchaTolerance >= 48 {
+		return Config{}, errors.New("LOGIN_CAPTCHA_TOLERANCE_PIXELS must be between 1 and 47")
+	}
+	if cfg.LoginCaptchaIssueLimit <= 0 {
+		return Config{}, errors.New("LOGIN_CAPTCHA_ISSUE_LIMIT must be greater than 0")
+	}
+	if cfg.LoginCaptchaIssueWindow <= 0 {
+		return Config{}, errors.New("LOGIN_CAPTCHA_ISSUE_WINDOW_SECONDS must be greater than 0")
 	}
 	if cfg.LogArchiveAfterDays <= 0 {
 		return Config{}, errors.New("LOG_ARCHIVE_AFTER_DAYS must be greater than 0")

@@ -32,6 +32,11 @@ func TestLoadUsesEnvironmentAndBuildsAddresses(t *testing.T) {
 	t.Setenv("ADMIN_PASSWORD", "Root1!")
 	t.Setenv("LOGIN_MAX_ATTEMPTS", "3")
 	t.Setenv("LOGIN_LOCKOUT_MINUTES", "9")
+	t.Setenv("LOGIN_CAPTCHA_TTL_SECONDS", "90")
+	t.Setenv("LOGIN_CAPTCHA_PROOF_TTL_SECONDS", "75")
+	t.Setenv("LOGIN_CAPTCHA_TOLERANCE_PIXELS", "7")
+	t.Setenv("LOGIN_CAPTCHA_ISSUE_LIMIT", "8")
+	t.Setenv("LOGIN_CAPTCHA_ISSUE_WINDOW_SECONDS", "45")
 	t.Setenv("LOG_ARCHIVE_AFTER_DAYS", "14")
 	t.Setenv("LOG_DELETE_AFTER_DAYS", "60")
 	t.Setenv("LOG_CLEANUP_BATCH_SIZE", "250")
@@ -85,6 +90,9 @@ func TestLoadUsesEnvironmentAndBuildsAddresses(t *testing.T) {
 	}
 	if cfg.LoginMaxAttempts != 3 || cfg.LoginLockout != 9*time.Minute {
 		t.Fatalf("login lockout config = %d/%s", cfg.LoginMaxAttempts, cfg.LoginLockout)
+	}
+	if cfg.LoginCaptchaTTL != 90*time.Second || cfg.LoginCaptchaProofTTL != 75*time.Second || cfg.LoginCaptchaTolerance != 7 || cfg.LoginCaptchaIssueLimit != 8 || cfg.LoginCaptchaIssueWindow != 45*time.Second {
+		t.Fatalf("login captcha config = %s/%s/%d/%d/%s", cfg.LoginCaptchaTTL, cfg.LoginCaptchaProofTTL, cfg.LoginCaptchaTolerance, cfg.LoginCaptchaIssueLimit, cfg.LoginCaptchaIssueWindow)
 	}
 	if cfg.LogArchiveAfterDays != 14 || cfg.LogDeleteAfterDays != 60 || cfg.LogCleanupBatchSize != 250 || cfg.LogMaxCount != 5000 {
 		t.Fatalf("log cleanup config = %d/%d/%d/%d", cfg.LogArchiveAfterDays, cfg.LogDeleteAfterDays, cfg.LogCleanupBatchSize, cfg.LogMaxCount)
@@ -212,6 +220,13 @@ func TestLoadRejectsInvalidJWTAlgorithm(t *testing.T) {
 
 	if _, err := Load(); err == nil {
 		t.Fatal("Load() error = nil, want invalid JWT algorithm error")
+	}
+}
+
+func TestLoadRejectsInvalidLoginCaptchaConfig(t *testing.T) {
+	t.Setenv("LOGIN_CAPTCHA_TOLERANCE_PIXELS", "48")
+	if _, err := Load(); err == nil {
+		t.Fatal("Load() error = nil, want invalid captcha tolerance error")
 	}
 }
 

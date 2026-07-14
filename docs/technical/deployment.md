@@ -61,9 +61,20 @@ docker compose logs --tail 200 backend
 1. `/health` 返回成功，数据库和 Redis 容器健康。
 2. 前端页面可以加载并调用 `/api/v1`。
 3. 登录、刷新令牌和角色权限符合预期。
+
 4. 数据库迁移首次执行有新增版本，重复执行无待应用版本。
 5. 文件上传、对象存储、外部 AI provider 和西电教务按部署配置进行连通性验证。
 6. 纯图片答案和 AI 自主出题失败仍遵守不落库契约。
+
+登录安全验证使用 Redis 保存短时一次性票据。生产环境必须保持 Redis 可用，并可通过以下环境变量调整策略：
+
+- `LOGIN_CAPTCHA_TTL_SECONDS`：拼图挑战有效期，默认 120 秒。
+- `LOGIN_CAPTCHA_PROOF_TTL_SECONDS`：验证通过后登录票据有效期，默认 120 秒。
+- `LOGIN_CAPTCHA_TOLERANCE_PIXELS`：拼图位置容差，默认 6 像素。
+- `LOGIN_CAPTCHA_ISSUE_LIMIT`：单客户端在窗口内最多签发数量，默认 10。
+- `LOGIN_CAPTCHA_ISSUE_WINDOW_SECONDS`：签发限频窗口，默认 60 秒。
+
+反向代理需要覆盖写入 `X-Real-IP`；仓库内 Nginx 配置已包含该请求头。验证码图片和校验响应均禁止缓存。
 
 尚未完成的运行时验收范围记录在 [项目待办](../TODO.md)。
 
@@ -74,4 +85,3 @@ docker compose logs --tail 200 backend
 - 数据迁移不提供自动 down migration；失败时恢复备份，或发布经过评审的补偿性 forward migration。
 - 应用镜像回滚前必须确认旧版本能够读取当前数据库结构。
 - 回滚后重新执行健康检查、认证和核心业务 smoke。
-

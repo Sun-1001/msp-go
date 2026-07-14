@@ -60,6 +60,7 @@
 
 @layer base {
   html {
+    position: relative;
     scrollbar-gutter: stable both-edges;
     scroll-behavior: smooth;
   }
@@ -78,6 +79,25 @@
 }
 
 @layer utilities {
+  .welcome-page-layout > main {
+    overflow-x: clip;
+  }
+
+  .welcome-title-accent {
+    color: transparent;
+    background-image: linear-gradient(105deg, #0284c7 0%, #8b5cf6 42%, #38bdf8 68%, #0369a1 100%);
+    background-position: 0% 50%;
+    background-size: 220% 100%;
+    background-clip: text;
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    animation: welcome-title-sheen 6.5s ease-in-out 1s infinite;
+  }
+
+  .dark .welcome-title-accent {
+    background-image: linear-gradient(105deg, #38bdf8 0%, #c4b5fd 42%, #7dd3fc 68%, #a78bfa 100%);
+  }
+
   .scroll-optimized {
     -webkit-overflow-scrolling: touch;
     overscroll-behavior: contain;
@@ -90,9 +110,26 @@
   }
 }
 
+@keyframes welcome-title-sheen {
+  0%, 18% {
+    background-position: 0% 50%;
+  }
+  52%, 68% {
+    background-position: 100% 50%;
+  }
+  100% {
+    background-position: 0% 50%;
+  }
+}
+
 @media (prefers-reduced-motion: reduce) {
   html {
     scroll-behavior: auto;
+  }
+
+  .welcome-title-accent {
+    animation: none;
+    background-position: 50% 50%;
   }
 }
 

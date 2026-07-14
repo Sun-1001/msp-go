@@ -5,7 +5,9 @@ import (
 	"crypto/subtle"
 	"errors"
 	"log/slog"
+	"net"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
@@ -40,9 +42,19 @@ type Service interface {
 	PasswordResetStatus(context.Context, string, string) (authapp.PasswordResetStatus, error)
 }
 
+// CaptchaService is the pre-authentication human verification boundary.
+type CaptchaService interface {
+	NewChallenge(context.Context, string) (authapp.SliderCaptchaChallenge, error)
+	Verify(context.Context, string, int, string) (string, bool, error)
+	ConsumeProof(context.Context, string, string) (bool, error)
+	ProofTTL() time.Duration
+	IssueWindow() time.Duration
+}
+
 // Handler serves /auth endpoints.
 type Handler struct {
 	service       Service
+	captcha       CaptchaService
 	logger        *slog.Logger
 	refreshMaxAge int
 	cookieSecure  bool
@@ -51,15 +63,19 @@ type Handler struct {
 }
 
 // NewHandler creates an auth HTTP handler with Python-compatible cookie behavior.
-func NewHandler(cfg config.Config, logger *slog.Logger, service Service) (*Handler, error) {
+func NewHandler(cfg config.Config, logger *slog.Logger, service Service, captcha CaptchaService) (*Handler, error) {
 	if service == nil {
 		return nil, errors.New("auth service is nil")
+	}
+	if captcha == nil {
+		return nil, errors.New("auth captcha service is nil")
 	}
 	if logger == nil {
 		logger = slog.Default()
 	}
 	return &Handler{
 		service:       service,
+		captcha:       captcha,
 		logger:        logger,
 		refreshMaxAge: int(cfg.JWTRefreshTokenExpire / time.Second),
 		cookieSecure:  cfg.Environment != "development",
@@ -70,6 +86,8 @@ func NewHandler(cfg config.Config, logger *slog.Logger, service Service) (*Handl
 
 // Register attaches auth routes under prefix, for example /api/v1/auth.
 func (h *Handler) Register(mux *http.ServeMux, prefix string) {
+	mux.HandleFunc("GET "+prefix+"/captcha", h.captchaChallenge)
+	mux.HandleFunc("POST "+prefix+"/captcha/verify", h.verifyCaptcha)
 	mux.HandleFunc("POST "+prefix+"/login", h.login)
 	mux.HandleFunc("PUT "+prefix+"/change-password", h.changePassword)
 	mux.HandleFunc("POST "+prefix+"/register", h.register)
@@ -82,8 +100,19 @@ func (h *Handler) Register(mux *http.ServeMux, prefix string) {
 }
 
 type loginRequest struct {
-	Username string `json:"username"`
-	Password string `json:"password"`
+	Username     string `json:"username"`
+	Password     string `json:"password"`
+	CaptchaToken string `json:"captcha_token"`
+}
+
+type verifyCaptchaRequest struct {
+	CaptchaID string `json:"captcha_id"`
+	Position  *int   `json:"position"`
+}
+
+type verifyCaptchaResponse struct {
+	CaptchaToken string `json:"captcha_token"`
+	ExpiresIn    int    `json:"expires_in"`
 }
 
 type registerRequest struct {
@@ -148,6 +177,16 @@ func (h *Handler) login(w http.ResponseWriter, r *http.Request) {
 	if !decodeRequest(w, r, &request) {
 		return
 	}
+	verified, err := h.captcha.ConsumeProof(r.Context(), request.CaptchaToken, captchaClientKey(r))
+	if err != nil {
+		h.logger.Error("consume login captcha proof failed", "error", redact.String(err.Error()))
+		writeAuthError(w, http.StatusServiceUnavailable, "CAPTCHA_UNAVAILABLE", "安全验证暂不可用，请稍后重试")
+		return
+	}
+	if !verified {
+		writeAuthError(w, http.StatusBadRequest, "CAPTCHA_REQUIRED", "请先完成滑块验证")
+		return
+	}
 	result, err := h.service.Authenticate(r.Context(), request.Username, request.Password)
 	if err != nil {
 		h.logger.Error("login failed", "error", redact.String(err.Error()))
@@ -167,6 +206,52 @@ func (h *Handler) login(w http.ResponseWriter, r *http.Request) {
 		AccessToken: result.AccessToken,
 		TokenType:   "bearer",
 		User:        toUserResponse(result.User),
+	})
+}
+
+func (h *Handler) captchaChallenge(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Cache-Control", "no-store")
+	challenge, err := h.captcha.NewChallenge(r.Context(), captchaClientKey(r))
+	if err == nil {
+		httpjson.Write(w, http.StatusOK, challenge)
+		return
+	}
+	if errors.Is(err, authapp.ErrCaptchaRateLimited) {
+		retryAfter := int(h.captcha.IssueWindow() / time.Second)
+		if retryAfter < 1 {
+			retryAfter = 1
+		}
+		w.Header().Set("Retry-After", strconv.Itoa(retryAfter))
+		writeAuthError(w, http.StatusTooManyRequests, "CAPTCHA_RATE_LIMITED", "验证码请求过于频繁，请稍后重试")
+		return
+	}
+	h.logger.Error("create login captcha failed", "error", redact.String(err.Error()))
+	writeAuthError(w, http.StatusServiceUnavailable, "CAPTCHA_UNAVAILABLE", "安全验证暂不可用，请稍后重试")
+}
+
+func (h *Handler) verifyCaptcha(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Cache-Control", "no-store")
+	var request verifyCaptchaRequest
+	if !decodeRequest(w, r, &request) {
+		return
+	}
+	if strings.TrimSpace(request.CaptchaID) == "" || request.Position == nil {
+		writeAuthError(w, http.StatusUnprocessableEntity, "VALIDATION_ERROR", "缺少 captcha_id 或 position")
+		return
+	}
+	proof, verified, err := h.captcha.Verify(r.Context(), request.CaptchaID, *request.Position, captchaClientKey(r))
+	if err != nil {
+		h.logger.Error("verify login captcha failed", "error", redact.String(err.Error()))
+		writeAuthError(w, http.StatusServiceUnavailable, "CAPTCHA_UNAVAILABLE", "安全验证暂不可用，请稍后重试")
+		return
+	}
+	if !verified {
+		writeAuthError(w, http.StatusBadRequest, "CAPTCHA_INVALID", "验证未通过，请重试")
+		return
+	}
+	httpjson.Write(w, http.StatusOK, verifyCaptchaResponse{
+		CaptchaToken: proof,
+		ExpiresIn:    int(h.captcha.ProofTTL() / time.Second),
 	})
 }
 
@@ -460,4 +545,25 @@ func toUserResponse(account user.User) userResponse {
 
 func writeAuthError(w http.ResponseWriter, status int, code, message string) {
 	httpjson.WriteDetailError(w, status, code, message)
+}
+
+func captchaClientKey(r *http.Request) string {
+	host, _, err := net.SplitHostPort(strings.TrimSpace(r.RemoteAddr))
+	if err != nil {
+		host = strings.TrimSpace(r.RemoteAddr)
+	}
+	remoteIP := net.ParseIP(host)
+	if remoteIP != nil && (remoteIP.IsLoopback() || remoteIP.IsPrivate()) {
+		forwarded := net.ParseIP(strings.TrimSpace(r.Header.Get("X-Real-IP")))
+		if forwarded != nil {
+			return forwarded.String()
+		}
+	}
+	if remoteIP != nil {
+		return remoteIP.String()
+	}
+	if host != "" {
+		return host
+	}
+	return "unknown"
 }

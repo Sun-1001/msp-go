@@ -110,6 +110,19 @@ func main() {
 		os.Exit(1)
 	}
 	loginLimiter := authapp.NewLoginLimiter(redisClient, cfg.LoginMaxAttempts, cfg.LoginLockout, logger)
+	captchaManager, err := authapp.NewSliderCaptchaManager(redisClient, logger, authapp.SliderCaptchaConfig{
+		ChallengeTTL: cfg.LoginCaptchaTTL,
+		ProofTTL:     cfg.LoginCaptchaProofTTL,
+		IssueWindow:  cfg.LoginCaptchaIssueWindow,
+		Tolerance:    cfg.LoginCaptchaTolerance,
+		IssueLimit:   cfg.LoginCaptchaIssueLimit,
+		MaxLocalSize: cfg.RedisFallbackCacheMaxSize,
+		Strict:       cfg.RequiresSharedRefreshSessionStore(),
+	})
+	if err != nil {
+		logger.Error("configure login captcha", "error", err)
+		os.Exit(1)
+	}
 	refreshSessions := authapp.NewRefreshSessionStore(
 		redisClient,
 		logger,
@@ -132,7 +145,7 @@ func main() {
 		logger.Error("initialize admin account", "error", err)
 		os.Exit(1)
 	}
-	authHandler, err := authhttp.NewHandler(cfg, logger, authService)
+	authHandler, err := authhttp.NewHandler(cfg, logger, authService, captchaManager)
 	if err != nil {
 		logger.Error("configure auth handler", "error", err)
 		os.Exit(1)

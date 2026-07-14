@@ -45,6 +45,12 @@ vi.mock('./ForgotPasswordModal', () => ({
   ),
 }));
 
+vi.mock('./SliderCaptcha', () => ({
+  SliderCaptcha: ({ onTokenChange }: { onTokenChange: (token: string) => void }) => (
+    <button type="button" onClick={() => onTokenChange('captcha-proof')}>完成安全验证</button>
+  ),
+}));
+
 function renderLoginForm(props: { onSuccess?: () => void; onSwitchToRegister?: () => void } = {}) {
   return render(
     <MemoryRouter>
@@ -57,6 +63,7 @@ async function fillCredentials(username = 'alice', password = 'secret') {
   const user = userEvent.setup();
   await user.type(screen.getByLabelText('用户名'), username);
   await user.type(screen.getByLabelText('密码'), password);
+  await user.click(screen.getByRole('button', { name: '完成安全验证' }));
   return user;
 }
 
@@ -145,6 +152,7 @@ describe('LoginForm', () => {
         username: 'alice',
         password: 'secret',
         role: 'student',
+        captchaToken: 'captcha-proof',
       });
     });
     expect(mocks.dispatch).toHaveBeenCalledWith(expect.objectContaining({
@@ -168,6 +176,7 @@ describe('LoginForm', () => {
     await user.click(screen.getByRole('button', { name: '教师 进入教学管理' }));
     await user.type(screen.getByLabelText('用户名'), 'taylor');
     await user.type(screen.getByLabelText('密码'), 'secret');
+    await user.click(screen.getByRole('button', { name: '完成安全验证' }));
     await user.click(screen.getByRole('button', { name: '教师登录' }));
 
     await waitFor(() => expect(mocks.navigate).toHaveBeenCalledWith('/teacher/dashboard'));
@@ -187,6 +196,18 @@ describe('LoginForm', () => {
     expect(await screen.findByText('您已注册为教师，请选择「教师」身份或使用教师入口登录')).toBeInTheDocument();
     expect(mocks.dispatch).not.toHaveBeenCalled();
     expect(mocks.navigate).not.toHaveBeenCalled();
+  });
+
+  it('requires a completed captcha before sending valid credentials', async () => {
+    renderLoginForm();
+    const user = userEvent.setup();
+    await user.type(screen.getByLabelText('用户名'), 'alice');
+    await user.type(screen.getByLabelText('密码'), 'secret');
+
+    await user.click(screen.getByRole('button', { name: '学生登录' }));
+
+    expect(await screen.findByText('请先完成安全验证')).toBeInTheDocument();
+    expect(mocks.login).not.toHaveBeenCalled();
   });
 
   it('shows the existing generic error when the request fails', async () => {
