@@ -11,24 +11,36 @@ const mocks = vi.hoisted(() => ({
     isLoading: false,
     isGenerating: false,
     isSubmitting: false,
+    submitPhase: 'idle',
     submitResult: null,
-    error: null,
-    errorType: null,
+    solution: null,
+    isLoadingSolution: false,
+    solutionError: null,
+    error: null as string | null,
+    errorType: null as string | null,
+    errorSource: null as 'load' | 'generation' | 'submission' | null,
     loadNextQuestion: vi.fn().mockResolvedValue(undefined),
     generateQuestion: vi.fn().mockResolvedValue(undefined),
     submitAnswer: vi.fn().mockResolvedValue(undefined),
+    loadSolution: vi.fn().mockResolvedValue(undefined),
   },
   aiVM: {
     currentQuestion: null as Question | null,
     isLoading: false,
     isGenerating: false,
     isSubmitting: false,
+    submitPhase: 'idle',
     submitResult: null,
-    error: null,
-    errorType: null,
+    solution: null,
+    isLoadingSolution: false,
+    solutionError: null,
+    error: null as string | null,
+    errorType: null as string | null,
+    errorSource: null as 'load' | 'generation' | 'submission' | null,
     loadNextQuestion: vi.fn().mockResolvedValue(undefined),
     generateQuestion: vi.fn().mockResolvedValue(undefined),
     submitAnswer: vi.fn().mockResolvedValue(undefined),
+    loadSolution: vi.fn().mockResolvedValue(undefined),
   },
   getKnowledgeGraph: vi.fn(),
 }));
@@ -47,11 +59,35 @@ vi.mock('@/modules/exercise', () => ({
     mocks.hookCall += 1;
     return value;
   },
-  ExercisePanel: ({ currentQuestion }: { currentQuestion: Question | null }) => (
-    <div>{currentQuestion?.title || 'EMPTY_EXERCISE'}</div>
+  ExercisePanel: ({
+    currentQuestion,
+    submitPhase,
+    error,
+  }: {
+    currentQuestion: Question | null;
+    submitPhase: string;
+    error: string | null;
+  }) => (
+    <div
+      data-testid={`exercise-panel-${currentQuestion?.id ?? 'empty'}`}
+      data-submit-phase={submitPhase}
+      data-error={error ?? ''}
+    >
+      {currentQuestion?.title || 'EMPTY_EXERCISE'}
+    </div>
   ),
-  AIPracticeConfigurator: ({ error }: { error: string | null }) => (
-    <div>
+  AIPracticeConfigurator: ({
+    error,
+    isSubmitting,
+  }: {
+    error: string | null;
+    isSubmitting: boolean;
+  }) => (
+    <div
+      data-testid="ai-configurator"
+      data-error={error ?? ''}
+      data-is-submitting={String(isSubmitting)}
+    >
       AI_CONFIGURATOR
       {error ? <span>{error}</span> : null}
     </div>
@@ -101,7 +137,17 @@ describe('ExercisePage practice sources', () => {
     vi.clearAllMocks();
     mocks.hookCall = 0;
     mocks.classVM.currentQuestion = classQuestion;
+    mocks.classVM.isSubmitting = false;
+    mocks.classVM.submitPhase = 'idle';
+    mocks.classVM.error = null;
+    mocks.classVM.errorType = null;
+    mocks.classVM.errorSource = null;
     mocks.aiVM.currentQuestion = aiQuestion;
+    mocks.aiVM.isSubmitting = false;
+    mocks.aiVM.submitPhase = 'idle';
+    mocks.aiVM.error = null;
+    mocks.aiVM.errorType = null;
+    mocks.aiVM.errorSource = null;
     mocks.getKnowledgeGraph.mockResolvedValue({ nodes: [], edges: [], statistics: null });
   });
 
@@ -140,6 +186,43 @@ describe('ExercisePage practice sources', () => {
 
     expect(screen.getByText('班级极限题')).toBeVisible();
     expect(screen.getByText('自主极限题')).not.toBeVisible();
+  });
+
+  it('passes each submission phase to its matching exercise panel', async () => {
+    mocks.classVM.submitPhase = 'uploading';
+    mocks.aiVM.submitPhase = 'recognizing';
+
+    renderPage();
+
+    expect(screen.getByTestId('exercise-panel-class-1')).toHaveAttribute(
+      'data-submit-phase',
+      'uploading',
+    );
+    fireEvent.click(screen.getByRole('tab', { name: /AI 自主练习/ }));
+    await waitFor(() => expect(screen.getByTestId('exercise-panel-ai-1')).toHaveAttribute(
+      'data-submit-phase',
+      'recognizing',
+    ));
+  });
+
+  it('routes submission state and errors only to the answer workflow', async () => {
+    mocks.aiVM.isSubmitting = true;
+    mocks.aiVM.error = '未能从图片中识别出有效答案';
+    mocks.aiVM.errorType = 'answer_unreadable';
+    mocks.aiVM.errorSource = 'submission';
+
+    renderPage();
+    fireEvent.click(screen.getByRole('tab', { name: /AI 自主练习/ }));
+
+    await waitFor(() => {
+      const configurator = screen.getByTestId('ai-configurator');
+      expect(configurator).toHaveAttribute('data-is-submitting', 'true');
+      expect(configurator).toHaveAttribute('data-error', '');
+      expect(screen.getByTestId('exercise-panel-ai-1')).toHaveAttribute(
+        'data-error',
+        '未能从图片中识别出有效答案',
+      );
+    });
   });
 
   it('explains when no knowledge points are configured', async () => {

@@ -3,12 +3,15 @@ package storage
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
 	"strings"
 
+	answerocrapp "mathstudy/backend-go/internal/application/answerocr"
 	uploadapp "mathstudy/backend-go/internal/application/upload"
+	"mathstudy/backend-go/internal/platform/uploadpath"
 )
 
 // LocalStorage persists uploads under the configured uploads directory.
@@ -62,6 +65,53 @@ func (s *LocalStorage) UploadStream(_ context.Context, reader io.Reader, key str
 		Size:        written,
 		ContentType: contentType,
 	}, nil
+}
+
+// LoadImage resolves a local /uploads/images reference into validated image bytes.
+func (s *LocalStorage) LoadImage(ctx context.Context, reference string) (answerocrapp.Image, error) {
+	if err := ctx.Err(); err != nil {
+		return answerocrapp.Image{}, err
+	}
+	if strings.TrimSpace(s.uploadDir) == "" || !uploadpath.IsImagePath(reference) {
+		return answerocrapp.Image{}, answerocrapp.ErrInvalidImage
+	}
+	key := strings.TrimPrefix(strings.TrimSpace(reference), "/uploads/")
+	root, err := filepath.Abs(s.uploadDir)
+	if err != nil {
+		return answerocrapp.Image{}, fmt.Errorf("%w: resolve uploads directory", answerocrapp.ErrUnavailable)
+	}
+	resolvedRoot, err := filepath.EvalSymlinks(root)
+	if err != nil {
+		return answerocrapp.Image{}, fmt.Errorf("%w: resolve uploads directory", answerocrapp.ErrUnavailable)
+	}
+	target := filepath.Join(root, filepath.FromSlash(key))
+	resolvedTarget, err := filepath.EvalSymlinks(target)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return answerocrapp.Image{}, answerocrapp.ErrInvalidImage
+		}
+		return answerocrapp.Image{}, fmt.Errorf("%w: resolve local image", answerocrapp.ErrUnavailable)
+	}
+	if !isSubpath(resolvedRoot, resolvedTarget) {
+		return answerocrapp.Image{}, answerocrapp.ErrInvalidImage
+	}
+	// #nosec G304 -- uploadpath validation and resolved-root containment constrain the target.
+	file, err := os.Open(resolvedTarget)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return answerocrapp.Image{}, answerocrapp.ErrInvalidImage
+		}
+		return answerocrapp.Image{}, fmt.Errorf("%w: open local image", answerocrapp.ErrUnavailable)
+	}
+	defer file.Close()
+	image, err := readValidatedImage(file, "")
+	if err != nil {
+		return answerocrapp.Image{}, err
+	}
+	if err := ctx.Err(); err != nil {
+		return answerocrapp.Image{}, err
+	}
+	return image, nil
 }
 
 func cleanObjectKey(key string) (string, error) {

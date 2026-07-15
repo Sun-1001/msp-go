@@ -7,24 +7,60 @@ import (
 	"testing"
 )
 
-func TestRemainingAIBoundariesStayExplicit(t *testing.T) {
+func TestOCRAndMathBoundariesStayFailClosed(t *testing.T) {
 	root := repoRoot(t)
 	expectations := []struct {
 		file     string
 		required []string
 	}{
 		{
+			file: "backend-go/internal/application/answerocr/service.go",
+			required: []string{
+				"type ImageLoader interface",
+				"type Recognizer interface",
+				"MinimumConfidence",
+				"ErrUnreadable",
+			},
+		},
+		{
 			file: "backend-go/internal/application/exercise/service.go",
 			required: []string{
-				"ErrOCRUnavailable",
-				"NormalizedAnswerChecker is a deterministic local checker used when the Math Solver agent is unavailable",
+				"WithAnswerOCR",
+				"WithSolutionSolver",
+				"DecisionIndeterminate",
+				"solver_verified",
+				"FailureVerificationFailed",
+				"Recorded:           false",
+				"submissionExercise(ctx, s.repo",
 			},
+		},
+		{
+			file: "backend-go/internal/adapter/llm/einoagent/agent.go",
+			required: []string{
+				"solution_generation",
+				"parseSolutionJSON",
+				"SolutionStatusIndeterminate",
+			},
+		},
+		{
+			file:     "backend-go/cmd/api/main.go",
+			required: []string{"WithSolutionSolver(mathSolver)"},
 		},
 		{
 			file: "backend-go/internal/adapter/http/exercise/handler.go",
 			required: []string{
+				"OCR_UNREADABLE",
 				"OCR_UNAVAILABLE",
-				"图片答案自动判题尚未开放，请改用文本答案",
+				"MATH_SOLVER_UNAVAILABLE",
+				"OCR_RATE_LIMITED",
+			},
+		},
+		{
+			file: "backend-go/internal/adapter/llm/einoagent/ocr.go",
+			required: []string{
+				"UserInputMultiContent",
+				"Base64Data",
+				"NewConfigurableAnswerOCR",
 			},
 		},
 	}
@@ -90,7 +126,7 @@ func TestSessionChatWiresEinoAgentRuntime(t *testing.T) {
 				"WithDiagnostician",
 				"type QuestionGenerator interface",
 				"WithQuestionGenerator",
-				"NormalizedAnswerChecker is a deterministic local checker used when the Math Solver agent is unavailable",
+				"NormalizedAnswerChecker is the deterministic local checker used before the Math Solver agent",
 			},
 		},
 		{
@@ -110,11 +146,13 @@ func TestSessionChatWiresEinoAgentRuntime(t *testing.T) {
 				"einoagent.NewConfigurablePortraitGenerator",
 				"einoagent.NewConfigurableDiagnostician",
 				"einoagent.NewConfigurableMathSolver",
+				"einoagent.NewConfigurableAnswerOCR",
 				"einoagent.NewConfigurableQuestionParser",
 				"einoagent.NewConfigurableQuestionGenerator",
 				"sessionapp.WithChatAgent",
 				"portraitapp.WithGenerator",
 				"exerciseapp.WithDiagnostician",
+				"exerciseapp.WithAnswerOCR",
 				"exerciseapp.WithQuestionGenerator",
 				"exerciseapp.SolverAnswerChecker",
 				"questionapp.WithParser",
@@ -134,6 +172,7 @@ func TestSessionChatWiresEinoAgentRuntime(t *testing.T) {
 				"type RuntimeConfig struct",
 				"RuntimeConfig(ctx context.Context, agentType string)",
 				"FetchModelsByCredentials",
+				`"ocr"`,
 				"question_generator",
 			},
 		},

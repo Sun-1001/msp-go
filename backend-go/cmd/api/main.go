@@ -39,6 +39,7 @@ import (
 	adminsettingsapp "mathstudy/backend-go/internal/application/adminsettings"
 	adminstatsapp "mathstudy/backend-go/internal/application/adminstats"
 	adminuserapp "mathstudy/backend-go/internal/application/adminuser"
+	answerocrapp "mathstudy/backend-go/internal/application/answerocr"
 	authapp "mathstudy/backend-go/internal/application/auth"
 	classroomapp "mathstudy/backend-go/internal/application/classroom"
 	exerciseapp "mathstudy/backend-go/internal/application/exercise"
@@ -234,6 +235,11 @@ func main() {
 		logger.Error("configure mistake handler", "error", err)
 		os.Exit(1)
 	}
+	uploadStorage, err := storageadapter.NewUploadStorage(cfg, logger)
+	if err != nil {
+		logger.Error("configure upload storage", "error", err)
+		os.Exit(1)
+	}
 	exerciseRepo, err := adapterpostgres.NewExerciseRepository(dbPool)
 	if err != nil {
 		logger.Error("configure exercise repository", "error", err)
@@ -249,6 +255,21 @@ func main() {
 		MaxTokens:     cfg.EinoMaxTokens,
 		MaxIterations: cfg.EinoMaxIterations,
 	})
+	answerOCRRecognizer := einoagent.NewConfigurableAnswerOCR(adminAIConfigService, einoagent.Config{
+		Enabled:       cfg.EinoEnabled,
+		BaseURL:       cfg.EinoBaseURL,
+		APIKey:        cfg.EinoAPIKey,
+		Model:         cfg.EinoModel,
+		Timeout:       cfg.EinoTimeout,
+		Temperature:   cfg.EinoTemperature,
+		MaxTokens:     cfg.EinoMaxTokens,
+		MaxIterations: cfg.EinoMaxIterations,
+	})
+	answerOCRService, err := answerocrapp.NewService(uploadStorage, answerOCRRecognizer)
+	if err != nil {
+		logger.Error("configure answer OCR service", "error", err)
+		os.Exit(1)
+	}
 	diagnostician := einoagent.NewConfigurableDiagnostician(adminAIConfigService, einoagent.Config{
 		Enabled:       cfg.EinoEnabled,
 		BaseURL:       cfg.EinoBaseURL,
@@ -272,6 +293,8 @@ func main() {
 	exerciseService, err := exerciseapp.NewService(
 		exerciseRepo,
 		exerciseapp.SolverAnswerChecker{Solver: mathSolver},
+		exerciseapp.WithAnswerOCR(answerOCRService),
+		exerciseapp.WithSolutionSolver(mathSolver),
 		exerciseapp.WithDiagnostician(diagnostician),
 		exerciseapp.WithQuestionGenerator(questionGenerator),
 	)
@@ -467,11 +490,6 @@ func main() {
 	securityLogHandler, err := securityloghttp.NewHandler(logger, securityLogService, authService)
 	if err != nil {
 		logger.Error("configure security log handler", "error", err)
-		os.Exit(1)
-	}
-	uploadStorage, err := storageadapter.NewUploadStorage(cfg, logger)
-	if err != nil {
-		logger.Error("configure upload storage", "error", err)
 		os.Exit(1)
 	}
 	uploadService, err := uploadapp.NewService(uploadStorage)

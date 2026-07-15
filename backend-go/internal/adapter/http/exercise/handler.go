@@ -36,16 +36,19 @@ type Authenticator interface {
 
 // Handler serves /exercise endpoints.
 type Handler struct {
-	service Service
-	auth    Authenticator
-	logger  *slog.Logger
-	limiter *ratelimit.Limiter
+	service    Service
+	auth       Authenticator
+	logger     *slog.Logger
+	limiter    *ratelimit.Limiter
+	ocrLimiter *ratelimit.Limiter
 }
 
 const (
 	generationRateLimitMax          = 10
 	generationRateLimitWindow       = time.Minute
 	generationRateLimitLocalMaxKeys = 500
+	ocrRateLimitMax                 = 10
+	ocrRateLimitWindow              = time.Minute
 )
 
 // Option customizes the exercise HTTP handler.
@@ -66,6 +69,18 @@ func WithRedisRateLimit(client *goredis.Client, maxLocalKeys int) Option {
 			return err
 		}
 		handler.limiter = limiter
+		ocrLimiter, err := ratelimit.New(
+			client,
+			"msp:exercise_ocr",
+			ocrRateLimitMax,
+			ocrRateLimitWindow,
+			maxLocalKeys,
+			handler.logger,
+		)
+		if err != nil {
+			return err
+		}
+		handler.ocrLimiter = ocrLimiter
 		return nil
 	}
 }
@@ -82,10 +97,11 @@ func NewHandler(logger *slog.Logger, service Service, auth Authenticator, option
 		logger = slog.Default()
 	}
 	handler := &Handler{
-		service: service,
-		auth:    auth,
-		logger:  logger,
-		limiter: newGenerationRateLimiter(generationRateLimitMax, generationRateLimitWindow),
+		service:    service,
+		auth:       auth,
+		logger:     logger,
+		limiter:    newGenerationRateLimiter(generationRateLimitMax, generationRateLimitWindow),
+		ocrLimiter: newOCRRateLimiter(ocrRateLimitMax, ocrRateLimitWindow),
 	}
 	for _, option := range options {
 		if option == nil {
@@ -189,7 +205,11 @@ func (h *Handler) submit(w http.ResponseWriter, r *http.Request) {
 	answerText := ptrutil.ValueOrZero(request.AnswerText)
 	answerImageURL := ptrutil.ValueOrZero(request.AnswerImageURL)
 	if strings.TrimSpace(answerText) == "" && strings.TrimSpace(answerImageURL) == "" {
-		writeExerciseError(w, http.StatusBadRequest, "BAD_REQUEST", "请提供文本答案")
+		writeExerciseError(w, http.StatusBadRequest, "BAD_REQUEST", "请提供文本答案或答案图片")
+		return
+	}
+	if strings.TrimSpace(answerText) == "" && h.ocrLimiter != nil && !h.ocrLimiter.Allow(r.Context(), principal.UserID) {
+		writeExerciseError(w, http.StatusTooManyRequests, "OCR_RATE_LIMITED", "图片答案识别请求过于频繁，请稍后重试")
 		return
 	}
 	response, err := h.service.SubmitAnswer(r.Context(), principal.UserID, exerciseapp.SubmitRequest{
@@ -261,7 +281,39 @@ func (h *Handler) writeExerciseError(w http.ResponseWriter, err error, fallback 
 		return
 	}
 	if errors.Is(err, exerciseapp.ErrOCRUnavailable) {
-		writeExerciseError(w, http.StatusNotImplemented, "OCR_UNAVAILABLE", "图片答案自动判题尚未开放，请改用文本答案")
+		writeExerciseError(w, http.StatusServiceUnavailable, "OCR_UNAVAILABLE", "图片答案识别服务暂不可用，请稍后重试或改用文本答案")
+		return
+	}
+	if errors.Is(err, exerciseapp.ErrOCRUnreadable) {
+		writeExerciseError(w, http.StatusUnprocessableEntity, "OCR_UNREADABLE", "未能识别出清晰答案，请重新拍摄或改用文本答案")
+		return
+	}
+	if errors.Is(err, exerciseapp.ErrOCRTimeout) {
+		writeExerciseError(w, http.StatusGatewayTimeout, "OCR_TIMEOUT", "图片答案识别超时，请稍后重试")
+		return
+	}
+	if errors.Is(err, exerciseapp.ErrAnswerParseFailed) {
+		writeExerciseError(w, http.StatusUnprocessableEntity, "ANSWER_PARSE_FAILED", "答案格式无法安全解析，请检查后重试")
+		return
+	}
+	if errors.Is(err, exerciseapp.ErrMathUnsupported) {
+		writeExerciseError(w, http.StatusUnprocessableEntity, "MATH_UNSUPPORTED", "当前题型暂不支持自动判定，请补充步骤或联系教师")
+		return
+	}
+	if errors.Is(err, exerciseapp.ErrMathSolverInvalidResult) {
+		writeExerciseError(w, http.StatusBadGateway, "MATH_SOLVER_INVALID_RESPONSE", "数学判题服务返回异常，请稍后重试")
+		return
+	}
+	if errors.Is(err, exerciseapp.ErrMathSolverUnavailable) {
+		writeExerciseError(w, http.StatusServiceUnavailable, "MATH_SOLVER_UNAVAILABLE", "数学判题服务暂不可用，请稍后重试")
+		return
+	}
+	if errors.Is(err, exerciseapp.ErrMathSolverTimeout) {
+		writeExerciseError(w, http.StatusGatewayTimeout, "MATH_SOLVER_TIMEOUT", "数学判题服务处理超时，请稍后重试")
+		return
+	}
+	if errors.Is(err, exerciseapp.ErrExerciseChanged) {
+		writeExerciseError(w, http.StatusConflict, "EXERCISE_CHANGED", "题目已更新，请重新加载后提交")
 		return
 	}
 	if errors.Is(err, exerciseapp.ErrForbidden) {
@@ -306,6 +358,20 @@ func newGenerationRateLimiter(limit int, window time.Duration) *ratelimit.Limite
 		window = generationRateLimitWindow
 	}
 	limiter, err := ratelimit.New(nil, "msp:exercise_generation", limit, window, generationRateLimitLocalMaxKeys, nil)
+	if err != nil {
+		panic(err)
+	}
+	return limiter
+}
+
+func newOCRRateLimiter(limit int, window time.Duration) *ratelimit.Limiter {
+	if limit <= 0 {
+		limit = ocrRateLimitMax
+	}
+	if window <= 0 {
+		window = ocrRateLimitWindow
+	}
+	limiter, err := ratelimit.New(nil, "msp:exercise_ocr", limit, window, generationRateLimitLocalMaxKeys, nil)
 	if err != nil {
 		panic(err)
 	}

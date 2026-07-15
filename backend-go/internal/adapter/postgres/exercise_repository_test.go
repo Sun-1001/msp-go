@@ -110,6 +110,28 @@ func TestExerciseRepositoryGetKnowledgeConceptNotFound(t *testing.T) {
 	}
 }
 
+func TestExerciseRepositoryGetExerciseForUpdateUsesSharedRowLock(t *testing.T) {
+	querier := &recordingExerciseQuerier{row: generatedExerciseRow{}}
+	repo, err := NewExerciseRepository(querier)
+	if err != nil {
+		t.Fatalf("NewExerciseRepository() error = %v", err)
+	}
+
+	exercise, ok, err := repo.GetExerciseForUpdate(context.Background(), "exercise-1")
+	if err != nil {
+		t.Fatalf("GetExerciseForUpdate() error = %v", err)
+	}
+	if !ok || exercise.ID != "exercise-1" {
+		t.Fatalf("GetExerciseForUpdate() = %#v, %t", exercise, ok)
+	}
+	if !strings.Contains(querier.querySQL, "FOR SHARE") {
+		t.Fatalf("GetExerciseForUpdate() SQL does not hold a shared lock: %s", querier.querySQL)
+	}
+	if len(querier.queryArgs) != 1 || querier.queryArgs[0] != "exercise-1" {
+		t.Fatalf("GetExerciseForUpdate() args = %#v", querier.queryArgs)
+	}
+}
+
 func TestExerciseRepositoryCreateGeneratedExercisePersistsStudentOwnershipAndMeta(t *testing.T) {
 	querier := &recordingExerciseQuerier{row: generatedExerciseRow{}}
 	repo, err := NewExerciseRepository(querier)

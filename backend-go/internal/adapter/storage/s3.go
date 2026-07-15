@@ -14,6 +14,7 @@ import (
 	"strings"
 	"time"
 
+	answerocrapp "mathstudy/backend-go/internal/application/answerocr"
 	uploadapp "mathstudy/backend-go/internal/application/upload"
 	"mathstudy/backend-go/internal/platform/maputil"
 )
@@ -80,6 +81,21 @@ func NewS3Storage(cfg S3Config, client *http.Client) (*S3Storage, error) {
 		client:   defaultTimeout(client),
 		now:      func() time.Time { return time.Now().UTC() },
 	}, nil
+}
+
+// LoadImage downloads an image only from this adapter's configured object namespace.
+func (s *S3Storage) LoadImage(ctx context.Context, reference string) (answerocrapp.Image, error) {
+	base, err := s.downloadBaseURL()
+	if err != nil {
+		return answerocrapp.Image{}, fmt.Errorf("%w: resolve S3 download base", answerocrapp.ErrUnavailable)
+	}
+	return downloadReference{
+		base:        base,
+		allowQuery:  s.cfg.PrivateBucket,
+		downloadURL: s.downloadURL,
+		storageName: "S3",
+		httpClient:  s.client,
+	}.load(ctx, reference)
 }
 
 func normalizeStorageBaseURL(name string, value string) (*url.URL, error) {
@@ -187,6 +203,14 @@ func (s *S3Storage) downloadURL(key string) string {
 	signature := s.signature(http.MethodGet, canonicalURI, canonicalQuery, headers, "UNSIGNED-PAYLOAD", now)
 	objectURL, _ := s.objectURL(key)
 	return objectURL + "?" + canonicalQuery + "&X-Amz-Signature=" + signature
+}
+
+func (s *S3Storage) downloadBaseURL() (*url.URL, error) {
+	base := strings.TrimRight(s.cfg.EndpointURL, "/") + "/" + awsEncode(s.cfg.BucketName, true)
+	if !s.cfg.PrivateBucket && strings.TrimSpace(s.cfg.PublicURLBase) != "" {
+		base = strings.TrimRight(s.cfg.PublicURLBase, "/")
+	}
+	return url.Parse(base)
 }
 
 func (s *S3Storage) authorization(method string, canonicalURI string, canonicalQuery string, headers map[string]string, payloadHash string, now time.Time) string {

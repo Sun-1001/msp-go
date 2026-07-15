@@ -76,10 +76,11 @@ func TestUpdateAgentConfigValidatesModelAndBuildsRuntimeConfig(t *testing.T) {
 	}
 }
 
-func TestListAgentTypesIncludesQuestionGeneratorInStableOrder(t *testing.T) {
+func TestListAgentTypesIncludesOCRAndQuestionGeneratorInStableOrder(t *testing.T) {
 	modelID := "model-1"
 	repo := &fakeRepo{
 		agentConfigs: map[string]AgentModelConfig{
+			"ocr":                {AgentType: "ocr", ModelID: &modelID, IsActive: true},
 			"question_generator": {AgentType: "question_generator", ModelID: &modelID, IsActive: true},
 		},
 	}
@@ -89,7 +90,7 @@ func TestListAgentTypesIncludesQuestionGeneratorInStableOrder(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ListAgentTypes() error = %v", err)
 	}
-	wantTypes := []string{"math_solver", "tutor", "diagnostician", "portrait", "question_parser", "question_generator"}
+	wantTypes := []string{"math_solver", "ocr", "tutor", "diagnostician", "portrait", "question_parser", "question_generator"}
 	if len(response.Items) != len(wantTypes) {
 		t.Fatalf("items = %#v", response.Items)
 	}
@@ -97,6 +98,10 @@ func TestListAgentTypesIncludesQuestionGeneratorInStableOrder(t *testing.T) {
 		if response.Items[index].Type != wantType {
 			t.Fatalf("items[%d].Type = %q, want %q", index, response.Items[index].Type, wantType)
 		}
+	}
+	ocr := response.Items[1]
+	if ocr.Name != "图片识别智能体" || !ocr.Configured {
+		t.Fatalf("OCR info = %#v", ocr)
 	}
 	last := response.Items[len(response.Items)-1]
 	if last.Name != "题目生成智能体" || !last.Configured {

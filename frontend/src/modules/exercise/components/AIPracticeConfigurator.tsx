@@ -16,6 +16,7 @@ export interface AIPracticeConfiguratorProps {
   difficulty: number;
   isLoadingKnowledge: boolean;
   isGenerating: boolean;
+  isSubmitting: boolean;
   error: string | null;
   hasQuestion: boolean;
   onConceptChange: (conceptId: string) => void;
@@ -30,6 +31,7 @@ export const AIPracticeConfigurator: FC<AIPracticeConfiguratorProps> = ({
   difficulty,
   isLoadingKnowledge,
   isGenerating,
+  isSubmitting,
   error,
   hasQuestion,
   onConceptChange,
@@ -42,6 +44,7 @@ export const AIPracticeConfigurator: FC<AIPracticeConfiguratorProps> = ({
   const canRetryKnowledge = Boolean(error) && !hasKnowledgeOptions && !isLoadingKnowledge;
   const isDisabled =
     isPending ||
+    isSubmitting ||
     (canRetryKnowledge ? !onRetryKnowledge : !hasKnowledgeOptions || !selectedConceptId);
 
   return (

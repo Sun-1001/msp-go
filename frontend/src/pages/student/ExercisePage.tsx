@@ -45,20 +45,32 @@ export const ExercisePage: React.FC = () => {
     currentQuestion: classQuestion,
     isLoading: isClassLoading,
     isSubmitting: isClassSubmitting,
+    submitPhase: classSubmitPhase,
     submitResult: classSubmitResult,
+    solution: classSolution,
+    isLoadingSolution: isClassSolutionLoading,
+    solutionError: classSolutionError,
     error: classError,
     errorType: classErrorType,
     loadNextQuestion: loadNextClassQuestion,
     submitAnswer: submitClassAnswer,
+    loadSolution: loadClassSolution,
   } = useExerciseViewModel();
   const {
     currentQuestion: aiQuestion,
     isGenerating,
     isSubmitting: isAISubmitting,
+    submitPhase: aiSubmitPhase,
     submitResult: aiSubmitResult,
+    solution: aiSolution,
+    isLoadingSolution: isAISolutionLoading,
+    solutionError: aiSolutionError,
     error: aiError,
+    errorType: aiErrorType,
+    errorSource: aiErrorSource,
     generateQuestion: requestAIQuestion,
     submitAnswer: submitAIAnswer,
+    loadSolution: loadAISolution,
   } = useExerciseViewModel();
   const classLoadStarted = useRef(false);
   const knowledgeLoaded = useRef(false);
@@ -183,11 +195,16 @@ export const ExercisePage: React.FC = () => {
                   currentQuestion={classQuestion}
                   isLoading={isClassLoading}
                   isSubmitting={isClassSubmitting}
+                  submitPhase={classSubmitPhase}
                   submitResult={classSubmitResult}
+                  solution={classSolution}
+                  isLoadingSolution={isClassSolutionLoading}
+                  solutionError={classSolutionError}
                   error={classError}
                   errorType={classErrorType}
                   onNextQuestion={loadNextClassQuestion}
                   submitAnswer={submitClassAnswer}
+                  onLoadSolution={loadClassSolution}
                 />
               </TabsContent>
 
@@ -198,7 +215,8 @@ export const ExercisePage: React.FC = () => {
                   difficulty={difficulty}
                   isLoadingKnowledge={isLoadingKnowledge}
                   isGenerating={isGenerating}
-                  error={knowledgeError || aiError}
+                  isSubmitting={isAISubmitting}
+                  error={knowledgeError || (aiErrorSource === 'generation' ? aiError : null)}
                   hasQuestion={Boolean(aiQuestion)}
                   onConceptChange={setSelectedConceptId}
                   onDifficultyChange={setDifficulty}
@@ -210,11 +228,16 @@ export const ExercisePage: React.FC = () => {
                     currentQuestion={aiQuestion}
                     isLoading={isGenerating}
                     isSubmitting={isAISubmitting}
+                    submitPhase={aiSubmitPhase}
                     submitResult={aiSubmitResult}
-                    error={null}
-                    errorType={null}
+                    solution={aiSolution}
+                    isLoadingSolution={isAISolutionLoading}
+                    solutionError={aiSolutionError}
+                    error={aiErrorSource === 'submission' ? aiError : null}
+                    errorType={aiErrorSource === 'submission' ? aiErrorType : null}
                     onNextQuestion={generateQuestion}
                     submitAnswer={submitAIAnswer}
+                    onLoadSolution={loadAISolution}
                   />
                 ) : null}
               </TabsContent>

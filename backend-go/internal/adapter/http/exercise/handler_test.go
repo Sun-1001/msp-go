@@ -15,6 +15,7 @@ import (
 
 	authapp "mathstudy/backend-go/internal/application/auth"
 	exerciseapp "mathstudy/backend-go/internal/application/exercise"
+	mathsolverapp "mathstudy/backend-go/internal/application/mathsolver"
 	"mathstudy/backend-go/internal/domain/user"
 )
 
@@ -197,7 +198,7 @@ func TestSubmitRejectsMissingAnswerBeforeServiceCall(t *testing.T) {
 	if err := json.Unmarshal(recorder.Body.Bytes(), &body); err != nil {
 		t.Fatalf("invalid JSON: %v", err)
 	}
-	if body["detail"] != "请提供文本答案" {
+	if body["detail"] != "请提供文本答案或答案图片" {
 		t.Fatalf("body = %#v", body)
 	}
 }
@@ -241,7 +242,7 @@ func TestSubmitMapsImageOnlyOCRUnavailable(t *testing.T) {
 	request.Header.Set("Authorization", "Bearer token")
 	mux.ServeHTTP(recorder, request)
 
-	if recorder.Code != http.StatusNotImplemented {
+	if recorder.Code != http.StatusServiceUnavailable {
 		t.Fatalf("status = %d, body = %s", recorder.Code, recorder.Body.String())
 	}
 	if !service.submitCalled || service.lastSubmitRequest.AnswerImageURL != "/uploads/images/answer.png" {
@@ -251,8 +252,102 @@ func TestSubmitMapsImageOnlyOCRUnavailable(t *testing.T) {
 	if err := json.Unmarshal(recorder.Body.Bytes(), &body); err != nil {
 		t.Fatalf("invalid JSON: %v", err)
 	}
-	if body["code"] != "OCR_UNAVAILABLE" || body["detail"] != "图片答案自动判题尚未开放，请改用文本答案" {
+	if body["code"] != "OCR_UNAVAILABLE" || body["detail"] != "图片答案识别服务暂不可用，请稍后重试或改用文本答案" {
 		t.Fatalf("body = %#v", body)
+	}
+}
+
+func TestSubmitForwardsImageAnswerAndReturnsRecognizedResult(t *testing.T) {
+	service := &fakeExerciseService{submitResponse: exerciseapp.SubmitResponse{
+		IsCorrect:          true,
+		GradingStatus:      "correct",
+		Recorded:           true,
+		StudentAnswerLatex: "x+1",
+	}}
+	auth := &fakeAuthenticator{principal: authapp.Principal{UserID: "student-1", Role: user.RoleStudent}}
+	handler := newTestHandler(t, service, auth)
+	mux := http.NewServeMux()
+	handler.Register(mux, "/api/v1/exercise")
+
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodPost, "/api/v1/exercise/submit", strings.NewReader(`{"exercise_id":"exercise-1","answer_image_url":"/uploads/images/answer.png"}`))
+	request.Header.Set("Authorization", "Bearer token")
+	mux.ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status = %d body=%s", recorder.Code, recorder.Body.String())
+	}
+	if service.submitCalls != 1 || service.lastSubmitRequest.AnswerImageURL != "/uploads/images/answer.png" || service.lastSubmitRequest.AnswerText != "" {
+		t.Fatalf("service = %#v", service)
+	}
+	if !strings.Contains(recorder.Body.String(), `"student_answer_latex":"x+1"`) || !strings.Contains(recorder.Body.String(), `"recorded":true`) {
+		t.Fatalf("body = %s", recorder.Body.String())
+	}
+}
+
+func TestSubmitMapsStableOCRAndMathErrors(t *testing.T) {
+	tests := []struct {
+		name       string
+		err        error
+		wantStatus int
+		wantCode   string
+	}{
+		{name: "OCR unreadable", err: exerciseapp.ErrOCRUnreadable, wantStatus: http.StatusUnprocessableEntity, wantCode: "OCR_UNREADABLE"},
+		{name: "OCR timeout", err: exerciseapp.ErrOCRTimeout, wantStatus: http.StatusGatewayTimeout, wantCode: "OCR_TIMEOUT"},
+		{name: "answer parse", err: exerciseapp.ErrAnswerParseFailed, wantStatus: http.StatusUnprocessableEntity, wantCode: "ANSWER_PARSE_FAILED"},
+		{name: "math unsupported", err: exerciseapp.ErrMathUnsupported, wantStatus: http.StatusUnprocessableEntity, wantCode: "MATH_UNSUPPORTED"},
+		{name: "math invalid", err: exerciseapp.ErrMathSolverInvalidResult, wantStatus: http.StatusBadGateway, wantCode: "MATH_SOLVER_INVALID_RESPONSE"},
+		{name: "math unavailable", err: exerciseapp.ErrMathSolverUnavailable, wantStatus: http.StatusServiceUnavailable, wantCode: "MATH_SOLVER_UNAVAILABLE"},
+		{name: "math timeout", err: exerciseapp.ErrMathSolverTimeout, wantStatus: http.StatusGatewayTimeout, wantCode: "MATH_SOLVER_TIMEOUT"},
+		{name: "exercise changed", err: exerciseapp.ErrExerciseChanged, wantStatus: http.StatusConflict, wantCode: "EXERCISE_CHANGED"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			service := &fakeExerciseService{submitErr: test.err}
+			auth := &fakeAuthenticator{principal: authapp.Principal{UserID: "student-1", Role: user.RoleStudent}}
+			handler := newTestHandler(t, service, auth)
+			mux := http.NewServeMux()
+			handler.Register(mux, "/api/v1/exercise")
+
+			recorder := httptest.NewRecorder()
+			request := httptest.NewRequest(http.MethodPost, "/api/v1/exercise/submit", strings.NewReader(`{"exercise_id":"exercise-1","answer_text":"x+1"}`))
+			request.Header.Set("Authorization", "Bearer token")
+			mux.ServeHTTP(recorder, request)
+
+			if recorder.Code != test.wantStatus || !strings.Contains(recorder.Body.String(), `"code":"`+test.wantCode+`"`) {
+				t.Fatalf("status=%d body=%s", recorder.Code, recorder.Body.String())
+			}
+		})
+	}
+}
+
+func TestSubmitRateLimitsImageOCRSeparatelyFromTextAnswers(t *testing.T) {
+	service := &fakeExerciseService{}
+	auth := &fakeAuthenticator{principal: authapp.Principal{UserID: "student-1", Role: user.RoleStudent}}
+	handler := newTestHandler(t, service, auth)
+	handler.ocrLimiter = newOCRRateLimiter(1, time.Minute)
+	mux := http.NewServeMux()
+	handler.Register(mux, "/api/v1/exercise")
+
+	for index := 0; index < 2; index++ {
+		recorder := httptest.NewRecorder()
+		request := httptest.NewRequest(http.MethodPost, "/api/v1/exercise/submit", strings.NewReader(`{"exercise_id":"exercise-1","answer_image_url":"/uploads/images/answer.png"}`))
+		request.Header.Set("Authorization", "Bearer token")
+		mux.ServeHTTP(recorder, request)
+		if index == 0 && recorder.Code != http.StatusOK {
+			t.Fatalf("first status=%d body=%s", recorder.Code, recorder.Body.String())
+		}
+		if index == 1 && (recorder.Code != http.StatusTooManyRequests || !strings.Contains(recorder.Body.String(), "OCR_RATE_LIMITED")) {
+			t.Fatalf("second status=%d body=%s", recorder.Code, recorder.Body.String())
+		}
+	}
+
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodPost, "/api/v1/exercise/submit", strings.NewReader(`{"exercise_id":"exercise-1","answer_text":"42"}`))
+	request.Header.Set("Authorization", "Bearer token")
+	mux.ServeHTTP(recorder, request)
+	if recorder.Code != http.StatusOK || service.submitCalls != 2 {
+		t.Fatalf("text status=%d calls=%d body=%s", recorder.Code, service.submitCalls, recorder.Body.String())
 	}
 }
 
@@ -302,6 +397,43 @@ func TestSolutionRouteDoesNotHitDetailRoute(t *testing.T) {
 	}
 	if !service.solutionCalled || service.detailCalled {
 		t.Fatalf("service calls = %#v", service)
+	}
+}
+
+func TestSolutionRouteReturnsExplainableUnavailableContract(t *testing.T) {
+	service := &fakeExerciseService{
+		solutionResponse: exerciseapp.SolutionResponse{
+			ExerciseID: "exercise-1",
+			Answer:     "42",
+			Steps:      []string{},
+			Source:     "unavailable",
+			Failure: &mathsolverapp.Failure{
+				Code:      mathsolverapp.FailureVerificationFailed,
+				Stage:     "solution_verification",
+				Message:   "生成解析未通过标准答案验证",
+				Retryable: true,
+			},
+		},
+	}
+	handler := newTestHandler(t, service, &fakeAuthenticator{principal: authapp.Principal{UserID: "student-1", Role: user.RoleStudent}})
+	mux := http.NewServeMux()
+	handler.Register(mux, "/api/v1/exercise")
+
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodGet, "/api/v1/exercise/exercise-1/solution", nil)
+	request.Header.Set("Authorization", "Bearer token")
+	mux.ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", recorder.Code, recorder.Body.String())
+	}
+	var response exerciseapp.SolutionResponse
+	if err := json.Unmarshal(recorder.Body.Bytes(), &response); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if response.Source != "unavailable" || response.Steps == nil || len(response.Steps) != 0 || response.Failure == nil ||
+		response.Failure.Code != mathsolverapp.FailureVerificationFailed || response.Failure.Stage != "solution_verification" || !response.Failure.Retryable {
+		t.Fatalf("response = %#v", response)
 	}
 }
 
@@ -402,6 +534,7 @@ type fakeExerciseService struct {
 	lastSubmitRequest   exerciseapp.SubmitRequest
 	lastExerciseID      string
 	submitCalled        bool
+	submitCalls         int
 	generateCalled      bool
 	detailCalled        bool
 	solutionCalled      bool
@@ -424,6 +557,7 @@ func (s *fakeExerciseService) SubmitAnswer(_ context.Context, userID string, req
 	s.lastUserID = userID
 	s.lastSubmitRequest = request
 	s.submitCalled = true
+	s.submitCalls++
 	return s.submitResponse, s.submitErr
 }
 

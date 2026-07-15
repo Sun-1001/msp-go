@@ -5,9 +5,10 @@
 ## 当前状态
 
 - Go 后端已经完成默认运行链路切换，旧 Python 后端不再参与启动或部署。
-- Tutor、Portrait、Diagnostician、Math Solver、Question Parser、Question Generator 六类 Eino Agent 已接入后台 provider/model/Agent 配置。
-- 学生可在班级题目与 AI 自主练习之间切换，两类题目复用文本判题、诊断和个人 DKT 更新链路。
-- 纯图片答案当前返回 `501 OCR_UNAVAILABLE`，不会写入作答、诊断、会话或 DKT 状态。
+- Tutor、Portrait、Diagnostician、Math Solver、Question Parser、Question Generator、OCR 七类 Eino Agent 已接入后台 provider/model/Agent 配置。
+- 学生可在班级题目与 AI 自主练习之间切换，两类题目复用文本/图片判题、诊断和个人 DKT 更新链路。
+- 纯图片答案支持 PNG、JPEG 和 GIF 上传、可信存储回读及多模态 OCR；文本与图片同时提交时以文本为准。OCR 或数学判定未得到可靠结果时不会写入作答、诊断、学习会话、DKT 或画像统计。
+- 数学判定采用 `correct`、`incorrect`、`indeterminate` 三态；本地比较不能确定时可调用通用 Math Solver，解析生成结果还需独立验证答案和步骤，失败会返回可解释的降级原因。
 - AI 自主出题在模型不可用或输出不合法时返回 `503 AI_GENERATION_UNAVAILABLE`，不会落库。
 
 未完成工作统一记录在 [项目待办](docs/TODO.md)，README 不再维护重复路线图。

@@ -3,13 +3,17 @@ package exercise
 import (
 	"context"
 	"errors"
+	"fmt"
+	"maps"
 	"math"
+	"reflect"
 	"slices"
 	"sort"
 	"strings"
 	"time"
 
-	uploadapp "mathstudy/backend-go/internal/application/upload"
+	answerocrapp "mathstudy/backend-go/internal/application/answerocr"
+	mathsolverapp "mathstudy/backend-go/internal/application/mathsolver"
 	"mathstudy/backend-go/internal/platform/maputil"
 	"mathstudy/backend-go/internal/platform/metautil"
 	"mathstudy/backend-go/internal/platform/numutil"
@@ -24,6 +28,14 @@ var (
 	ErrForbidden               = errors.New("student is not enrolled")
 	ErrBadRequest              = errors.New("bad exercise request")
 	ErrOCRUnavailable          = errors.New("image answer OCR is unavailable")
+	ErrOCRUnreadable           = errors.New("image answer OCR could not read a reliable answer")
+	ErrOCRTimeout              = errors.New("image answer OCR timed out")
+	ErrAnswerParseFailed       = errors.New("answer could not be parsed safely")
+	ErrMathUnsupported         = errors.New("answer type is unsupported by the math solver")
+	ErrMathSolverUnavailable   = errors.New("math solver is unavailable")
+	ErrMathSolverTimeout       = errors.New("math solver timed out")
+	ErrMathSolverInvalidResult = errors.New("math solver returned an invalid result")
+	ErrExerciseChanged         = errors.New("exercise changed while grading")
 	ErrAIGenerationUnavailable = errors.New("AI exercise generation is unavailable")
 )
 
@@ -41,6 +53,7 @@ type Repository interface {
 	UpdateSessionCurrentContent(context.Context, string, *string) error
 	UpdateSessionAfterSubmit(context.Context, string, string, []string) error
 	GetExercise(context.Context, string) (Exercise, bool, error)
+	GetExerciseForUpdate(context.Context, string) (Exercise, bool, error)
 	GetKnowledgeConcept(context.Context, string) (KnowledgeConcept, bool, error)
 	CreateGeneratedExercise(context.Context, string, GeneratedQuestion, time.Time) (Exercise, error)
 	ListRecentContentIDs(context.Context, string, int) ([]string, error)
@@ -59,6 +72,26 @@ type Repository interface {
 // AnswerChecker compares student and correct answers.
 type AnswerChecker interface {
 	CheckAnswer(context.Context, string, string, string) (AnswerCheckResult, error)
+}
+
+// ContextualAnswerChecker compares answers with the complete trusted exercise context.
+type ContextualAnswerChecker interface {
+	CheckExerciseAnswer(context.Context, AnswerCheckInput) (AnswerCheckResult, error)
+}
+
+// AnswerOCR recognizes an answer from one previously uploaded image.
+type AnswerOCR interface {
+	Recognize(context.Context, string, string) (answerocrapp.Result, error)
+}
+
+// SolutionSolver independently solves an exercise when no trusted cached steps exist.
+type SolutionSolver interface {
+	Solve(context.Context, SolutionInput) (SolutionResult, error)
+}
+
+// SolutionVerifier independently checks a generated answer and every returned step.
+type SolutionVerifier interface {
+	VerifySolution(context.Context, SolutionVerificationInput) (AnswerCheckResult, error)
 }
 
 // LearningSession stores the minimal session state used by exercise flow.
@@ -252,23 +285,39 @@ type ExerciseDetailResponse struct {
 
 // SolutionResponse is the Python-compatible solution response.
 type SolutionResponse struct {
-	ExerciseID string   `json:"exercise_id"`
-	Answer     string   `json:"answer"`
-	Steps      []string `json:"steps"`
-	Source     string   `json:"source"`
+	ExerciseID   string                 `json:"exercise_id"`
+	Answer       string                 `json:"answer"`
+	Steps        []string               `json:"steps"`
+	Source       string                 `json:"source"`
+	Verification *EvaluationDetail      `json:"verification,omitempty"`
+	Failure      *mathsolverapp.Failure `json:"failure,omitempty"`
 }
 
 // SubmitResponse is the Python-compatible answer submission response.
 type SubmitResponse struct {
 	IsCorrect          bool               `json:"is_correct"`
+	GradingStatus      string             `json:"grading_status"`
+	Recorded           bool               `json:"recorded"`
 	Score              float64            `json:"score"`
 	StudentAnswerLatex string             `json:"student_answer_latex"`
 	CorrectAnswerLatex string             `json:"correct_answer_latex"`
 	Diagnosis          *DiagnosisDetail   `json:"diagnosis"`
+	Evaluation         EvaluationDetail   `json:"evaluation"`
 	Feedback           string             `json:"feedback"`
 	MasteryUpdate      map[string]float64 `json:"mastery_update"`
 	MasteryModel       string             `json:"mastery_model"`
 	NextRecommendation string             `json:"next_recommendation"`
+}
+
+// EvaluationDetail explains how an answer was graded without exposing provider internals.
+type EvaluationDetail struct {
+	Method     string                   `json:"method"`
+	ReasonCode string                   `json:"reason_code"`
+	Reason     string                   `json:"reason"`
+	Confidence float64                  `json:"confidence"`
+	Degraded   bool                     `json:"degraded"`
+	Retryable  bool                     `json:"retryable"`
+	Evidence   []mathsolverapp.Evidence `json:"evidence"`
 }
 
 // DiagnosisDetail stores lightweight diagnostic feedback.
@@ -286,8 +335,15 @@ type DiagnosisDetail struct {
 // AnswerCheckResult stores answer comparison output.
 type AnswerCheckResult struct {
 	IsCorrect  bool
+	Decision   mathsolverapp.Decision
+	Method     string
+	ReasonCode string
 	Reason     string
 	Confidence float64
+	Degraded   bool
+	Retryable  bool
+	Evidence   []mathsolverapp.Evidence
+	Failure    *mathsolverapp.Failure
 }
 
 // MathSolver compares answers with an optional AI/math runtime.
@@ -297,10 +353,46 @@ type MathSolver interface {
 
 // AnswerCheckInput carries answer comparison context into an optional solver.
 type AnswerCheckInput struct {
+	Exercise      Exercise
 	StudentAnswer string
 	CorrectAnswer string
 	AnswerType    string
 	Fallback      AnswerCheckResult
+}
+
+const (
+	SolutionStatusSolved        = "solved"
+	SolutionStatusIndeterminate = "indeterminate"
+)
+
+// SolutionInput carries the trusted problem context into an independent solver.
+// The standard answer is intentionally omitted and is used only for verification.
+type SolutionInput struct {
+	Exercise   Exercise
+	AnswerType string
+}
+
+// SolutionResult stores one bounded, explainable solver candidate.
+type SolutionResult struct {
+	Status     string
+	Answer     string
+	Steps      []string
+	Method     string
+	ReasonCode string
+	Reason     string
+	Confidence float64
+	Retryable  bool
+	Evidence   []mathsolverapp.Evidence
+}
+
+// SolutionVerificationInput carries a generated solution and the trusted reference answer
+// into a separate verification pass. Generation never receives ReferenceAnswer.
+type SolutionVerificationInput struct {
+	Exercise        Exercise
+	CandidateAnswer string
+	CandidateSteps  []string
+	ReferenceAnswer string
+	AnswerType      string
 }
 
 // SolverAnswerChecker tries a configured solver before falling back to local comparison.
@@ -329,6 +421,8 @@ type Diagnostician interface {
 type Service struct {
 	repo              Repository
 	checker           AnswerChecker
+	answerOCR         AnswerOCR
+	solutionSolver    SolutionSolver
 	diagnostician     Diagnostician
 	questionGenerator QuestionGenerator
 	now               func() time.Time
@@ -342,6 +436,20 @@ type Option func(*Service)
 func WithDiagnostician(diagnostician Diagnostician) Option {
 	return func(service *Service) {
 		service.diagnostician = diagnostician
+	}
+}
+
+// WithAnswerOCR enables image-only answer recognition before grading starts.
+func WithAnswerOCR(answerOCR AnswerOCR) Option {
+	return func(service *Service) {
+		service.answerOCR = answerOCR
+	}
+}
+
+// WithSolutionSolver enables independently generated, standard-answer-verified solutions.
+func WithSolutionSolver(solver SolutionSolver) Option {
+	return func(service *Service) {
+		service.solutionSolver = solver
 	}
 }
 
@@ -488,54 +596,87 @@ func (s *Service) SubmitAnswer(ctx context.Context, userID string, request Submi
 	if request.ExerciseID == "" || (request.AnswerText == "" && request.AnswerImageURL == "") {
 		return SubmitResponse{}, ErrBadRequest
 	}
-	if request.AnswerImageURL != "" && !isSafeAnswerImageURL(request.AnswerImageURL) {
-		return SubmitResponse{}, ErrBadRequest
+
+	exercise, correctAnswer, err := submissionExercise(ctx, s.repo, userID, request.ExerciseID)
+	if err != nil {
+		return SubmitResponse{}, err
 	}
-	if request.AnswerText == "" {
-		return SubmitResponse{}, ErrOCRUnavailable
+	if invalidReference, invalid := invalidMultipleChoiceReferenceCheck(exercise, correctAnswer); invalid {
+		return SubmitResponse{}, answerCheckFailure(invalidReference)
+	}
+	answerType := metautil.String(exercise.Meta, "answer_type")
+	studentAnswer := request.AnswerText
+	if studentAnswer == "" {
+		if s.answerOCR == nil {
+			return SubmitResponse{}, ErrOCRUnavailable
+		}
+		recognized, err := s.answerOCR.Recognize(ctx, request.AnswerImageURL, answerType)
+		if err != nil {
+			return SubmitResponse{}, mapAnswerOCRError(err)
+		}
+		studentAnswer = strings.TrimSpace(recognized.AnswerLatex)
+		if studentAnswer == "" {
+			return SubmitResponse{}, ErrOCRUnreadable
+		}
+	}
+
+	check, err := s.checkExerciseAnswer(ctx, exercise, studentAnswer, correctAnswer)
+	if err != nil {
+		return SubmitResponse{}, err
+	}
+	check = normalizeAnswerCheckResult(check)
+	if check.Decision == mathsolverapp.DecisionIndeterminate {
+		if err := answerCheckFailure(check); err != nil {
+			return SubmitResponse{}, err
+		}
+		return indeterminateSubmitResponse(studentAnswer, check), nil
+	}
+
+	var diagnosis *DiagnosisDetail
+	var errorType *string
+	if check.Decision == mathsolverapp.DecisionIncorrect {
+		diagnosis = s.buildDiagnosis(ctx, DiagnosisInput{
+			Exercise:      exercise,
+			StudentID:     userID,
+			StudentAnswer: studentAnswer,
+			AnswerSteps:   request.AnswerSteps,
+			CorrectAnswer: correctAnswer,
+			Check:         check,
+			Fallback:      *basicDiagnosis(check.Reason, exercise.ConceptIDs),
+		})
+		errorType = diagnosis.ErrorType
+	}
+
+	now := s.now()
+	attemptID, err := s.newID()
+	if err != nil {
+		return SubmitResponse{}, err
+	}
+	reportID := ""
+	if diagnosis != nil {
+		reportID, err = s.newID()
+		if err != nil {
+			return SubmitResponse{}, err
+		}
 	}
 
 	var response SubmitResponse
-	err := s.repo.WithTx(ctx, func(txCtx context.Context, repo Repository) error {
-		exercise, ok, err := repo.GetExercise(txCtx, request.ExerciseID)
+	err = s.repo.WithTx(ctx, func(txCtx context.Context, repo Repository) error {
+		currentExercise, currentCorrectAnswer, err := submissionExerciseForUpdate(txCtx, repo, userID, request.ExerciseID)
 		if err != nil {
 			return err
 		}
-		if !ok || exercise.Status != "PUBLISHED" {
-			return ErrBadRequest
-		}
-		canAccess, err := canAccessExercise(txCtx, repo, userID, exercise)
-		if err != nil {
-			return err
-		}
-		if !canAccess {
-			return ErrBadRequest
-		}
-
-		correctAnswer := metautil.String(exercise.Meta, "answer")
-		if correctAnswer == "" {
-			return ErrBadRequest
-		}
-
-		studentAnswer := request.AnswerText
-		check, err := s.checkExerciseAnswer(txCtx, exercise, studentAnswer, correctAnswer)
-		if err != nil {
-			return err
-		}
-
-		now := s.now()
-		attemptID, err := s.newID()
-		if err != nil {
-			return err
+		if currentCorrectAnswer != correctAnswer || !sameSubmissionExercise(exercise, currentExercise) {
+			return ErrExerciseChanged
 		}
 		attempt := AttemptRecord{
 			ID:               attemptID,
-			ContentID:        exercise.ID,
+			ContentID:        currentExercise.ID,
 			StudentID:        userID,
 			StudentAnswer:    studentAnswer,
 			StudentSteps:     request.AnswerSteps,
-			IsCorrect:        check.IsCorrect,
-			Score:            boolScore(check.IsCorrect),
+			IsCorrect:        check.Decision == mathsolverapp.DecisionCorrect,
+			Score:            boolScore(check.Decision == mathsolverapp.DecisionCorrect),
 			StartedAt:        now,
 			SubmittedAt:      now,
 			TimeSpentSeconds: request.TimeSpentSeconds,
@@ -544,23 +685,7 @@ func (s *Service) SubmitAnswer(ctx context.Context, userID string, request Submi
 			return err
 		}
 
-		var diagnosis *DiagnosisDetail
-		var errorType *string
-		if !check.IsCorrect {
-			diagnosis = s.buildDiagnosis(txCtx, DiagnosisInput{
-				Exercise:      exercise,
-				StudentID:     userID,
-				StudentAnswer: studentAnswer,
-				AnswerSteps:   request.AnswerSteps,
-				CorrectAnswer: correctAnswer,
-				Check:         check,
-				Fallback:      *basicDiagnosis(check.Reason, exercise.ConceptIDs),
-			})
-			errorType = diagnosis.ErrorType
-			reportID, err := s.newID()
-			if err != nil {
-				return err
-			}
+		if diagnosis != nil {
 			if err := repo.InsertDiagnosis(txCtx, DiagnosisRecord{
 				ID:             reportID,
 				AttemptID:      attempt.ID,
@@ -580,31 +705,35 @@ func (s *Service) SubmitAnswer(ctx context.Context, userID string, request Submi
 		if err != nil {
 			return err
 		}
-		attempted := appendUnique(session.ContentsAttempted, exercise.ID)
-		if err := repo.UpdateSessionAfterSubmit(txCtx, session.ID, exercise.ID, attempted); err != nil {
+		attempted := appendUnique(session.ContentsAttempted, currentExercise.ID)
+		if err := repo.UpdateSessionAfterSubmit(txCtx, session.ID, currentExercise.ID, attempted); err != nil {
 			return err
 		}
 
-		masteryUpdate, err := s.updateTracking(txCtx, repo, userID, exercise, check.IsCorrect, errorType, now)
+		isCorrect := check.Decision == mathsolverapp.DecisionCorrect
+		masteryUpdate, err := s.updateTracking(txCtx, repo, userID, currentExercise, isCorrect, errorType, now)
 		if err != nil {
 			return err
 		}
 
 		feedback := buildFeedback(check, diagnosis)
 		correctAnswerLatex := ""
-		if check.IsCorrect {
+		if isCorrect {
 			correctAnswerLatex = correctAnswer
 		}
 		response = SubmitResponse{
-			IsCorrect:          check.IsCorrect,
+			IsCorrect:          isCorrect,
+			GradingStatus:      string(check.Decision),
+			Recorded:           true,
 			Score:              attempt.Score,
 			StudentAnswerLatex: studentAnswer,
 			CorrectAnswerLatex: correctAnswerLatex,
 			Diagnosis:          diagnosis,
+			Evaluation:         evaluationDetail(check),
 			Feedback:           feedback,
 			MasteryUpdate:      masteryUpdate,
 			MasteryModel:       dktModelName,
-			NextRecommendation: nextRecommendation(check.IsCorrect, masteryUpdate),
+			NextRecommendation: nextRecommendation(isCorrect, masteryUpdate),
 		}
 		return nil
 	})
@@ -612,6 +741,181 @@ func (s *Service) SubmitAnswer(ctx context.Context, userID string, request Submi
 		return SubmitResponse{}, err
 	}
 	return response, nil
+}
+
+func submissionExercise(ctx context.Context, repo Repository, userID string, exerciseID string) (Exercise, string, error) {
+	return loadSubmissionExercise(ctx, repo, userID, exerciseID, repo.GetExercise)
+}
+
+func submissionExerciseForUpdate(ctx context.Context, repo Repository, userID string, exerciseID string) (Exercise, string, error) {
+	return loadSubmissionExercise(ctx, repo, userID, exerciseID, repo.GetExerciseForUpdate)
+}
+
+type exerciseGetter func(context.Context, string) (Exercise, bool, error)
+
+func loadSubmissionExercise(ctx context.Context, repo Repository, userID string, exerciseID string, get exerciseGetter) (Exercise, string, error) {
+	exercise, ok, err := get(ctx, exerciseID)
+	if err != nil {
+		return Exercise{}, "", err
+	}
+	if !ok || exercise.Status != "PUBLISHED" {
+		return Exercise{}, "", ErrBadRequest
+	}
+	canAccess, err := canAccessExercise(ctx, repo, userID, exercise)
+	if err != nil {
+		return Exercise{}, "", err
+	}
+	if !canAccess {
+		return Exercise{}, "", ErrBadRequest
+	}
+	correctAnswer := strings.TrimSpace(metautil.String(exercise.Meta, "answer"))
+	if correctAnswer == "" {
+		return Exercise{}, "", ErrBadRequest
+	}
+	return exercise, correctAnswer, nil
+}
+
+func sameSubmissionExercise(expected Exercise, current Exercise) bool {
+	return reflect.DeepEqual(expected, current)
+}
+
+func mapAnswerOCRError(err error) error {
+	switch {
+	case errors.Is(err, answerocrapp.ErrInvalidImage):
+		return ErrBadRequest
+	case errors.Is(err, answerocrapp.ErrUnreadable):
+		return ErrOCRUnreadable
+	case errors.Is(err, answerocrapp.ErrTimeout), errors.Is(err, context.DeadlineExceeded):
+		return ErrOCRTimeout
+	default:
+		return ErrOCRUnavailable
+	}
+}
+
+func normalizeAnswerCheckResult(check AnswerCheckResult) AnswerCheckResult {
+	check.Reason = strings.TrimSpace(check.Reason)
+	check.Method = strings.TrimSpace(check.Method)
+	check.ReasonCode = strings.TrimSpace(check.ReasonCode)
+	if check.Decision == "" {
+		switch {
+		case check.IsCorrect:
+			check.Decision = mathsolverapp.DecisionCorrect
+		case check.Reason != "" && check.Confidence >= 0.7:
+			check.Decision = mathsolverapp.DecisionIncorrect
+		default:
+			check.Decision = mathsolverapp.DecisionIndeterminate
+		}
+	}
+	if check.Method == "" {
+		check.Method = string(mathsolverapp.MethodNone)
+	}
+	if check.ReasonCode == "" {
+		check.ReasonCode = "unspecified"
+	}
+	if check.Confidence < 0 || check.Confidence > 1 || math.IsNaN(check.Confidence) || math.IsInf(check.Confidence, 0) {
+		check.Decision = mathsolverapp.DecisionIndeterminate
+		check.IsCorrect = false
+		check.Confidence = 0
+		check.ReasonCode = "invalid_confidence"
+		check.Reason = "判题结果置信度无效"
+	}
+	switch check.Decision {
+	case mathsolverapp.DecisionCorrect, mathsolverapp.DecisionIncorrect:
+		if check.Confidence < 0.7 {
+			check.Decision = mathsolverapp.DecisionIndeterminate
+			check.Degraded = true
+			check.ReasonCode = "grading_low_confidence"
+			check.Reason = "自动判题置信度不足，需要补充步骤或人工复核"
+		}
+	case mathsolverapp.DecisionIndeterminate:
+		if check.Confidence >= 0.7 {
+			check.Degraded = true
+			check.Retryable = true
+			check.ReasonCode = "solver_invalid_response"
+			check.Reason = "数学判题服务返回了与不确定状态冲突的置信度"
+			check.Failure = &mathsolverapp.Failure{
+				Code:      mathsolverapp.FailureSolverInvalid,
+				Stage:     "grading",
+				Message:   check.Reason,
+				Retryable: true,
+			}
+		}
+	default:
+		check.Decision = mathsolverapp.DecisionIndeterminate
+		check.Degraded = true
+		check.Retryable = true
+		check.ReasonCode = "solver_invalid_response"
+		check.Reason = "数学判题服务返回了无效结果"
+		check.Failure = &mathsolverapp.Failure{
+			Code:      mathsolverapp.FailureSolverInvalid,
+			Stage:     "grading",
+			Message:   check.Reason,
+			Retryable: true,
+		}
+	}
+	check.IsCorrect = check.Decision == mathsolverapp.DecisionCorrect
+	return check
+}
+
+func answerCheckFailure(check AnswerCheckResult) error {
+	if check.Failure == nil {
+		return nil
+	}
+	code := strings.ToLower(strings.TrimSpace(string(check.Failure.Code)))
+	switch code {
+	case "invalid_input", "input_limit_exceeded", "numeric_parse_failed", "invalid_tolerance":
+		return ErrAnswerParseFailed
+	case "unsupported_answer_kind":
+		return ErrMathUnsupported
+	case "canceled":
+		if check.Failure.Retryable {
+			return ErrMathSolverTimeout
+		}
+		return context.Canceled
+	case "invalid_configuration":
+		return ErrMathSolverUnavailable
+	case "timeout", "solver_timeout", "math_solver_timeout":
+		return ErrMathSolverTimeout
+	case "invalid_response", "solver_invalid_response", "math_solver_invalid_response":
+		return ErrMathSolverInvalidResult
+	case "unavailable", "solver_unavailable", "math_solver_unavailable":
+		return ErrMathSolverUnavailable
+	default:
+		return nil
+	}
+}
+
+func evaluationDetail(check AnswerCheckResult) EvaluationDetail {
+	return EvaluationDetail{
+		Method:     check.Method,
+		ReasonCode: check.ReasonCode,
+		Reason:     check.Reason,
+		Confidence: check.Confidence,
+		Degraded:   check.Degraded,
+		Retryable:  check.Retryable,
+		Evidence:   append([]mathsolverapp.Evidence(nil), check.Evidence...),
+	}
+}
+
+func indeterminateSubmitResponse(studentAnswer string, check AnswerCheckResult) SubmitResponse {
+	feedback := strings.TrimSpace(check.Reason)
+	if feedback == "" {
+		feedback = "当前信息不足，暂时无法可靠判定，请补充步骤或稍后重试。"
+	}
+	return SubmitResponse{
+		IsCorrect:          false,
+		GradingStatus:      string(mathsolverapp.DecisionIndeterminate),
+		Recorded:           false,
+		Score:              0,
+		StudentAnswerLatex: studentAnswer,
+		CorrectAnswerLatex: "",
+		Diagnosis:          nil,
+		Evaluation:         evaluationDetail(check),
+		Feedback:           feedback,
+		MasteryUpdate:      nil,
+		MasteryModel:       dktModelName,
+		NextRecommendation: "retry",
+	}
 }
 
 func (s *Service) buildDiagnosis(ctx context.Context, input DiagnosisInput) *DiagnosisDetail {
@@ -648,7 +952,7 @@ func (s *Service) GetExercise(ctx context.Context, userID string, exerciseID str
 	}, nil
 }
 
-// GetSolution returns cached solution data after the student has attempted the exercise.
+// GetSolution returns cached steps or a solver candidate verified against the trusted answer.
 func (s *Service) GetSolution(ctx context.Context, userID string, exerciseID string) (SolutionResponse, error) {
 	exercise, err := s.authorizedExercise(ctx, userID, exerciseID)
 	if err != nil {
@@ -661,17 +965,229 @@ func (s *Service) GetSolution(ctx context.Context, userID string, exerciseID str
 	if !hasAttempt {
 		return SolutionResponse{}, ErrNotFound
 	}
+	answer := strings.TrimSpace(metautil.String(exercise.Meta, "answer"))
+	if answer == "" {
+		return unavailableSolution(exerciseID, answer, nil, &mathsolverapp.Failure{
+			Code:      mathsolverapp.FailureInvalidInput,
+			Stage:     "reference_answer",
+			Message:   "题目缺少可用于验证解析的标准答案",
+			Retryable: false,
+		}), nil
+	}
+	if invalidReference, invalid := invalidMultipleChoiceReferenceCheck(exercise, answer); invalid {
+		verification := evaluationDetail(invalidReference)
+		return unavailableSolution(exerciseID, answer, &verification, invalidReference.Failure), nil
+	}
 	steps := metautil.StringSlice(exercise.Meta, "solution_steps")
-	source := "unavailable"
 	if len(steps) > 0 {
-		source = "cached"
+		return SolutionResponse{
+			ExerciseID: exerciseID,
+			Answer:     answer,
+			Steps:      steps,
+			Source:     "cached",
+		}, nil
+	}
+	if s.solutionSolver == nil {
+		return unavailableSolution(exerciseID, answer, nil, &mathsolverapp.Failure{
+			Code:      mathsolverapp.FailureSolverUnavailable,
+			Stage:     "solution_generation",
+			Message:   "通用数学求解服务未配置",
+			Retryable: true,
+		}), nil
+	}
+
+	solverExercise := exercise
+	solverExercise.Meta = maps.Clone(exercise.Meta)
+	delete(solverExercise.Meta, "answer")
+	delete(solverExercise.Meta, "solution_steps")
+	candidate, err := s.solutionSolver.Solve(ctx, SolutionInput{
+		Exercise:   solverExercise,
+		AnswerType: metautil.String(exercise.Meta, "answer_type"),
+	})
+	if err != nil {
+		return unavailableSolution(exerciseID, answer, nil, solutionSolverFailure(err, "solution_generation")), nil
+	}
+	candidate, ok := normalizeSolutionResult(candidate)
+	if !ok {
+		return unavailableSolution(exerciseID, answer, nil, &mathsolverapp.Failure{
+			Code:      mathsolverapp.FailureSolverInvalid,
+			Stage:     "solution_generation",
+			Message:   "通用数学求解服务返回了无效结果",
+			Retryable: true,
+		}), nil
+	}
+	if candidate.Status == SolutionStatusIndeterminate {
+		return unavailableSolution(exerciseID, answer, nil, &mathsolverapp.Failure{
+			Code:      mathsolverapp.FailureSolverIndeterminate,
+			Stage:     "solution_generation",
+			Message:   candidate.Reason,
+			Retryable: candidate.Retryable,
+		}), nil
+	}
+
+	answerVerification, err := s.verifySolutionAnswer(ctx, exercise, candidate.Answer, answer)
+	if err != nil {
+		return unavailableSolution(exerciseID, answer, nil, solutionSolverFailure(err, "solution_verification")), nil
+	}
+	answerVerification = normalizeAnswerCheckResult(answerVerification)
+	answerVerificationDetail := evaluationDetail(answerVerification)
+	if answerVerification.Decision != mathsolverapp.DecisionCorrect {
+		message := "生成解析未通过标准答案验证"
+		retryable := true
+		if answerVerification.Reason != "" {
+			message = answerVerification.Reason
+		}
+		if answerVerification.Failure != nil {
+			message = answerVerification.Failure.Message
+			retryable = answerVerification.Failure.Retryable
+		}
+		return unavailableSolution(exerciseID, answer, &answerVerificationDetail, &mathsolverapp.Failure{
+			Code:      mathsolverapp.FailureVerificationFailed,
+			Stage:     "solution_verification",
+			Message:   message,
+			Retryable: retryable,
+		}), nil
+	}
+
+	verifier, ok := s.solutionSolver.(SolutionVerifier)
+	if !ok {
+		return unavailableSolution(exerciseID, answer, &answerVerificationDetail, &mathsolverapp.Failure{
+			Code:      mathsolverapp.FailureSolverUnavailable,
+			Stage:     "solution_verification",
+			Message:   "通用数学解析验证服务未配置",
+			Retryable: true,
+		}), nil
+	}
+	verification, err := verifier.VerifySolution(ctx, SolutionVerificationInput{
+		Exercise:        solverExercise,
+		CandidateAnswer: candidate.Answer,
+		CandidateSteps:  append([]string(nil), candidate.Steps...),
+		ReferenceAnswer: answer,
+		AnswerType:      metautil.String(exercise.Meta, "answer_type"),
+	})
+	if err != nil {
+		return unavailableSolution(exerciseID, answer, &answerVerificationDetail, solutionSolverFailure(err, "solution_verification")), nil
+	}
+	verification = normalizeAnswerCheckResult(verification)
+	verificationDetail := evaluationDetail(verification)
+	if verification.Decision != mathsolverapp.DecisionCorrect {
+		message := "生成解析的推导步骤未通过独立验证"
+		if verification.Reason != "" {
+			message = verification.Reason
+		}
+		retryable := verification.Decision == mathsolverapp.DecisionIncorrect || verification.Retryable
+		if verification.Failure != nil {
+			message = verification.Failure.Message
+			retryable = verification.Failure.Retryable
+		}
+		return unavailableSolution(exerciseID, answer, &verificationDetail, &mathsolverapp.Failure{
+			Code:      mathsolverapp.FailureVerificationFailed,
+			Stage:     "solution_verification",
+			Message:   message,
+			Retryable: retryable,
+		}), nil
+	}
+	currentExercise, err := s.authorizedExercise(ctx, userID, exerciseID)
+	if err != nil {
+		return SolutionResponse{}, err
+	}
+	if !sameSubmissionExercise(exercise, currentExercise) {
+		return SolutionResponse{}, ErrExerciseChanged
 	}
 	return SolutionResponse{
-		ExerciseID: exerciseID,
-		Answer:     metautil.String(exercise.Meta, "answer"),
-		Steps:      steps,
-		Source:     source,
+		ExerciseID:   exerciseID,
+		Answer:       answer,
+		Steps:        candidate.Steps,
+		Source:       "solver_verified",
+		Verification: &verificationDetail,
 	}, nil
+}
+
+func unavailableSolution(exerciseID string, answer string, verification *EvaluationDetail, failure *mathsolverapp.Failure) SolutionResponse {
+	return SolutionResponse{
+		ExerciseID:   exerciseID,
+		Answer:       answer,
+		Steps:        []string{},
+		Source:       "unavailable",
+		Verification: verification,
+		Failure:      failure,
+	}
+}
+
+func solutionSolverFailure(err error, stage string) *mathsolverapp.Failure {
+	switch {
+	case errors.Is(err, context.DeadlineExceeded):
+		return &mathsolverapp.Failure{Code: mathsolverapp.FailureSolverTimeout, Stage: stage, Message: "通用数学求解服务处理超时", Retryable: true}
+	case errors.Is(err, context.Canceled):
+		return &mathsolverapp.Failure{Code: mathsolverapp.FailureCanceled, Stage: stage, Message: "通用数学求解请求已取消", Retryable: false}
+	case errors.Is(err, ErrMathSolverInvalidResult):
+		return &mathsolverapp.Failure{Code: mathsolverapp.FailureSolverInvalid, Stage: stage, Message: "通用数学求解服务返回了无效结果", Retryable: true}
+	default:
+		return &mathsolverapp.Failure{Code: mathsolverapp.FailureSolverUnavailable, Stage: stage, Message: "通用数学求解服务暂不可用", Retryable: true}
+	}
+}
+
+func normalizeSolutionResult(result SolutionResult) (SolutionResult, bool) {
+	result.Status = strings.ToLower(strings.TrimSpace(result.Status))
+	result.Answer = strings.TrimSpace(result.Answer)
+	result.Method = strings.ToLower(strings.TrimSpace(result.Method))
+	result.ReasonCode = strings.ToLower(strings.TrimSpace(result.ReasonCode))
+	result.Reason = strings.TrimSpace(result.Reason)
+	if result.Method == "" || len(result.Method) > 64 || result.ReasonCode == "" || len(result.ReasonCode) > 128 ||
+		result.Reason == "" || len(result.Reason) > 2_000 || result.Confidence < 0 || result.Confidence > 1 ||
+		math.IsNaN(result.Confidence) || math.IsInf(result.Confidence, 0) || len(result.Evidence) > 8 {
+		return SolutionResult{}, false
+	}
+	for index := range result.Evidence {
+		result.Evidence[index].Kind = strings.ToLower(strings.TrimSpace(result.Evidence[index].Kind))
+		result.Evidence[index].Summary = strings.TrimSpace(result.Evidence[index].Summary)
+		if result.Evidence[index].Kind == "" || len(result.Evidence[index].Kind) > 64 ||
+			result.Evidence[index].Summary == "" || len([]rune(result.Evidence[index].Summary)) > 500 {
+			return SolutionResult{}, false
+		}
+	}
+	switch result.Status {
+	case SolutionStatusSolved:
+		if result.Confidence < 0.7 || result.Answer == "" || len(result.Answer) > 16*1024 ||
+			len(result.Steps) == 0 || len(result.Steps) > 10 || len(result.Evidence) == 0 {
+			return SolutionResult{}, false
+		}
+		for index := range result.Steps {
+			result.Steps[index] = strings.TrimSpace(result.Steps[index])
+			if result.Steps[index] == "" || len(result.Steps[index]) > 5_000 {
+				return SolutionResult{}, false
+			}
+		}
+	case SolutionStatusIndeterminate:
+		if result.Confidence >= 0.7 {
+			return SolutionResult{}, false
+		}
+		result.Answer = ""
+		result.Steps = []string{}
+	default:
+		return SolutionResult{}, false
+	}
+	return result, true
+}
+
+func (s *Service) verifySolutionAnswer(ctx context.Context, exercise Exercise, candidateAnswer string, correctAnswer string) (AnswerCheckResult, error) {
+	if check, ok := deterministicMultipleChoiceCheck(exercise, candidateAnswer, correctAnswer); ok {
+		return check, nil
+	}
+	local, err := (NormalizedAnswerChecker{}).CheckExerciseAnswer(ctx, AnswerCheckInput{
+		Exercise:      exercise,
+		StudentAnswer: candidateAnswer,
+		CorrectAnswer: correctAnswer,
+		AnswerType:    metautil.String(exercise.Meta, "answer_type"),
+	})
+	if err != nil {
+		return AnswerCheckResult{}, err
+	}
+	local = normalizeAnswerCheckResult(local)
+	if local.Decision != mathsolverapp.DecisionIndeterminate || local.Failure != nil {
+		return local, nil
+	}
+	return s.checkExerciseAnswer(ctx, exercise, candidateAnswer, correctAnswer)
 }
 
 func (s *Service) authorizedExercise(ctx context.Context, userID string, exerciseID string) (Exercise, error) {
@@ -838,27 +1354,78 @@ func (s *Service) checkExerciseAnswer(ctx context.Context, exercise Exercise, st
 	if check, ok := deterministicMultipleChoiceCheck(exercise, studentAnswer, correctAnswer); ok {
 		return check, nil
 	}
-	return s.checker.CheckAnswer(ctx, studentAnswer, correctAnswer, metautil.String(exercise.Meta, "answer_type"))
+	input := AnswerCheckInput{
+		Exercise:      exercise,
+		StudentAnswer: studentAnswer,
+		CorrectAnswer: correctAnswer,
+		AnswerType:    metautil.String(exercise.Meta, "answer_type"),
+	}
+	if checker, ok := s.checker.(ContextualAnswerChecker); ok {
+		return checker.CheckExerciseAnswer(ctx, input)
+	}
+	return s.checker.CheckAnswer(ctx, studentAnswer, correctAnswer, input.AnswerType)
 }
 
 func deterministicMultipleChoiceCheck(exercise Exercise, studentAnswer string, correctAnswer string) (AnswerCheckResult, bool) {
 	if metaStringDefault(exercise.Meta, "type", "short_answer") != "multiple_choice" {
 		return AnswerCheckResult{}, false
 	}
+	if invalidReference, invalid := invalidMultipleChoiceReferenceCheck(exercise, correctAnswer); invalid {
+		return invalidReference, true
+	}
 	options := metautil.StringSlice(exercise.Meta, "options")
-	if len(options) == 0 {
-		return AnswerCheckResult{}, false
-	}
-
-	canonicalCorrect, ok := canonicalCorrectOption(exercise, options, correctAnswer)
-	if !ok {
-		return AnswerCheckResult{}, false
-	}
+	canonicalCorrect, _ := canonicalCorrectOption(exercise, options, correctAnswer)
 	canonicalStudent, studentMatched := canonicalStudentOption(options, studentAnswer)
 	if studentMatched && normalizeAnswer(canonicalStudent) == normalizeAnswer(canonicalCorrect) {
-		return AnswerCheckResult{IsCorrect: true, Reason: "所选答案与标准选项一致", Confidence: 1}, true
+		return AnswerCheckResult{
+			IsCorrect:  true,
+			Decision:   mathsolverapp.DecisionCorrect,
+			Method:     "choice_exact",
+			ReasonCode: "choice_match",
+			Reason:     "所选答案与标准选项一致",
+			Confidence: 1,
+			Evidence:   []mathsolverapp.Evidence{{Kind: "choice", Summary: "学生选项与标准选项完全一致"}},
+		}, true
 	}
-	return AnswerCheckResult{IsCorrect: false, Reason: "所选答案与标准选项不一致", Confidence: 1}, true
+	return AnswerCheckResult{
+		Decision:   mathsolverapp.DecisionIncorrect,
+		Method:     "choice_exact",
+		ReasonCode: "choice_mismatch",
+		Reason:     "所选答案与标准选项不一致",
+		Confidence: 1,
+		Evidence:   []mathsolverapp.Evidence{{Kind: "choice", Summary: "学生选项与标准选项不同"}},
+	}, true
+}
+
+func invalidMultipleChoiceReferenceCheck(exercise Exercise, correctAnswer string) (AnswerCheckResult, bool) {
+	if metaStringDefault(exercise.Meta, "type", "short_answer") != "multiple_choice" {
+		return AnswerCheckResult{}, false
+	}
+	options := metautil.StringSlice(exercise.Meta, "options")
+	if len(options) > 0 {
+		if _, ok := canonicalCorrectOption(exercise, options, correctAnswer); ok {
+			return AnswerCheckResult{}, false
+		}
+	}
+	reason := "题目标准答案未对应有效选项，无法可靠判定"
+	return AnswerCheckResult{
+		Decision:   mathsolverapp.DecisionIndeterminate,
+		Method:     "choice_exact",
+		ReasonCode: "invalid_reference_answer",
+		Reason:     reason,
+		Degraded:   true,
+		Retryable:  false,
+		Evidence: []mathsolverapp.Evidence{{
+			Kind:    "reference_validation",
+			Summary: "标准答案无法归一化为题目选项",
+		}},
+		Failure: &mathsolverapp.Failure{
+			Code:      mathsolverapp.FailureInvalidInput,
+			Stage:     "reference_answer",
+			Message:   reason,
+			Retryable: false,
+		},
+	}, true
 }
 
 func canonicalCorrectOption(exercise Exercise, options []string, answer string) (string, bool) {
@@ -895,7 +1462,7 @@ func matchingOption(options []string, answer string) (string, bool) {
 
 func optionFromLabel(options []string, answer string) (string, bool) {
 	label := strings.ToUpper(strings.TrimSpace(answer))
-	if len(label) != 1 || label[0] < 'A' || label[0] > 'D' {
+	if len(label) != 1 || label[0] < 'A' || label[0] > 'Z' {
 		return "", false
 	}
 	index := int(label[0] - 'A')
@@ -905,47 +1472,156 @@ func optionFromLabel(options []string, answer string) (string, bool) {
 	return options[index], true
 }
 
-// NormalizedAnswerChecker is a deterministic local checker used when the Math Solver agent is unavailable.
+// NormalizedAnswerChecker is the deterministic local checker used before the Math Solver agent.
 type NormalizedAnswerChecker struct{}
 
-// CheckAnswer compares normalized strings.
-func (NormalizedAnswerChecker) CheckAnswer(_ context.Context, studentAnswer string, correctAnswer string, _ string) (AnswerCheckResult, error) {
-	if normalizeAnswer(studentAnswer) == normalizeAnswer(correctAnswer) {
-		return AnswerCheckResult{IsCorrect: true, Reason: "答案与标准答案一致", Confidence: 1}, nil
-	}
-	return AnswerCheckResult{IsCorrect: false, Reason: "答案与标准答案不一致", Confidence: 0.3}, nil
+// CheckAnswer performs bounded exact text/expression and rational numeric comparison.
+func (NormalizedAnswerChecker) CheckAnswer(ctx context.Context, studentAnswer string, correctAnswer string, answerType string) (AnswerCheckResult, error) {
+	result := mathsolverapp.NewComparator().Compare(ctx, mathsolverapp.CompareInput{
+		StudentAnswer:   studentAnswer,
+		ReferenceAnswer: correctAnswer,
+		Kind:            mathAnswerKind(answerType, ""),
+	})
+	return answerCheckFromMathResult(result), nil
+}
+
+// CheckExerciseAnswer includes question type and configured numeric tolerances.
+func (NormalizedAnswerChecker) CheckExerciseAnswer(ctx context.Context, input AnswerCheckInput) (AnswerCheckResult, error) {
+	result := mathsolverapp.NewComparator().Compare(ctx, mathsolverapp.CompareInput{
+		StudentAnswer:   input.StudentAnswer,
+		ReferenceAnswer: input.CorrectAnswer,
+		Kind:            mathAnswerKind(input.AnswerType, metaStringDefault(input.Exercise.Meta, "type", "")),
+		Tolerance: mathsolverapp.Tolerance{
+			Absolute: metaNumberString(input.Exercise.Meta, "absolute_tolerance"),
+			Relative: metaNumberString(input.Exercise.Meta, "relative_tolerance"),
+		},
+	})
+	return answerCheckFromMathResult(result), nil
 }
 
 // CheckAnswer compares answers with a solver and falls back to deterministic local comparison.
 func (c SolverAnswerChecker) CheckAnswer(ctx context.Context, studentAnswer string, correctAnswer string, answerType string) (AnswerCheckResult, error) {
+	return c.CheckExerciseAnswer(ctx, AnswerCheckInput{
+		StudentAnswer: studentAnswer,
+		CorrectAnswer: correctAnswer,
+		AnswerType:    answerType,
+	})
+}
+
+// CheckExerciseAnswer uses deterministic evidence first, then the configured general solver.
+func (c SolverAnswerChecker) CheckExerciseAnswer(ctx context.Context, input AnswerCheckInput) (AnswerCheckResult, error) {
 	fallbackChecker := c.Fallback
 	if fallbackChecker == nil {
 		fallbackChecker = NormalizedAnswerChecker{}
 	}
-	fallback, err := fallbackChecker.CheckAnswer(ctx, studentAnswer, correctAnswer, answerType)
+	var fallback AnswerCheckResult
+	var err error
+	if checker, ok := fallbackChecker.(ContextualAnswerChecker); ok {
+		fallback, err = checker.CheckExerciseAnswer(ctx, input)
+	} else {
+		fallback, err = fallbackChecker.CheckAnswer(ctx, input.StudentAnswer, input.CorrectAnswer, input.AnswerType)
+	}
 	if err != nil {
 		return AnswerCheckResult{}, err
+	}
+	fallback = normalizeAnswerCheckResult(fallback)
+	if fallback.Decision != mathsolverapp.DecisionIndeterminate {
+		return fallback, nil
 	}
 	if c.Solver == nil {
 		return fallback, nil
 	}
-	result, err := c.Solver.CheckAnswer(ctx, AnswerCheckInput{
-		StudentAnswer: studentAnswer,
-		CorrectAnswer: correctAnswer,
-		AnswerType:    answerType,
-		Fallback:      fallback,
-	})
+	input.Fallback = fallback
+	result, err := c.Solver.CheckAnswer(ctx, input)
 	if err != nil {
+		failureCode := mathsolverapp.FailureCode("solver_unavailable")
+		reasonCode := "solver_unavailable"
+		reason := "数学判题服务暂不可用"
+		retryable := true
+		if errors.Is(err, context.DeadlineExceeded) {
+			failureCode = mathsolverapp.FailureCode("solver_timeout")
+			reasonCode = "solver_timeout"
+			reason = "数学判题服务处理超时"
+		} else if errors.Is(err, context.Canceled) {
+			failureCode = mathsolverapp.FailureCanceled
+			reasonCode = "solver_canceled"
+			reason = "数学判题请求已取消"
+			retryable = false
+		} else if errors.Is(err, ErrMathSolverInvalidResult) {
+			failureCode = mathsolverapp.FailureCode("solver_invalid_response")
+			reasonCode = "solver_invalid_response"
+			reason = "数学判题服务返回了无效结果"
+		}
+		fallback.Failure = &mathsolverapp.Failure{Code: failureCode, Stage: "solver", Message: reason, Retryable: retryable}
+		fallback.ReasonCode = reasonCode
+		fallback.Reason = reason
+		fallback.Retryable = retryable
 		return fallback, nil
 	}
-	result.Reason = strings.TrimSpace(result.Reason)
+	result = normalizeAnswerCheckResult(result)
 	if result.Reason == "" {
-		return fallback, nil
-	}
-	if result.Confidence < 0 || result.Confidence > 1 {
+		fallback.Failure = &mathsolverapp.Failure{Code: mathsolverapp.FailureCode("solver_invalid_response"), Stage: "solver", Message: "数学判题服务返回了无效结果", Retryable: true}
+		fallback.ReasonCode = "solver_invalid_response"
+		fallback.Reason = "数学判题服务返回了无效结果"
+		fallback.Retryable = true
 		return fallback, nil
 	}
 	return result, nil
+}
+
+func answerCheckFromMathResult(result mathsolverapp.Result) AnswerCheckResult {
+	return AnswerCheckResult{
+		IsCorrect:  result.Decision == mathsolverapp.DecisionCorrect,
+		Decision:   result.Decision,
+		Method:     string(result.Method),
+		ReasonCode: string(result.ReasonCode),
+		Reason:     result.Reason,
+		Confidence: result.Confidence,
+		Degraded:   result.Degraded,
+		Retryable:  result.Retryable,
+		Evidence:   append([]mathsolverapp.Evidence(nil), result.Evidence...),
+		Failure:    result.Failure,
+	}
+}
+
+func mathAnswerKind(answerType string, questionType string) mathsolverapp.AnswerKind {
+	if strings.EqualFold(strings.TrimSpace(questionType), "proof") {
+		return mathsolverapp.AnswerKindProof
+	}
+	switch strings.ToLower(strings.TrimSpace(answerType)) {
+	case "numeric", "number":
+		return mathsolverapp.AnswerKindNumeric
+	case "expression", "formula", "equation":
+		return mathsolverapp.AnswerKindExpression
+	case "proof":
+		return mathsolverapp.AnswerKindProof
+	default:
+		return mathsolverapp.AnswerKindExpression
+	}
+}
+
+func metaNumberString(meta map[string]any, key string) string {
+	if meta == nil {
+		return ""
+	}
+	value, ok := meta[key]
+	if !ok || value == nil {
+		return ""
+	}
+	switch typed := value.(type) {
+	case string:
+		return strings.TrimSpace(typed)
+	case float64:
+		return fmt.Sprintf("%.17g", typed)
+	case float32:
+		return fmt.Sprintf("%.9g", typed)
+	case int:
+		return fmt.Sprintf("%d", typed)
+	case int64:
+		return fmt.Sprintf("%d", typed)
+	default:
+		return ""
+	}
 }
 
 func chooseTarget(query NextQuery, mastery map[string]float64) (string, float64) {
@@ -1038,11 +1714,10 @@ func normalizeGeneratedQuestion(question GeneratedQuestion) GeneratedQuestion {
 	question.SolutionSteps = sliceutil.AppendUniqueNonEmptyStrings(nil, question.SolutionSteps...)
 	question.ConceptIDs = sliceutil.AppendUniqueNonEmptyStrings(nil, question.ConceptIDs...)
 	question.KnowledgePointNames = sliceutil.AppendUniqueNonEmptyStrings(nil, question.KnowledgePointNames...)
-	for _, option := range question.Options {
-		if option == question.Answer {
-			question.Answer = option
-			break
-		}
+	if option, ok := matchingOption(question.Options, question.Answer); ok {
+		question.Answer = option
+	} else if option, ok := optionFromLabel(question.Options, question.Answer); ok {
+		question.Answer = option
 	}
 	return question
 }
@@ -1206,10 +1881,6 @@ func nextRecommendation(isCorrect bool, masteryUpdate map[string]float64) string
 		return "review"
 	}
 	return "continue"
-}
-
-func isSafeAnswerImageURL(imageURL string) bool {
-	return uploadapp.IsSafeImagePath(imageURL)
 }
 
 func normalizeAnswer(value string) string {

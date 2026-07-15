@@ -3,6 +3,7 @@ package question
 import (
 	"context"
 	"errors"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -53,6 +54,38 @@ func TestCreateQuestionAutoMatchesConceptsAndDefaults(t *testing.T) {
 	}
 }
 
+func TestCreateQuestionCanonicalizesMultipleChoiceAnswer(t *testing.T) {
+	options := []string{"x + 1", "2", "3", "4"}
+	repo := &fakeQuestionRepo{createQuestion: Question{ID: "question-1"}}
+	service := newTestService(repo, time.Now())
+
+	_, err := service.CreateQuestion(context.Background(), "teacher-1", QuestionInput{
+		Title: "代数", Body: "选择等价表达式", Type: "multiple_choice", Answer: " X+1 ", Options: &options,
+	})
+	if err != nil {
+		t.Fatalf("CreateQuestion() error = %v", err)
+	}
+	if repo.lastInput.Answer != "x + 1" || repo.lastInput.Options == nil || len(*repo.lastInput.Options) != 4 {
+		t.Fatalf("input = %#v", repo.lastInput)
+	}
+}
+
+func TestCreateQuestionRejectsMultipleChoiceAnswerOutsideOptions(t *testing.T) {
+	options := []string{"A1", "B1", "C1", "D1"}
+	repo := &fakeQuestionRepo{}
+	service := newTestService(repo, time.Now())
+
+	_, err := service.CreateQuestion(context.Background(), "teacher-1", QuestionInput{
+		Title: "选择题", Body: "题干", Type: "multiple_choice", Answer: "E", Options: &options,
+	})
+	if !errors.Is(err, ErrBadRequest) {
+		t.Fatalf("CreateQuestion() error = %v, want ErrBadRequest", err)
+	}
+	if repo.lastInput.Title != "" || repo.matchCalled {
+		t.Fatalf("invalid question reached repository: %#v", repo.lastInput)
+	}
+}
+
 func TestUpdateQuestionMapsMissingToNotFound(t *testing.T) {
 	repo := &fakeQuestionRepo{}
 	service := newTestService(repo, time.Now())
@@ -60,6 +93,26 @@ func TestUpdateQuestionMapsMissingToNotFound(t *testing.T) {
 	_, err := service.UpdateQuestion(context.Background(), "teacher-1", "missing", QuestionUpdate{})
 	if !errors.Is(err, ErrNotFound) {
 		t.Fatalf("UpdateQuestion() error = %v, want ErrNotFound", err)
+	}
+}
+
+func TestUpdateQuestionRejectsInvalidMultipleChoiceAnswerBeforeWrite(t *testing.T) {
+	repo := &fakeQuestionRepo{
+		question: Question{ID: "question-1", Type: "multiple_choice", Meta: map[string]any{
+			"type": "multiple_choice", "answer": "A1", "options": []any{"A1", "B1", "C1", "D1"},
+		}},
+		found:       true,
+		updateFound: true,
+	}
+	service := newTestService(repo, time.Now())
+	answer := "E"
+
+	_, err := service.UpdateQuestion(context.Background(), "teacher-1", "question-1", QuestionUpdate{Answer: &answer})
+	if !errors.Is(err, ErrBadRequest) {
+		t.Fatalf("UpdateQuestion() error = %v, want ErrBadRequest", err)
+	}
+	if repo.updateCalled {
+		t.Fatalf("invalid update reached repository: %#v", repo.lastUpdate)
 	}
 }
 
@@ -153,6 +206,13 @@ func TestBatchImportRejectsInvalidBoundariesBeforeRepo(t *testing.T) {
 				Body:   "题目",
 				Answer: "1",
 				Tags:   makeStrings(MaxQuestionListItems+1, "tag"),
+			}},
+		},
+		{
+			name: "multiple choice answer outside options",
+			questions: []QuestionInput{{
+				Title: "选择题", Body: "题目", Type: "multiple_choice", Answer: "E",
+				Options: stringSlicePtr("A1", "B1", "C1", "D1"),
 			}},
 		},
 	}
@@ -257,6 +317,13 @@ func TestParseQuestionsFallsBackForInvalidParserShape(t *testing.T) {
 				Body:  strings.Repeat("x", MaxQuestionBodyBytes+1),
 			}}},
 		},
+		{
+			name: "multiple choice answer outside options",
+			response: AIParseResponse{Questions: []AIParseQuestionItem{{
+				Title: "选择题", Body: "题干", Type: "multiple_choice", Answer: "E", AnswerType: "text",
+				Options: []string{"A1", "B1", "C1", "D1"},
+			}}},
+		},
 	}
 
 	for _, tt := range tests {
@@ -313,6 +380,9 @@ func TestGenerateIsomorphicProblemBuildsValidatedIntegralVariant(t *testing.T) {
 	if len(response.Tags) < 3 || response.Tags[0] != "exam" {
 		t.Fatalf("tags = %#v", response.Tags)
 	}
+	if !slices.Contains(response.Tags, "template_validated") || slices.Contains(response.Tags, "solver_validated") {
+		t.Fatalf("validation tags = %#v", response.Tags)
+	}
 }
 
 func TestNewServiceRejectsNilRepository(t *testing.T) {
@@ -361,6 +431,11 @@ func makeStrings(count int, prefix string) []string {
 	return values
 }
 
+func stringSlicePtr(values ...string) *[]string {
+	cloned := append([]string(nil), values...)
+	return &cloned
+}
+
 type fakeParser struct {
 	response AIParseResponse
 	input    ParserInput
@@ -400,6 +475,7 @@ type fakeQuestionRepo struct {
 	lastInputs        []QuestionInput
 	lastIDs           []string
 	lastNow           time.Time
+	updateCalled      bool
 }
 
 func (r *fakeQuestionRepo) MatchConceptIDs(_ context.Context, title string) ([]string, error) {
@@ -428,6 +504,7 @@ func (r *fakeQuestionRepo) CreateQuestion(_ context.Context, ownerID string, inp
 }
 
 func (r *fakeQuestionRepo) UpdateQuestion(_ context.Context, ownerID string, questionID string, update QuestionUpdate, now time.Time) (Question, bool, error) {
+	r.updateCalled = true
 	r.lastOwnerID = ownerID
 	r.lastQuestionID = questionID
 	r.lastUpdate = update

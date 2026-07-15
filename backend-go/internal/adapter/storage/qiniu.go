@@ -12,12 +12,14 @@ import (
 	"mime/multipart"
 	"net/http"
 	"net/textproto"
+	"net/url"
 	"path"
 	"sort"
 	"strconv"
 	"strings"
 	"time"
 
+	answerocrapp "mathstudy/backend-go/internal/application/answerocr"
 	uploadapp "mathstudy/backend-go/internal/application/upload"
 	"mathstudy/backend-go/internal/platform/outbound"
 )
@@ -79,6 +81,21 @@ func NewQiniuStorage(cfg QiniuConfig, client *http.Client) (*QiniuStorage, error
 		client: qiniuHTTPClient(client),
 		now:    func() time.Time { return time.Now().UTC() },
 	}, nil
+}
+
+// LoadImage downloads an image only from the configured Qiniu download domain.
+func (s *QiniuStorage) LoadImage(ctx context.Context, reference string) (answerocrapp.Image, error) {
+	base, err := url.Parse(strings.TrimRight(s.cfg.Domain, "/"))
+	if err != nil {
+		return answerocrapp.Image{}, fmt.Errorf("%w: resolve Qiniu download base", answerocrapp.ErrUnavailable)
+	}
+	return downloadReference{
+		base:        base,
+		allowQuery:  s.cfg.PrivateBucket,
+		downloadURL: s.downloadURL,
+		storageName: "Qiniu",
+		httpClient:  s.client,
+	}.load(ctx, reference)
 }
 
 // UploadStream uploads a single object and returns its public or private URL.

@@ -2,12 +2,14 @@ package einoagent
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 	"time"
 
 	adminaiconfigapp "mathstudy/backend-go/internal/application/adminaiconfig"
 	exerciseapp "mathstudy/backend-go/internal/application/exercise"
+	mathsolverapp "mathstudy/backend-go/internal/application/mathsolver"
 	portraitapp "mathstudy/backend-go/internal/application/portrait"
 	questionapp "mathstudy/backend-go/internal/application/question"
 	sessionapp "mathstudy/backend-go/internal/application/session"
@@ -172,6 +174,56 @@ func TestConfigurableMathSolverUsesMathSolverRuntimeConfig(t *testing.T) {
 	}
 }
 
+func TestConfigurableMathSolverUsesMathSolverRuntimeForSolutionGeneration(t *testing.T) {
+	provider := &fakeRuntimeConfigProvider{
+		runtime: adminaiconfigapp.RuntimeConfig{
+			BaseURL: "https://api.example.com", APIKey: "math-key", Model: "math-model",
+			Timeout: time.Second, MaxTokens: 500, MaxIterations: 1,
+		},
+		ok: true,
+	}
+	solver := NewConfigurableMathSolver(provider, Config{Enabled: false})
+	var captured Config
+	solver.newSolver = func(_ context.Context, cfg Config) (exerciseapp.MathSolver, error) {
+		captured = cfg
+		return fakeEinoMathSolver{solution: exerciseapp.SolutionResult{Status: exerciseapp.SolutionStatusSolved, Answer: "2x"}}, nil
+	}
+
+	result, err := solver.Solve(context.Background(), exerciseapp.SolutionInput{})
+	if err != nil {
+		t.Fatalf("Solve() error = %v", err)
+	}
+	if !provider.called || provider.agentType != "math_solver" || result.Answer != "2x" || captured.Model != "math-model" {
+		t.Fatalf("called=%v agentType=%q result=%#v config=%#v", provider.called, provider.agentType, result, captured)
+	}
+}
+
+func TestConfigurableMathSolverUsesFreshRuntimeForSolutionVerification(t *testing.T) {
+	provider := &fakeRuntimeConfigProvider{
+		runtime: adminaiconfigapp.RuntimeConfig{
+			BaseURL: "https://api.example.com", APIKey: "math-key", Model: "verification-model",
+			Timeout: time.Second, MaxTokens: 500, MaxIterations: 1,
+		},
+		ok: true,
+	}
+	solver := NewConfigurableMathSolver(provider, Config{Enabled: false})
+	var captured Config
+	solver.newSolver = func(_ context.Context, cfg Config) (exerciseapp.MathSolver, error) {
+		captured = cfg
+		return fakeEinoMathSolver{verification: exerciseapp.AnswerCheckResult{
+			Decision: mathsolverapp.DecisionCorrect, Reason: "步骤验证通过", Confidence: 0.95,
+		}}, nil
+	}
+
+	result, err := solver.VerifySolution(context.Background(), exerciseapp.SolutionVerificationInput{})
+	if err != nil {
+		t.Fatalf("VerifySolution() error = %v", err)
+	}
+	if !provider.called || provider.agentType != "math_solver" || result.Decision != mathsolverapp.DecisionCorrect || captured.Model != "verification-model" {
+		t.Fatalf("called=%v agentType=%q result=%#v config=%#v", provider.called, provider.agentType, result, captured)
+	}
+}
+
 func TestConfigurableQuestionParserUsesQuestionParserRuntimeConfig(t *testing.T) {
 	provider := &fakeRuntimeConfigProvider{
 		runtime: adminaiconfigapp.RuntimeConfig{
@@ -311,6 +363,12 @@ func TestExerciseMathSolverParsesStructuredJSON(t *testing.T) {
 	agent := &fakeChatAgent{output: sessionapp.ChatAgentOutput{Agent: "math_solver", Content: `{"is_correct":true,"reason":"两式代数等价","confidence":0.91}`}}
 	solver := exerciseMathSolver{agent: agent}
 	result, err := solver.CheckAnswer(context.Background(), exerciseapp.AnswerCheckInput{
+		Exercise: exerciseapp.Exercise{
+			ID:    "exercise-1",
+			Title: "导数题",
+			Body:  "求 x^2 的导数",
+			Meta:  map[string]any{"type": "short_answer", "solution_steps": []any{"使用幂函数求导公式"}},
+		},
 		StudentAnswer: "x+x",
 		CorrectAnswer: "2x",
 		AnswerType:    "expression",
@@ -319,14 +377,99 @@ func TestExerciseMathSolverParsesStructuredJSON(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CheckAnswer() error = %v", err)
 	}
-	if !result.IsCorrect || result.Confidence != 0.91 || result.Reason != "两式代数等价" {
+	if !result.IsCorrect || result.Decision != mathsolverapp.DecisionCorrect || result.Confidence != 0.91 || result.Reason != "两式代数等价" {
 		t.Fatalf("result = %#v", result)
 	}
 	prompt := agent.lastInput.Message
-	for _, want := range []string{"学生答案: x+x", "标准答案: 2x", "本地兜底判定"} {
+	for _, want := range []string{"导数题", "求 x^2 的导数", "使用幂函数求导公式", "学生答案: x+x", "标准答案: 2x", "本地兜底判定"} {
 		if !strings.Contains(prompt, want) {
 			t.Fatalf("prompt missing %q: %s", want, prompt)
 		}
+	}
+}
+
+func TestExerciseMathSolverGeneratesStructuredSolutionWithoutReferenceAnswer(t *testing.T) {
+	agent := &fakeChatAgent{output: sessionapp.ChatAgentOutput{Agent: "math_solver", Content: `{
+		"status":"solved",
+		"answer":"2x",
+		"steps":["使用幂函数求导公式。","得到 2x。"],
+		"method":"llm_assisted",
+		"reason_code":"derived",
+		"reason":"完成独立推导",
+		"confidence":0.93,
+		"retryable":false,
+		"evidence":[{"kind":"derivation","summary":"d(x^2)/dx=2x"}]
+	}`}}
+	solver := exerciseMathSolver{agent: agent}
+	result, err := solver.Solve(context.Background(), exerciseapp.SolutionInput{
+		Exercise: exerciseapp.Exercise{
+			ID: "exercise-1", Title: "导数题", Body: "求 x^2 的导数",
+			Meta: map[string]any{"type": "short_answer", "answer": "SECRET_REFERENCE_42", "options": []any{"x", "2x"}},
+		},
+		AnswerType: "expression",
+	})
+	if err != nil {
+		t.Fatalf("Solve() error = %v", err)
+	}
+	if result.Status != exerciseapp.SolutionStatusSolved || result.Answer != "2x" || len(result.Steps) != 2 || result.Confidence != 0.93 {
+		t.Fatalf("result = %#v", result)
+	}
+	prompt := agent.lastInput.Message
+	for _, want := range []string{"任务模式：solution_generation", "导数题", "求 x^2 的导数", "答案类型: expression", "2. 2x"} {
+		if !strings.Contains(prompt, want) {
+			t.Fatalf("prompt missing %q: %s", want, prompt)
+		}
+	}
+	if strings.Contains(prompt, "SECRET_REFERENCE_42") {
+		t.Fatalf("prompt exposed trusted reference answer: %s", prompt)
+	}
+}
+
+func TestExerciseMathSolverVerifiesAnswerAndEveryCandidateStep(t *testing.T) {
+	agent := &fakeChatAgent{output: sessionapp.ChatAgentOutput{Agent: "math_solver", Content: `{
+		"decision":"correct",
+		"method":"llm_assisted",
+		"reason_code":"solution_steps_verified",
+		"reason":"最终答案和每个步骤均成立",
+		"confidence":0.94,
+		"retryable":false,
+		"evidence":[{"kind":"derivation","summary":"逐步复核导数公式与化简"}]
+	}`}}
+	solver := exerciseMathSolver{agent: agent}
+	result, err := solver.VerifySolution(context.Background(), exerciseapp.SolutionVerificationInput{
+		Exercise: exerciseapp.Exercise{
+			ID: "exercise-1", Title: "导数题", Body: "求 x^2 的导数",
+			Meta: map[string]any{"type": "short_answer"},
+		},
+		CandidateAnswer: "2x",
+		CandidateSteps:  []string{"使用幂函数求导公式。", "得到 2x。"},
+		ReferenceAnswer: "2x",
+		AnswerType:      "expression",
+	})
+	if err != nil {
+		t.Fatalf("VerifySolution() error = %v", err)
+	}
+	if result.Decision != mathsolverapp.DecisionCorrect || result.ReasonCode != "solution_steps_verified" {
+		t.Fatalf("result = %#v", result)
+	}
+	prompt := agent.lastInput.Message
+	for _, want := range []string{"任务模式：solution_verification", "候选最终答案: 2x", "1. 使用幂函数求导公式。", "2. 得到 2x。", "可信标准答案: 2x"} {
+		if !strings.Contains(prompt, want) {
+			t.Fatalf("prompt missing %q: %s", want, prompt)
+		}
+	}
+}
+
+func TestExerciseMathSolverRejectsUnverifiableSolvedSolution(t *testing.T) {
+	agent := &fakeChatAgent{output: sessionapp.ChatAgentOutput{Agent: "math_solver", Content: `{
+		"status":"solved","answer":"2x","steps":["得到 2x"],"method":"llm_assisted",
+		"reason_code":"derived","reason":"完成推导","confidence":0.9,"retryable":false,"evidence":[]
+	}`}}
+	solver := exerciseMathSolver{agent: agent}
+
+	_, err := solver.Solve(context.Background(), exerciseapp.SolutionInput{})
+	if !errors.Is(err, exerciseapp.ErrMathSolverInvalidResult) {
+		t.Fatalf("Solve() error = %v, want ErrMathSolverInvalidResult", err)
 	}
 }
 
@@ -462,6 +605,89 @@ func TestParseAnswerCheckJSONRejectsInvalidConfidence(t *testing.T) {
 	}
 }
 
+func TestParseAnswerCheckJSONKeepsExplicitIndeterminateSeparateFromIncorrect(t *testing.T) {
+	result, err := parseAnswerCheckJSON(`{
+		"decision":"indeterminate",
+		"method":"llm_assisted",
+		"reason_code":"missing_assumption",
+		"reason":"缺少 x 的取值范围",
+		"confidence":0.45,
+		"retryable":false,
+		"evidence":[{"kind":"assumption","summary":"sqrt(x^2) 是否等于 x 取决于 x 的符号"}]
+	}`)
+	if err != nil {
+		t.Fatalf("parseAnswerCheckJSON() error = %v", err)
+	}
+	if result.Decision != mathsolverapp.DecisionIndeterminate || result.IsCorrect || result.ReasonCode != "missing_assumption" {
+		t.Fatalf("result = %#v", result)
+	}
+}
+
+func TestParseAnswerCheckJSONRejectsHighConfidenceIndeterminate(t *testing.T) {
+	_, err := parseAnswerCheckJSON(`{
+		"decision":"indeterminate","method":"llm_assisted","reason_code":"ambiguous",
+		"reason":"无法可靠判定","confidence":0.9,"retryable":false,"evidence":[]
+	}`)
+	if err == nil {
+		t.Fatal("parseAnswerCheckJSON() error = nil, want confidence contract error")
+	}
+}
+
+func TestParseSolutionVerificationJSONRequiresCompleteEvidenceContract(t *testing.T) {
+	tests := []struct {
+		name    string
+		content string
+	}{
+		{
+			name: "empty evidence",
+			content: `{"decision":"indeterminate","method":"llm_assisted","reason_code":"ambiguous",
+				"reason":"步骤无法可靠核查","confidence":0.4,"retryable":false,"evidence":[]}`,
+		},
+		{
+			name: "missing retryable",
+			content: `{"decision":"correct","method":"llm_assisted","reason_code":"verified",
+				"reason":"通过","confidence":0.9,"evidence":[{"kind":"derivation","summary":"通过"}]}`,
+		},
+		{
+			name: "null reason code",
+			content: `{"decision":"correct","method":"llm_assisted","reason_code":null,
+				"reason":"通过","confidence":0.9,"retryable":false,"evidence":[{"kind":"derivation","summary":"通过"}]}`,
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if _, err := parseSolutionVerificationJSON(test.content); err == nil {
+				t.Fatal("parseSolutionVerificationJSON() error = nil, want contract error")
+			}
+		})
+	}
+}
+
+func TestParseAnswerCheckJSONConvertsLegacyLowConfidenceFalseToIndeterminate(t *testing.T) {
+	result, err := parseAnswerCheckJSON(`{"is_correct":false,"reason":"需要人工复核","confidence":0.4}`)
+	if err != nil {
+		t.Fatalf("parseAnswerCheckJSON() error = %v", err)
+	}
+	if result.Decision != mathsolverapp.DecisionIndeterminate || result.IsCorrect {
+		t.Fatalf("result = %#v", result)
+	}
+}
+
+func TestParseAnswerCheckJSONRequiresEvidenceForExplicitDecision(t *testing.T) {
+	_, err := parseAnswerCheckJSON(`{"decision":"correct","method":"llm_assisted","reason_code":"equivalent","reason":"等价","confidence":0.9,"retryable":false,"evidence":[]}`)
+	if err == nil || !strings.Contains(err.Error(), "evidence") {
+		t.Fatalf("parseAnswerCheckJSON() error = %v, want evidence error", err)
+	}
+}
+
+func TestExerciseMathSolverClassifiesInvalidJSON(t *testing.T) {
+	solver := exerciseMathSolver{agent: &fakeChatAgent{output: sessionapp.ChatAgentOutput{Content: `not-json`}}}
+	_, err := solver.CheckAnswer(context.Background(), exerciseapp.AnswerCheckInput{})
+	if !errors.Is(err, exerciseapp.ErrMathSolverInvalidResult) {
+		t.Fatalf("CheckAnswer() error = %v", err)
+	}
+}
+
 func TestParseDiagnosisJSONRejectsMismatchedTaxonomy(t *testing.T) {
 	_, err := parseDiagnosisJSON(`{
 		"error_type":"conceptual",
@@ -540,8 +766,10 @@ type fakeExerciseDiagnostician struct {
 }
 
 type fakeEinoMathSolver struct {
-	result exerciseapp.AnswerCheckResult
-	err    error
+	result       exerciseapp.AnswerCheckResult
+	solution     exerciseapp.SolutionResult
+	verification exerciseapp.AnswerCheckResult
+	err          error
 }
 
 type fakeQuestionParser struct {
@@ -573,6 +801,20 @@ func (s fakeEinoMathSolver) CheckAnswer(context.Context, exerciseapp.AnswerCheck
 		return exerciseapp.AnswerCheckResult{}, s.err
 	}
 	return s.result, nil
+}
+
+func (s fakeEinoMathSolver) Solve(context.Context, exerciseapp.SolutionInput) (exerciseapp.SolutionResult, error) {
+	if s.err != nil {
+		return exerciseapp.SolutionResult{}, s.err
+	}
+	return s.solution, nil
+}
+
+func (s fakeEinoMathSolver) VerifySolution(context.Context, exerciseapp.SolutionVerificationInput) (exerciseapp.AnswerCheckResult, error) {
+	if s.err != nil {
+		return exerciseapp.AnswerCheckResult{}, s.err
+	}
+	return s.verification, nil
 }
 
 func (d fakeExerciseDiagnostician) Diagnose(context.Context, exerciseapp.DiagnosisInput) (exerciseapp.DiagnosisDetail, error) {

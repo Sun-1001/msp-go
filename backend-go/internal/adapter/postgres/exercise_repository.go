@@ -147,6 +147,18 @@ func (r ExerciseRepository) GetExercise(ctx context.Context, exerciseID string) 
 	return scanOptionalExercise(row)
 }
 
+// GetExerciseForUpdate holds a shared row lock until the surrounding submit transaction ends.
+func (r ExerciseRepository) GetExerciseForUpdate(ctx context.Context, exerciseID string) (exerciseapp.Exercise, bool, error) {
+	row := r.DB().QueryRow(ctx, `
+		SELECT `+exerciseSelectColumns+`
+		FROM public.contents
+		WHERE id = $1 AND type = 'PROBLEM' AND deleted_at IS NULL
+		FOR SHARE`,
+		exerciseID,
+	)
+	return scanOptionalExercise(row)
+}
+
 // GetKnowledgeConcept returns trusted knowledge context for AI exercise generation.
 func (r ExerciseRepository) GetKnowledgeConcept(ctx context.Context, conceptID string) (exerciseapp.KnowledgeConcept, bool, error) {
 	var concept exerciseapp.KnowledgeConcept

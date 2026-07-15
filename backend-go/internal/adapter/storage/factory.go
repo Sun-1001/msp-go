@@ -7,12 +7,19 @@ import (
 	"strings"
 	"time"
 
+	answerocrapp "mathstudy/backend-go/internal/application/answerocr"
 	uploadapp "mathstudy/backend-go/internal/application/upload"
 	"mathstudy/backend-go/internal/platform/config"
 )
 
+// UploadBackend supports both upload writes and trusted answer-image reads.
+type UploadBackend interface {
+	uploadapp.Storage
+	answerocrapp.ImageLoader
+}
+
 // NewUploadStorage creates the configured upload storage adapter.
-func NewUploadStorage(cfg config.Config, logger *slog.Logger) (uploadapp.Storage, error) {
+func NewUploadStorage(cfg config.Config, logger *slog.Logger) (UploadBackend, error) {
 	if logger == nil {
 		logger = slog.Default()
 	}

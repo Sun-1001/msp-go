@@ -17,6 +17,7 @@ const renderConfigurator = (
     difficulty: 0.5,
     isLoadingKnowledge: false,
     isGenerating: false,
+    isSubmitting: false,
     error: null,
     hasQuestion: false,
     onConceptChange: vi.fn(),
@@ -49,6 +50,16 @@ describe('AIPracticeConfigurator', () => {
     renderConfigurator({ hasQuestion: true });
 
     expect(screen.getByRole('button', { name: '重新生成' })).toBeInTheDocument();
+  });
+
+  it('disables regeneration while an answer submission is pending', () => {
+    const onGenerate = vi.fn();
+    renderConfigurator({ hasQuestion: true, isSubmitting: true, onGenerate });
+
+    const button = screen.getByRole('button', { name: '重新生成' });
+    expect(button).toBeDisabled();
+    fireEvent.click(button);
+    expect(onGenerate).not.toHaveBeenCalled();
   });
 
   it('disables controls while knowledge points load without duplicate button icons', () => {

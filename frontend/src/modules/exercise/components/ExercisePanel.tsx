@@ -4,10 +4,27 @@ import { Button } from '@/components/ui/Button';
 import { Input } from '@/components/ui/Input';
 import { MathRenderer } from '@/libs/math/MathRenderer';
 import { MathText } from '@/libs/math/MathText';
-import { CheckCircle2, Lightbulb, Loader2, XCircle } from 'lucide-react';
+import {
+  AlertCircle,
+  BookOpen,
+  CheckCircle2,
+  Lightbulb,
+  Loader2,
+  RefreshCw,
+  XCircle,
+} from 'lucide-react';
 import { EmptyExerciseState } from './EmptyExerciseState';
-import type { Question, SubmitResult } from '@/modules/exercise/services/exerciseService';
-import type { ExerciseErrorType } from '../hooks/exerciseViewModel';
+import { AnswerImageInput } from './AnswerImageInput';
+import type {
+  ExerciseSolution,
+  Question,
+  SubmitResult,
+} from '@/modules/exercise/services/exerciseService';
+import type {
+  ExerciseAnswerSubmission,
+  ExerciseErrorType,
+  SubmitPhase,
+} from '../hooks/exerciseViewModel';
 
 const inlineOrBlockMathRegex = /\$\$?[\s\S]+?\$\$?/;
 const latexHintRegex = /\\[a-zA-Z]+|[_^]/;
@@ -39,36 +56,67 @@ export interface ExercisePanelProps {
   currentQuestion: Question | null;
   isLoading: boolean;
   isSubmitting: boolean;
+  submitPhase: SubmitPhase;
   submitResult: SubmitResult | null;
+  solution: ExerciseSolution | null;
+  isLoadingSolution: boolean;
+  solutionError: string | null;
   error: string | null;
   errorType: ExerciseErrorType | null;
   onNextQuestion: () => void | Promise<void>;
-  submitAnswer: (answerText: string) => Promise<void>;
+  submitAnswer: (submission: ExerciseAnswerSubmission) => Promise<void>;
+  onLoadSolution: () => void | Promise<void>;
 }
 
 const ExercisePanelContent: React.FC<ExercisePanelProps> = ({
   currentQuestion,
   isLoading,
   isSubmitting,
+  submitPhase,
   submitResult,
+  solution,
+  isLoadingSolution,
+  solutionError,
   error,
   errorType,
   onNextQuestion,
   submitAnswer,
+  onLoadSolution,
 }) => {
   const [answer, setAnswer] = useState('');
+  const [answerImage, setAnswerImage] = useState<File | null>(null);
+  const [submittedWithImage, setSubmittedWithImage] = useState(false);
+  const [lastSubmission, setLastSubmission] = useState<{
+    answerText: string;
+    answerImage: File | null;
+  } | null>(null);
 
   // 提交答案
   const handleSubmit = useCallback(async () => {
     const normalizedAnswer = answer.trim();
-    if (!normalizedAnswer) return;
-    await submitAnswer(normalizedAnswer);
-  }, [answer, submitAnswer]);
+    if (!normalizedAnswer && !answerImage) return;
+
+    const isImageOnly = !normalizedAnswer && Boolean(answerImage);
+    setSubmittedWithImage(isImageOnly);
+    setLastSubmission({
+      answerText: normalizedAnswer,
+      answerImage: normalizedAnswer ? null : answerImage,
+    });
+    await submitAnswer(
+      normalizedAnswer
+        ? { answerText: normalizedAnswer }
+        : { answerImage }
+    );
+  }, [answer, answerImage, submitAnswer]);
 
   // 下一题
   const handleNext = useCallback(async () => {
     await onNextQuestion();
   }, [onNextQuestion]);
+
+  const handleLoadSolution = useCallback(async () => {
+    await onLoadSolution();
+  }, [onLoadSolution]);
 
   // ========== 渲染 ==========
 
@@ -102,6 +150,47 @@ const ExercisePanelContent: React.FC<ExercisePanelProps> = ({
   }
 
   const isBusy = isSubmitting || isLoading;
+  const isIndeterminate = Boolean(
+    submitResult &&
+      (submitResult.recorded === false || submitResult.gradingStatus === 'indeterminate')
+  );
+  const hasRecordedResult = Boolean(submitResult && !isIndeterminate);
+  const hasVerifiedSolution = Boolean(
+    solution && solution.source !== 'unavailable' && solution.steps.length > 0
+  );
+  const solutionUnavailableMessage = solution && !hasVerifiedSolution
+    ? solution.failure?.message || '暂无法提供经过验证的解题步骤'
+    : null;
+  const isNonRetryableIndeterminate = Boolean(
+    isIndeterminate && submitResult?.evaluation?.retryable === false
+  );
+  const exerciseChanged = errorType === 'exercise_changed';
+  const normalizedAnswer = answer.trim();
+  const hasChangedSinceLastSubmission = Boolean(
+    !lastSubmission ||
+      (normalizedAnswer
+        ? lastSubmission.answerText !== normalizedAnswer
+        : lastSubmission.answerText !== '' || lastSubmission.answerImage !== answerImage)
+  );
+  const canSubmit = Boolean(
+    (normalizedAnswer || (currentQuestion.type !== 'multiple_choice' && answerImage)) &&
+      (!isNonRetryableIndeterminate || hasChangedSinceLastSubmission)
+  );
+  const submitButtonLabel = isBusy
+    ? submitPhase === 'uploading'
+      ? '上传中'
+      : submittedWithImage
+        ? '识别中'
+        : '判定中'
+    : exerciseChanged
+      ? '重新加载题目'
+      : isNonRetryableIndeterminate
+        ? hasChangedSinceLastSubmission
+          ? '提交修改后的答案'
+          : '请修改答案后提交'
+      : isIndeterminate || error
+        ? '重试提交'
+        : '提交答案';
 
   return (
     <div className="space-y-6 animate-fade-in">
@@ -130,7 +219,7 @@ const ExercisePanelContent: React.FC<ExercisePanelProps> = ({
           <div className="space-y-4">
             {currentQuestion.type === 'multiple_choice' &&
             (currentQuestion.options?.length ?? 0) > 0 ? (
-              <fieldset disabled={isBusy || !!submitResult}>
+              <fieldset disabled={isBusy || hasRecordedResult}>
                 <legend className="sr-only">选择答案</legend>
                 <div role="radiogroup" aria-label="答案选项" className="grid gap-3">
                   {(currentQuestion.options ?? []).map((option, index) => {
@@ -165,25 +254,34 @@ const ExercisePanelContent: React.FC<ExercisePanelProps> = ({
                 </div>
               </fieldset>
             ) : (
-              <Input
-                value={answer}
-                onChange={(event) => setAnswer(event.target.value)}
-                placeholder="输入答案（支持 LaTeX 格式，如 \frac{x^3}{3} + C）"
-                className="text-lg"
-                disabled={isBusy || !!submitResult}
-              />
+              <div className="space-y-3">
+                <Input
+                  value={answer}
+                  onChange={(event) => setAnswer(event.target.value)}
+                  placeholder="输入答案（支持 LaTeX 格式，如 \frac{x^3}{3} + C）"
+                  className="text-lg"
+                  disabled={isBusy || hasRecordedResult}
+                />
+                {currentQuestion.type !== 'multiple_choice' ? (
+                  <AnswerImageInput
+                    file={answerImage}
+                    disabled={isBusy || hasRecordedResult}
+                    onChange={setAnswerImage}
+                  />
+                ) : null}
+              </div>
             )}
           </div>
         </CardContent>
         <CardFooter className="bg-surface-50 dark:bg-surface-800 p-4 flex justify-between items-center">
-          {!submitResult ? (
+          {!hasRecordedResult ? (
             <Button
-              onClick={handleSubmit}
+              onClick={exerciseChanged ? handleNext : handleSubmit}
               isLoading={isBusy}
-              disabled={!answer.trim() || isBusy}
+              disabled={(!exerciseChanged && !canSubmit) || isBusy}
               className="w-full sm:w-auto"
             >
-              提交答案
+              {submitButtonLabel}
             </Button>
           ) : (
             <Button
@@ -199,10 +297,15 @@ const ExercisePanelContent: React.FC<ExercisePanelProps> = ({
       </Card>
 
       {/* 反馈卡片 */}
-      {submitResult && (
+      {submitResult ? (
         <Card
+          role="status"
+          aria-live="polite"
+          aria-atomic="true"
           className={`animate-slide-up border-l-4 ${
-            submitResult.isCorrect
+            isIndeterminate
+              ? 'border-l-amber-500 bg-amber-50 dark:bg-amber-950/30'
+              : submitResult.isCorrect
               ? 'border-l-green-500 bg-green-50 dark:bg-green-950/30'
               : 'border-l-red-500 bg-red-50 dark:bg-red-950/30'
           }`}
@@ -210,26 +313,62 @@ const ExercisePanelContent: React.FC<ExercisePanelProps> = ({
           <CardContent className="p-4 space-y-3">
             <h4
               className={`flex items-center gap-2 font-bold text-lg ${
-                submitResult.isCorrect
+                isIndeterminate
+                  ? 'text-amber-800 dark:text-amber-400'
+                  : submitResult.isCorrect
                   ? 'text-green-800 dark:text-green-400'
                   : 'text-red-800 dark:text-red-400'
               }`}
             >
-              {submitResult.isCorrect ? (
+              {isIndeterminate ? (
+                <AlertCircle className="h-5 w-5 shrink-0" aria-hidden="true" />
+              ) : submitResult.isCorrect ? (
                 <CheckCircle2 className="h-5 w-5 shrink-0" aria-hidden="true" />
               ) : (
                 <XCircle className="h-5 w-5 shrink-0" aria-hidden="true" />
               )}
-              <span>{submitResult.isCorrect ? '回答正确' : '回答错误'}</span>
+              <span>
+                {isIndeterminate
+                  ? '暂无法自动判定'
+                  : submitResult.isCorrect
+                    ? '回答正确'
+                    : '回答错误'}
+              </span>
             </h4>
 
             {/* 反馈文本 */}
             <div className="text-surface-700 dark:text-surface-300">
-              {renderMathContent(submitResult.feedback)}
+              {renderMathContent(
+                isIndeterminate
+                  ? submitResult.evaluation?.reason || submitResult.feedback
+                  : submitResult.feedback
+              )}
             </div>
 
+            {(submitResult.evaluation?.evidence.length ?? 0) > 0 ? (
+              <div className="border-t border-surface-200 pt-3 dark:border-surface-700">
+                <p className="mb-1 text-sm font-medium text-surface-600 dark:text-surface-300">
+                  判定依据：
+                </p>
+                <ul className="list-disc space-y-1 pl-5 text-sm text-surface-600 dark:text-surface-400">
+                  {submitResult.evaluation?.evidence.map((item, index) => (
+                    <li key={`${item.kind}-${index}`}>
+                      {renderMathContent(item.summary)}
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            ) : null}
+
+            {submittedWithImage && submitResult.studentAnswerLatex ? (
+              <div className="rounded-md bg-white/60 p-3 dark:bg-surface-900/50">
+                <span className="text-sm font-medium text-surface-500">图片识别结果：</span>
+                {renderMathContent(submitResult.studentAnswerLatex, { block: true })}
+              </div>
+            ) : null}
+
             {/* 正确答案 */}
-            {!submitResult.isCorrect && submitResult.correctAnswerLatex && (
+            {!isIndeterminate && !submitResult.isCorrect && submitResult.correctAnswerLatex && (
               <div className="mt-2 p-3 bg-white/50 dark:bg-surface-900/50 rounded-lg">
                 <span className="text-sm font-medium text-surface-500">正确答案：</span>
                 <MathRenderer expression={submitResult.correctAnswerLatex} block />
@@ -237,7 +376,7 @@ const ExercisePanelContent: React.FC<ExercisePanelProps> = ({
             )}
 
             {/* 诊断详情 */}
-            {submitResult.diagnosis && (
+            {!isIndeterminate && submitResult.diagnosis && (
               <div className="mt-2 p-3 bg-amber-50 dark:bg-amber-950/30 rounded-lg border border-amber-200 dark:border-amber-800">
                 <p className="text-sm font-medium text-amber-800 dark:text-amber-400 mb-1">
                   错误类型：{submitResult.diagnosis.errorType || '未知'}
@@ -257,7 +396,7 @@ const ExercisePanelContent: React.FC<ExercisePanelProps> = ({
             )}
 
             {/* 掌握度变化 */}
-            {submitResult.masteryUpdate && Object.keys(submitResult.masteryUpdate).length > 0 && (
+            {!isIndeterminate && submitResult.masteryUpdate && Object.keys(submitResult.masteryUpdate).length > 0 && (
               <div className="mt-2 flex flex-wrap gap-2">
                 {Object.entries(submitResult.masteryUpdate).map(([concept, mastery]) => (
                   <span
@@ -269,9 +408,95 @@ const ExercisePanelContent: React.FC<ExercisePanelProps> = ({
                 ))}
               </div>
             )}
+
+            {hasRecordedResult ? (
+              <div className="border-t border-surface-200 pt-3 dark:border-surface-700">
+                {hasVerifiedSolution && solution ? (
+                  <div className="space-y-3">
+                    <h5 className="flex items-center gap-2 font-semibold text-surface-800 dark:text-surface-200">
+                      <BookOpen className="h-4 w-4" aria-hidden="true" />
+                      解题解析
+                    </h5>
+                    <ol className="list-decimal space-y-2 pl-5 text-sm text-surface-700 dark:text-surface-300">
+                      {solution.steps.map((step, index) => (
+                        <li key={`${index}-${step}`}>{renderMathContent(step)}</li>
+                      ))}
+                    </ol>
+                    {solution.answer ? (
+                      <div className="rounded-md bg-white/60 p-3 dark:bg-surface-900/50">
+                        <span className="text-sm font-medium text-surface-500">标准答案：</span>
+                        {renderMathContent(solution.answer, { block: true })}
+                      </div>
+                    ) : null}
+                  </div>
+                ) : solutionUnavailableMessage ? (
+                  <div className="space-y-2">
+                    <p className="flex items-start gap-2 text-sm text-amber-800 dark:text-amber-300">
+                      <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" aria-hidden="true" />
+                      <span>{solutionUnavailableMessage}</span>
+                    </p>
+                    {solution?.verification?.reason ? (
+                      <p className="text-sm text-surface-600 dark:text-surface-400">
+                        {solution.verification.reason}
+                      </p>
+                    ) : null}
+                    {(solution?.verification?.evidence.length ?? 0) > 0 ? (
+                      <ul className="list-disc space-y-1 pl-5 text-sm text-surface-600 dark:text-surface-400">
+                        {solution?.verification?.evidence.map((item, index) => (
+                          <li key={`${item.kind}-${index}`}>{renderMathContent(item.summary)}</li>
+                        ))}
+                      </ul>
+                    ) : null}
+                    {solution?.failure?.retryable ? (
+                      <Button
+                        type="button"
+                        variant="outline"
+                        size="sm"
+                        onClick={handleLoadSolution}
+                        isLoading={isLoadingSolution}
+                      >
+                        {!isLoadingSolution ? (
+                          <RefreshCw className="mr-1.5 h-4 w-4" aria-hidden="true" />
+                        ) : null}
+                        重试解析
+                      </Button>
+                    ) : null}
+                  </div>
+                ) : solutionError ? (
+                  <div className="space-y-2">
+                    <p className="text-sm text-red-600 dark:text-red-400">{solutionError}</p>
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      onClick={handleLoadSolution}
+                      isLoading={isLoadingSolution}
+                    >
+                      {!isLoadingSolution ? (
+                        <RefreshCw className="mr-1.5 h-4 w-4" aria-hidden="true" />
+                      ) : null}
+                      重试解析
+                    </Button>
+                  </div>
+                ) : (
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    onClick={handleLoadSolution}
+                    isLoading={isLoadingSolution}
+                  >
+                    {!isLoadingSolution ? (
+                      <BookOpen className="mr-1.5 h-4 w-4" aria-hidden="true" />
+                    ) : null}
+                    {isLoadingSolution ? '正在获取解析' : '查看解析'}
+                  </Button>
+                )}
+              </div>
+            ) : null}
           </CardContent>
         </Card>
-      )}
+      ) : null}
 
       {/* 错误提示 */}
       {error ? (

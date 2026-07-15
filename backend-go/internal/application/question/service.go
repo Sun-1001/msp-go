@@ -9,6 +9,7 @@ import (
 	"time"
 	"unicode"
 
+	"mathstudy/backend-go/internal/platform/metautil"
 	"mathstudy/backend-go/internal/platform/numutil"
 	"mathstudy/backend-go/internal/platform/sliceutil"
 )
@@ -185,7 +186,7 @@ type GenerateRequest struct {
 	Tags       []string
 }
 
-// GeneratedQuestion stores a solver-validated isomorphic problem.
+// GeneratedQuestion stores a locally template-validated isomorphic problem.
 type GeneratedQuestion struct {
 	Title         string               `json:"title"`
 	Body          string               `json:"body"`
@@ -202,7 +203,7 @@ type GeneratedQuestion struct {
 	Validation    GenerationValidation `json:"validation"`
 }
 
-// GenerationValidation stores the local Solver validation result.
+// GenerationValidation stores the deterministic local-template validation result.
 type GenerationValidation struct {
 	HasClosedForm bool    `json:"has_closed_form"`
 	InSyllabus    bool    `json:"in_syllabus"`
@@ -282,6 +283,13 @@ func (s *Service) UpdateQuestion(ctx context.Context, ownerID string, questionID
 	update = normalizeQuestionUpdate(update)
 	if !validQuestionUpdate(update) {
 		return Question{}, ErrBadRequest
+	}
+	if updateTouchesMultipleChoiceContract(update) {
+		var err error
+		update, err = s.normalizeMultipleChoiceUpdate(ctx, ownerID, questionID, update)
+		if err != nil {
+			return Question{}, err
+		}
 	}
 	if update.Title != nil && update.ConceptIDs == nil {
 		conceptIDs, err := s.repo.MatchConceptIDs(ctx, *update.Title)
@@ -481,7 +489,7 @@ func (s *Service) GenerateIsomorphicProblem(_ context.Context, request GenerateR
 		},
 		SolutionSteps: integralPowerExpSteps(n, a, answer),
 		ConceptIDs:    normalizeStringSlice(request.ConceptIDs),
-		Tags:          sliceutil.AppendUniqueNonEmptyStrings(normalizeStringSlice(request.Tags), "isomorphic", "solver_validated"),
+		Tags:          sliceutil.AppendUniqueNonEmptyStrings(normalizeStringSlice(request.Tags), "isomorphic", "template_validated"),
 		Template:      template,
 		Parameters:    map[string]int{"n": n, "a": a},
 		Validation: GenerationValidation{
@@ -524,6 +532,7 @@ func normalizeQuestionInput(input QuestionInput) QuestionInput {
 	input.Title = strings.TrimSpace(input.Title)
 	input.Body = strings.TrimSpace(input.Body)
 	input.Type = normalizeQuestionType(input.Type)
+	input.Answer = strings.TrimSpace(input.Answer)
 	input.AnswerType = normalizeAnswerType(input.AnswerType)
 	if input.Difficulty < 0 {
 		input.Difficulty = 0
@@ -544,6 +553,11 @@ func normalizeQuestionInput(input QuestionInput) QuestionInput {
 	if input.Options != nil {
 		options := normalizeStringSlice(*input.Options)
 		input.Options = &options
+		if input.Type == "multiple_choice" {
+			if answer, ok := canonicalQuestionOption(options, input.Answer); ok {
+				input.Answer = answer
+			}
+		}
 	}
 	return input
 }
@@ -564,6 +578,10 @@ func normalizeQuestionUpdate(update QuestionUpdate) QuestionUpdate {
 	if update.AnswerType != nil {
 		value := normalizeAnswerType(*update.AnswerType)
 		update.AnswerType = &value
+	}
+	if update.Answer != nil {
+		value := strings.TrimSpace(*update.Answer)
+		update.Answer = &value
 	}
 	if update.Status != nil {
 		value := strings.ToLower(strings.TrimSpace(*update.Status))
@@ -605,6 +623,11 @@ func normalizeAIParseQuestionItem(item AIParseQuestionItem) AIParseQuestionItem 
 	}
 	item.Answer = strings.TrimSpace(item.Answer)
 	item.Options = normalizeStringSlice(item.Options)
+	if item.Type == "multiple_choice" {
+		if answer, ok := canonicalQuestionOption(item.Options, item.Answer); ok {
+			item.Answer = answer
+		}
+	}
 	item.Hints = normalizeStringSlice(item.Hints)
 	item.SolutionSteps = normalizeStringSlice(item.SolutionSteps)
 	item.Tags = normalizeStringSlice(item.Tags)
@@ -623,6 +646,9 @@ func validQuestionInput(input QuestionInput) bool {
 		return false
 	}
 	if input.Options != nil && !validQuestionStringSlice(*input.Options) {
+		return false
+	}
+	if input.Type == "multiple_choice" && (input.Options == nil || !validMultipleChoiceAnswer(*input.Options, input.Answer)) {
 		return false
 	}
 	return true
@@ -669,7 +695,77 @@ func validAIParseQuestionItem(item AIParseQuestionItem) bool {
 		validQuestionStringSlice(item.Options) &&
 		validQuestionStringSlice(item.Hints) &&
 		validQuestionStringSlice(item.SolutionSteps) &&
-		validQuestionStringSlice(item.Tags)
+		validQuestionStringSlice(item.Tags) &&
+		(item.Type != "multiple_choice" || validMultipleChoiceAnswer(item.Options, item.Answer))
+}
+
+func updateTouchesMultipleChoiceContract(update QuestionUpdate) bool {
+	return update.Type != nil || update.Answer != nil || update.Options != nil ||
+		(update.Status != nil && *update.Status == "published")
+}
+
+func (s *Service) normalizeMultipleChoiceUpdate(ctx context.Context, ownerID string, questionID string, update QuestionUpdate) (QuestionUpdate, error) {
+	current, ok, err := s.repo.GetQuestion(ctx, ownerID, questionID)
+	if err != nil {
+		return QuestionUpdate{}, err
+	}
+	if !ok {
+		return QuestionUpdate{}, ErrNotFound
+	}
+	questionType := strings.ToLower(strings.TrimSpace(current.Type))
+	if questionType == "" {
+		questionType = strings.ToLower(strings.TrimSpace(metautil.String(current.Meta, "type")))
+	}
+	answer := strings.TrimSpace(metautil.String(current.Meta, "answer"))
+	options := metautil.StringSlice(current.Meta, "options")
+	if update.Type != nil {
+		questionType = *update.Type
+	}
+	if update.Answer != nil {
+		answer = *update.Answer
+	}
+	if update.Options != nil {
+		options = *update.Options
+	}
+	if questionType != "multiple_choice" {
+		return update, nil
+	}
+	canonical, ok := canonicalQuestionOption(options, answer)
+	if !ok {
+		return QuestionUpdate{}, ErrBadRequest
+	}
+	update.Answer = &canonical
+	return update, nil
+}
+
+func validMultipleChoiceAnswer(options []string, answer string) bool {
+	_, ok := canonicalQuestionOption(options, answer)
+	return ok
+}
+
+func canonicalQuestionOption(options []string, answer string) (string, bool) {
+	label := strings.ToUpper(strings.TrimSpace(answer))
+	if len(label) == 1 && label[0] >= 'A' && label[0] <= 'Z' {
+		index := int(label[0] - 'A')
+		if index < len(options) {
+			return options[index], true
+		}
+	}
+	normalizedAnswer := normalizeChoiceValue(answer)
+	if normalizedAnswer == "" {
+		return "", false
+	}
+	for _, option := range options {
+		if normalizeChoiceValue(option) == normalizedAnswer {
+			return option, true
+		}
+	}
+	return "", false
+}
+
+func normalizeChoiceValue(value string) string {
+	replacer := strings.NewReplacer(" ", "", "\t", "", "\n", "", "\r", "")
+	return strings.ToLower(replacer.Replace(strings.TrimSpace(value)))
 }
 
 func validRequiredString(value string, maxBytes int) bool {

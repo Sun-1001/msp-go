@@ -255,6 +255,7 @@ export interface ErrorResponse {
  */
 export const AgentTypes = {
   MATH_SOLVER: 'math_solver',
+  OCR: 'ocr',
   TUTOR: 'tutor',
   DIAGNOSTICIAN: 'diagnostician',
   PORTRAIT: 'portrait',
@@ -269,6 +270,7 @@ export type AgentType = (typeof AgentTypes)[keyof typeof AgentTypes];
  */
 export const AgentTypeDisplayNames: Record<AgentType, string> = {
   [AgentTypes.MATH_SOLVER]: '数学求解智能体',
+  [AgentTypes.OCR]: '图片识别智能体',
   [AgentTypes.TUTOR]: '导师智能体',
   [AgentTypes.DIAGNOSTICIAN]: '诊断智能体',
   [AgentTypes.PORTRAIT]: '学生画像',

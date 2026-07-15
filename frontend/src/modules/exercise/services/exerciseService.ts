@@ -55,8 +55,41 @@ export interface DiagnosisDetail {
   relatedConcepts: string[];
 }
 
+export interface EvaluationEvidence {
+  kind: string;
+  summary: string;
+}
+
+export interface EvaluationDetail {
+  method: string;
+  reasonCode: string;
+  reason: string;
+  confidence: number;
+  degraded: boolean;
+  retryable: boolean;
+  evidence: EvaluationEvidence[];
+}
+
+export interface SolutionFailure {
+  code: string;
+  stage: string;
+  message: string;
+  retryable: boolean;
+}
+
+export interface ExerciseSolution {
+  answer: string;
+  steps: string[];
+  source: string;
+  verification: EvaluationDetail | null;
+  failure: SolutionFailure | null;
+}
+
 export interface SubmitResult {
   isCorrect: boolean;
+  recorded?: boolean;
+  gradingStatus?: 'correct' | 'incorrect' | 'indeterminate';
+  evaluation?: EvaluationDetail | null;
   score: number;
   studentAnswerLatex: string;
   correctAnswerLatex: string;
@@ -64,15 +97,47 @@ export interface SubmitResult {
   feedback: string;
   masteryUpdate: Record<string, number> | null;
   masteryModel: string;
-  nextRecommendation: 'continue' | 'review' | 'advance';
+  nextRecommendation: 'continue' | 'review' | 'advance' | 'retry';
 }
 
 export interface SubmitPayload {
   exerciseId: string;
-  answerText: string;
+  answerText?: string;
+  answerImageUrl?: string;
   answerSteps?: string[];
   timeSpentSeconds: number;
 }
+
+const submitTimeoutMs = 120_000;
+
+interface EvaluationResponse {
+  method: string;
+  reason_code: string;
+  reason: string;
+  confidence: number;
+  degraded: boolean;
+  retryable: boolean;
+  evidence?: Array<{
+    kind: string;
+    summary: string;
+  }>;
+}
+
+const mapEvaluation = (data?: EvaluationResponse | null): EvaluationDetail | null =>
+  data
+    ? {
+        method: data.method,
+        reasonCode: data.reason_code,
+        reason: data.reason,
+        confidence: data.confidence,
+        degraded: data.degraded,
+        retryable: data.retryable,
+        evidence: (data.evidence ?? []).map((item) => ({
+          kind: item.kind,
+          summary: item.summary,
+        })),
+      }
+    : null;
 
 const mapQuestion = (data: QuestionResponse): Question => ({
   id: data.id,
@@ -139,6 +204,9 @@ export const exerciseService = {
 
     const res = await apiClient.post<{
       is_correct: boolean;
+      recorded?: boolean;
+      grading_status?: SubmitResult['gradingStatus'];
+      evaluation?: EvaluationResponse | null;
       score: number;
       student_answer_latex: string;
       correct_answer_latex: string;
@@ -158,14 +226,22 @@ export const exerciseService = {
       next_recommendation: string;
     }>('/exercise/submit', {
       exercise_id: payload.exerciseId,
-      answer_text: payload.answerText,
+      ...(payload.answerText ? { answer_text: payload.answerText } : {}),
+      ...(payload.answerImageUrl ? { answer_image_url: payload.answerImageUrl } : {}),
       answer_steps: payload.answerSteps,
       time_spent_seconds: payload.timeSpentSeconds,
+    }, {
+      timeout: submitTimeoutMs,
     });
 
     const data = res.data;
+    const recorded = data.recorded !== false;
     return {
       isCorrect: data.is_correct,
+      recorded,
+      gradingStatus:
+        data.grading_status ?? (recorded ? (data.is_correct ? 'correct' : 'incorrect') : 'indeterminate'),
+      evaluation: mapEvaluation(data.evaluation),
       score: data.score,
       studentAnswerLatex: data.student_answer_latex,
       correctAnswerLatex: data.correct_answer_latex,
@@ -191,20 +267,34 @@ export const exerciseService = {
   /**
    * 获取题目解析
    */
-  async getSolution(exerciseId: string): Promise<{
-    answer: string;
-    steps: string[];
-  }> {
+  async getSolution(exerciseId: string): Promise<ExerciseSolution> {
     const res = await apiClient.get<{
       exercise_id: string;
       answer: string;
       steps: string[];
       source: string;
+      verification?: EvaluationResponse | null;
+      failure?: {
+        code: string;
+        stage: string;
+        message: string;
+        retryable: boolean;
+      } | null;
     }>(`/exercise/${exerciseId}/solution`);
 
     return {
       answer: res.data.answer,
-      steps: res.data.steps,
+      steps: res.data.steps ?? [],
+      source: res.data.source ?? 'cached',
+      verification: mapEvaluation(res.data.verification),
+      failure: res.data.failure
+        ? {
+            code: res.data.failure.code,
+            stage: res.data.failure.stage,
+            message: res.data.failure.message,
+            retryable: res.data.failure.retryable,
+          }
+        : null,
     };
   },
 };

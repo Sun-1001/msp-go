@@ -83,11 +83,13 @@ backend-go/
 
 ## AI 与降级边界
 
-六类 Agent 配置分别为 `tutor`、`portrait`、`diagnostician`、`math_solver`、`question_parser` 和 `question_generator`。运行时优先读取数据库中的 Agent 配置；部分既有能力在无模型时使用本地确定性实现或模板降级。
+七类 Agent 配置分别为 `tutor`、`portrait`、`diagnostician`、`math_solver`、`question_parser`、`question_generator` 和 `ocr`。运行时优先读取数据库中的 Agent 配置；部分既有能力在无模型时使用本地确定性实现或模板降级。
 
 关键契约：
 
-- 纯图片答案在事务开始前返回 `501 OCR_UNAVAILABLE`，不产生学习记录。
+- 图片作答只从当前 Local/Qiniu/S3 存储命名空间回读 PNG、JPEG 或 GIF，并在完整解码、OCR 置信度和数学判定均可靠后才开启事务；失败不产生 attempt、diagnosis、learning session、DKT 或 profile 更新。
+- 判题结果只有 `correct`、`incorrect`、`indeterminate` 三态；本地确定性比较不能覆盖的代数、三角、极限、导数、积分、方程/解集、矩阵和证明题可交给 Eino Math Solver，服务不可用、超时、无效输出或低置信度统一返回带阶段、原因和重试语义的降级结果。
+- 无缓存解析时，Math Solver 不接收标准答案并独立求解；候选最终答案以及推导步骤需经过单独的 `solution_verification` 调用，未验证步骤不会返回给前端。
 - 自主出题模型不可用或结构化输出非法时返回 `503 AI_GENERATION_UNAVAILABLE`，不保存题目。
 - 未知 `/api/v1/*` 路径返回 JSON `404 NOT_FOUND`，不回落到旧后端。
 - 外部 provider、上传地址和教务地址经过出站地址校验，默认阻断本地和内网目标。
@@ -97,4 +99,3 @@ backend-go/
 ## 数据与迁移
 
 PostgreSQL 是业务数据源，Redis 用于缓存和运行时辅助状态。数据库结构由 `backend-go/migrations/` 中的 Go forward migration 管理；历史 Alembic 链已退出当前工作区。迁移规则见 [Go 数据库迁移策略](../../backend-go/migrations/README.md)。
-

@@ -2,7 +2,7 @@
 
 本文是仓库唯一的当前待办清单。技术文档和历史记录只引用这里，不再维护独立路线图。
 
-**更新时间**：2026-07-12
+**更新时间**：2026-07-15
 
 ## 优先级说明
 
@@ -16,10 +16,10 @@
 
 ### AI 学习闭环
 
-- [ ] 实现图片答案 OCR；保持解析成功前不创建 attempt、diagnosis、learning session 或 DKT 更新，并补应用层、HTTP、前端和真实图片验收。
-- [ ] 完善通用数学求解能力，覆盖超出当前本地模板和基础答案比较范围的题型，并定义可解释的失败与降级契约。
+- [x] 实现图片答案 OCR；保持解析成功前不创建 attempt、diagnosis、learning session 或 DKT 更新，并补应用层、HTTP、前端和真实图片验收。
+- [x] 完善通用数学求解能力，覆盖超出当前本地模板和基础答案比较范围的题型，并定义可解释的失败与降级契约。
 - [ ] 将 Tutor 当前“单次生成后 SSE 输出”升级为 token 级流式，验证取消、超时、断连和部分输出处理。
-- [ ] 对外部 provider 的 Tutor、Portrait、Diagnostician、Math Solver、Question Parser 和 Question Generator 做真实运行质量验收。
+- [ ] 对外部 provider 的 Tutor、Portrait、Diagnostician、Math Solver、Question Parser、Question Generator 和 OCR 做真实运行质量验收。
 
 ### AI 自主练习加固
 
@@ -64,4 +64,3 @@
 1. 完成项必须附带代码、测试或运行记录，不能只更新勾选状态。
 2. 后端迁移阶段相关事项还要同步更新 [迁移跟踪文档](backend-python-to-go-refactor.md) 的状态、日期、验证命令、结果、交付物和残余风险。
 3. 已完成且需要保留追溯信息的专项方案或报告移入 [历史归档](archive/README.md)。
-
