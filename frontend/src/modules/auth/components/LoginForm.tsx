@@ -20,7 +20,7 @@ import {
   type RoleOption,
 } from '@/libs/form';
 import { ForgotPasswordModal } from './ForgotPasswordModal';
-import { AnimatedLoginCharacters } from './AnimatedLoginCharacters';
+import { AuthFormLayout } from './AuthFormLayout';
 import { SliderCaptcha } from './SliderCaptcha';
 
 const authLogger = logger.createContextLogger('Auth');
@@ -166,11 +166,8 @@ export const LoginForm: React.FC<LoginFormProps> = ({ onSuccess, onSwitchToRegis
   };
 
   return (
-    <div className="relative z-[1] grid w-full overflow-hidden lg:min-h-[680px] lg:grid-cols-[minmax(390px,0.92fr)_minmax(440px,1.08fr)]">
-      <AnimatedLoginCharacters avertGaze={showPassword} />
-
-      <div className="max-h-[calc(100vh-2rem)] overflow-y-auto bg-white px-6 py-8 dark:bg-surface-900 sm:px-8 lg:px-12 lg:py-10">
-        <div className="mx-auto w-full max-w-[420px] space-y-5">
+    <>
+      <AuthFormLayout avertGaze={showPassword}>
           <header className="space-y-2 text-center">
             <motion.div
               className="mx-auto flex h-10 w-10 items-center justify-center text-surface-900 dark:text-surface-100"
@@ -287,13 +284,12 @@ export const LoginForm: React.FC<LoginFormProps> = ({ onSuccess, onSwitchToRegis
               隐私政策
             </Link>
           </FormFooterText>
-        </div>
-      </div>
+      </AuthFormLayout>
 
       <ForgotPasswordModal
         isOpen={showForgotPassword}
         onClose={() => setShowForgotPassword(false)}
       />
-    </div>
+    </>
   );
 };

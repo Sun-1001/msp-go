@@ -111,11 +111,7 @@ export const WelcomePage = () => {
         onClose={handleCloseModal}
         showHeader={false}
         ariaLabel={isRegisterMode ? '创建账号' : '登录'}
-        className={
-          isRegisterMode
-            ? 'max-h-[calc(100vh-2rem)] overflow-y-auto'
-            : 'max-h-[calc(100vh-2rem)] max-w-[600px] overflow-hidden rounded-2xl border-white/20 bg-white p-0 transition-[max-width,padding] duration-500 motion-reduce:transition-none dark:bg-surface-900 lg:max-w-[1000px]'
-        }
+        className="max-h-[calc(100vh-2rem)] max-w-[600px] overflow-hidden rounded-2xl border-white/20 bg-white p-0 transition-[max-width,padding] duration-500 motion-reduce:transition-none dark:bg-surface-900 lg:max-w-[1000px]"
       >
         {isRegisterMode ? (
           <RegisterForm onSwitchToLogin={() => setIsRegisterMode(false)} />

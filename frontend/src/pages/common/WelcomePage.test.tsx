@@ -42,14 +42,16 @@ vi.mock('@/components/ui/Modal', () => ({
     isOpen,
     onClose,
     ariaLabel,
+    className,
     children,
   }: {
     isOpen: boolean;
     onClose: () => void;
     ariaLabel: string;
+    className?: string;
     children: ReactNode;
   }) => isOpen ? (
-    <div role="dialog" aria-label={ariaLabel}>
+    <div role="dialog" aria-label={ariaLabel} className={className}>
       <button type="button" onClick={onClose}>关闭弹窗</button>
       {children}
     </div>
@@ -137,11 +139,16 @@ describe('WelcomePage', () => {
     render(<WelcomePage />);
 
     fireEvent.click(screen.getByRole('button', { name: '开始学习' }));
-    expect(screen.getByRole('dialog', { name: '登录' })).toBeInTheDocument();
+    const loginDialog = screen.getByRole('dialog', { name: '登录' });
+    const authDialogClassName = loginDialog.className;
+    expect(loginDialog).toHaveClass('max-w-[600px]', 'overflow-hidden', 'p-0', 'lg:max-w-[1000px]');
     expect(screen.getByText('登录表单')).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole('button', { name: '切换到注册' }));
-    expect(screen.getByRole('dialog', { name: '创建账号' })).toBeInTheDocument();
+    expect(screen.getByRole('dialog', { name: '创建账号' })).toHaveAttribute(
+      'class',
+      authDialogClassName
+    );
     expect(screen.getByText('注册表单')).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole('button', { name: '关闭弹窗' }));
