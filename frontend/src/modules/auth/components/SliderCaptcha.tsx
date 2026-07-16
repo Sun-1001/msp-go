@@ -14,6 +14,11 @@ interface SliderCaptchaProps {
 }
 
 const sliderThumbSize = 44;
+const errorFeedbackDuration = 250;
+
+function waitFor(milliseconds: number): Promise<void> {
+  return new Promise((resolve) => window.setTimeout(resolve, milliseconds));
+}
 
 export function SliderCaptcha({ onTokenChange, resetKey = 0, disabled = false, className }: SliderCaptchaProps) {
   const [challenge, setChallenge] = useState<LoginCaptchaChallenge | null>(null);
@@ -23,28 +28,43 @@ export function SliderCaptcha({ onTokenChange, resetKey = 0, disabled = false, c
   const trackRef = useRef<HTMLDivElement>(null);
   const positionRef = useRef(0);
   const dragRef = useRef<{ pointerX: number; position: number } | null>(null);
-  const reloadTimerRef = useRef<number | null>(null);
+  const requestSequenceRef = useRef(0);
 
-  const loadChallenge = useCallback(async () => {
-    if (reloadTimerRef.current !== null) {
-      window.clearTimeout(reloadTimerRef.current);
-      reloadTimerRef.current = null;
-    }
+  const loadChallenge = useCallback(async (preserveErrorFeedback = false) => {
+    const requestSequence = ++requestSequenceRef.current;
     onTokenChange(null);
-    setChallenge(null);
+    dragRef.current = null;
+    if (!preserveErrorFeedback) {
+      setChallenge(null);
+      setPosition(0);
+      positionRef.current = 0;
+      setStatus('loading');
+      setMessage('正在加载安全验证');
+    }
+
+    let nextChallenge: LoginCaptchaChallenge | null = null;
+    let loadError: unknown;
+    try {
+      nextChallenge = await authService.getLoginCaptcha();
+    } catch (error) {
+      loadError = error;
+    }
+    if (preserveErrorFeedback) {
+      await waitFor(errorFeedbackDuration);
+    }
+    if (requestSequence !== requestSequenceRef.current) return;
+
     setPosition(0);
     positionRef.current = 0;
-    setStatus('loading');
-    setMessage('正在加载安全验证');
-    try {
-      const nextChallenge = await authService.getLoginCaptcha();
-      setChallenge(nextChallenge);
-      setStatus('ready');
-      setMessage('请完成安全验证');
-    } catch (error) {
+    if (loadError || !nextChallenge) {
+      setChallenge(null);
       setStatus('error');
-      setMessage(getApiErrorMessage(error, '安全验证加载失败'));
+      setMessage(getApiErrorMessage(loadError, '安全验证加载失败'));
+      return;
     }
+    setChallenge(nextChallenge);
+    setStatus('ready');
+    setMessage('请完成安全验证');
   }, [onTokenChange]);
 
   useEffect(() => {
@@ -53,9 +73,7 @@ export function SliderCaptcha({ onTokenChange, resetKey = 0, disabled = false, c
     }, 0);
     return () => {
       window.clearTimeout(initialLoadTimer);
-      if (reloadTimerRef.current !== null) {
-        window.clearTimeout(reloadTimerRef.current);
-      }
+      requestSequenceRef.current += 1;
     };
   }, [loadChallenge, resetKey]);
 
@@ -71,20 +89,21 @@ export function SliderCaptcha({ onTokenChange, resetKey = 0, disabled = false, c
 
   const verify = useCallback(async () => {
     if (!challenge || status !== 'ready' || disabled) return;
+    const requestSequence = requestSequenceRef.current;
     setStatus('verifying');
     setMessage('正在校验');
     try {
       const result = await authService.verifyLoginCaptcha(challenge.captcha_id, positionRef.current);
+      if (requestSequence !== requestSequenceRef.current) return;
       onTokenChange(result.captcha_token);
       setStatus('verified');
       setMessage('验证通过');
     } catch (error) {
+      if (requestSequence !== requestSequenceRef.current) return;
       onTokenChange(null);
       setStatus('error');
       setMessage(getApiErrorMessage(error, '验证未通过，正在刷新'));
-      reloadTimerRef.current = window.setTimeout(() => {
-        void loadChallenge();
-      }, 900);
+      void loadChallenge(true);
     }
   }, [challenge, disabled, loadChallenge, onTokenChange, status]);
 

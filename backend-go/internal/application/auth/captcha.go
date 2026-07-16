@@ -19,7 +19,6 @@ import (
 
 	goredis "github.com/redis/go-redis/v9"
 
-	"mathstudy/backend-go/internal/platform/ratelimit"
 	"mathstudy/backend-go/internal/platform/securerand"
 )
 
@@ -31,6 +30,11 @@ const (
 	captchaHeight          = 160
 	captchaPieceSize       = 48
 	captchaTokenBytes      = 24
+
+	captchaVerifyMissing   = int64(0)
+	captchaVerifyInvalid   = int64(1)
+	captchaVerifySucceeded = int64(2)
+	captchaVerifyMalformed = int64(3)
 )
 
 var (
@@ -38,6 +42,46 @@ var (
 	ErrCaptchaRateLimited = errors.New("captcha challenge rate limited")
 	// ErrCaptchaUnavailable indicates that challenge state cannot be stored safely.
 	ErrCaptchaUnavailable = errors.New("captcha state unavailable")
+
+	issueAndStoreCaptchaScript = goredis.NewScript(`
+local count = redis.call("INCR", KEYS[1])
+if count == 1 or redis.call("PTTL", KEYS[1]) < 0 then
+  redis.call("PEXPIRE", KEYS[1], ARGV[1])
+end
+if count > tonumber(ARGV[2]) then
+  return 0
+end
+redis.call("SET", KEYS[2], ARGV[3], "PX", ARGV[4])
+return 1
+`)
+
+	verifyAndStoreCaptchaProofScript = goredis.NewScript(`
+local payload = redis.call("GET", KEYS[1])
+if not payload then
+  return 0
+end
+local ttl = redis.call("PTTL", KEYS[1])
+redis.call("DEL", KEYS[1])
+if ttl <= 0 then
+  return 1
+end
+local decoded, state = pcall(cjson.decode, payload)
+if not decoded or type(state) ~= "table" or type(state["client_key"]) ~= "string" or type(state["expected_x"]) ~= "number" or type(state["expires_at"]) ~= "string" then
+  return 3
+end
+local position = tonumber(ARGV[2])
+local tolerance = tonumber(ARGV[3])
+local expires_at = state["expires_at_unix_ms"]
+local now = tonumber(ARGV[4])
+if expires_at ~= nil and (type(expires_at) ~= "number" or not now or expires_at <= now) then
+  return 1
+end
+if state["client_key"] ~= ARGV[1] or not position or not tolerance or math.abs(state["expected_x"] - position) > tolerance then
+  return 1
+end
+redis.call("SET", KEYS[2], ARGV[5], "PX", ARGV[6])
+return 2
+`)
 )
 
 // SliderCaptchaConfig controls the lifetime and abuse limits of login captchas.
@@ -78,9 +122,10 @@ type SliderCaptchaManager struct {
 }
 
 type captchaChallengeState struct {
-	ClientKey string    `json:"client_key"`
-	ExpectedX int       `json:"expected_x"`
-	ExpiresAt time.Time `json:"expires_at"`
+	ClientKey          string    `json:"client_key"`
+	ExpectedX          int       `json:"expected_x"`
+	ExpiresAt          time.Time `json:"expires_at"`
+	ExpiresAtUnixMilli int64     `json:"expires_at_unix_ms,omitempty"`
 }
 
 type captchaProofState struct {
@@ -126,29 +171,28 @@ func (m *SliderCaptchaManager) NewChallenge(ctx context.Context, clientKey strin
 	if clientKey == "" {
 		return SliderCaptchaChallenge{}, errors.New("captcha client key is empty")
 	}
-	allowed, err := m.allowIssue(ctx, clientKey)
-	if err != nil {
-		return SliderCaptchaChallenge{}, err
-	}
-	if !allowed {
-		return SliderCaptchaChallenge{}, ErrCaptchaRateLimited
-	}
 
 	id, err := securerand.Hex(captchaTokenBytes)
 	if err != nil {
 		return SliderCaptchaChallenge{}, fmt.Errorf("generate captcha id: %w", err)
 	}
-	background, piece, expectedX, pieceY, err := renderSliderCaptcha()
+	expectedX, pieceY, err := newSliderCaptchaPosition()
+	if err != nil {
+		return SliderCaptchaChallenge{}, fmt.Errorf("generate captcha position: %w", err)
+	}
+	expiresAt := m.now().Add(m.config.ChallengeTTL)
+	state := captchaChallengeState{
+		ClientKey:          clientKey,
+		ExpectedX:          expectedX,
+		ExpiresAt:          expiresAt,
+		ExpiresAtUnixMilli: expiresAt.UnixMilli(),
+	}
+	if err := m.issueAndStoreChallenge(ctx, id, clientKey, state); err != nil {
+		return SliderCaptchaChallenge{}, err
+	}
+	background, piece, err := renderSliderCaptcha(expectedX, pieceY)
 	if err != nil {
 		return SliderCaptchaChallenge{}, fmt.Errorf("render captcha: %w", err)
-	}
-	state := captchaChallengeState{
-		ClientKey: clientKey,
-		ExpectedX: expectedX,
-		ExpiresAt: m.now().Add(m.config.ChallengeTTL),
-	}
-	if err := m.storeChallenge(ctx, id, state); err != nil {
-		return SliderCaptchaChallenge{}, err
 	}
 	return SliderCaptchaChallenge{
 		ID:              id,
@@ -171,23 +215,34 @@ func (m *SliderCaptchaManager) Verify(ctx context.Context, challengeID string, p
 	if challengeID == "" || clientKey == "" {
 		return "", false, nil
 	}
-	state, found, err := m.consumeChallenge(ctx, challengeID)
-	if err != nil || !found {
-		return "", false, err
+	if m.client != nil {
+		proof, proofState, err := m.newProof(clientKey)
+		if err != nil {
+			return "", false, err
+		}
+		status, redisErr := m.verifyAndStoreProofRedis(ctx, challengeID, position, clientKey, proof, proofState)
+		if redisErr == nil {
+			switch status {
+			case captchaVerifySucceeded:
+				return proof, true, nil
+			case captchaVerifyInvalid:
+				return "", false, nil
+			case captchaVerifyMissing:
+				if m.config.Strict {
+					return "", false, nil
+				}
+			case captchaVerifyMalformed:
+				return "", false, errors.New("decode captcha challenge state in redis")
+			default:
+				return "", false, fmt.Errorf("unexpected captcha verification status: %d", status)
+			}
+		} else if m.config.Strict {
+			return "", false, fmt.Errorf("verify captcha in redis: %w", redisErr)
+		} else {
+			m.logger.Warn("redis captcha verify failed, using local fallback", "error", redisErr)
+		}
 	}
-	if state.ClientKey != clientKey || !state.ExpiresAt.After(m.now()) || absInt(state.ExpectedX-position) > m.config.Tolerance {
-		return "", false, nil
-	}
-
-	proof, err := securerand.Hex(captchaTokenBytes)
-	if err != nil {
-		return "", false, fmt.Errorf("generate captcha proof: %w", err)
-	}
-	proofState := captchaProofState{ClientKey: clientKey, ExpiresAt: m.now().Add(m.config.ProofTTL)}
-	if err := m.storeProof(ctx, proof, proofState); err != nil {
-		return "", false, err
-	}
-	return proof, true, nil
+	return m.verifyLocal(challengeID, position, clientKey)
 }
 
 // ConsumeProof validates and removes one login proof so it cannot be replayed.
@@ -220,19 +275,39 @@ func (m *SliderCaptchaManager) IssueWindow() time.Duration {
 	return m.config.IssueWindow
 }
 
-func (m *SliderCaptchaManager) allowIssue(ctx context.Context, clientKey string) (bool, error) {
+func (m *SliderCaptchaManager) issueAndStoreChallenge(ctx context.Context, id, clientKey string, state captchaChallengeState) error {
 	if m.client != nil {
-		key := captchaIssuePrefix + clientKey
-		count, err := ratelimit.IncrementWithExpiry(ctx, m.client, key, m.config.IssueWindow)
+		payload, err := json.Marshal(state)
+		if err != nil {
+			return fmt.Errorf("encode captcha challenge state: %w", err)
+		}
+		allowed, err := issueAndStoreCaptchaScript.Run(
+			ctx,
+			m.client,
+			[]string{captchaIssuePrefix + clientKey, captchaChallengePrefix + id},
+			redisTTLMilliseconds(m.config.IssueWindow),
+			m.config.IssueLimit,
+			payload,
+			redisTTLMilliseconds(m.config.ChallengeTTL),
+		).Int64()
 		if err == nil {
-			return count <= int64(m.config.IssueLimit), nil
+			if allowed == 0 {
+				return ErrCaptchaRateLimited
+			}
+			if allowed != 1 {
+				return fmt.Errorf("unexpected captcha issuance status: %d", allowed)
+			}
+			return nil
 		}
 		if m.config.Strict {
-			return false, fmt.Errorf("rate limit captcha in redis: %w", err)
+			return fmt.Errorf("issue captcha in redis: %w", err)
 		}
-		m.logger.Warn("redis captcha rate limit failed, using local fallback", "error", err)
+		m.logger.Warn("redis captcha issuance failed, using local fallback", "error", err)
 	}
-	return m.allowIssueLocal(clientKey), nil
+	if !m.allowIssueLocal(clientKey) {
+		return ErrCaptchaRateLimited
+	}
+	return m.storeChallengeLocal(id, state)
 }
 
 func (m *SliderCaptchaManager) allowIssueLocal(clientKey string) bool {
@@ -271,10 +346,7 @@ func (m *SliderCaptchaManager) allowIssueLocal(clientKey string) bool {
 	return true
 }
 
-func (m *SliderCaptchaManager) storeChallenge(ctx context.Context, id string, state captchaChallengeState) error {
-	if stored, err := m.storeRedis(ctx, captchaChallengePrefix+id, state, m.config.ChallengeTTL); stored || err != nil {
-		return err
-	}
+func (m *SliderCaptchaManager) storeChallengeLocal(id string, state captchaChallengeState) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.pruneLocalLocked()
@@ -285,10 +357,7 @@ func (m *SliderCaptchaManager) storeChallenge(ctx context.Context, id string, st
 	return nil
 }
 
-func (m *SliderCaptchaManager) storeProof(ctx context.Context, proof string, state captchaProofState) error {
-	if stored, err := m.storeRedis(ctx, captchaProofPrefix+proof, state, m.config.ProofTTL); stored || err != nil {
-		return err
-	}
+func (m *SliderCaptchaManager) storeProofLocal(proof string, state captchaProofState) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.pruneLocalLocked()
@@ -299,35 +368,66 @@ func (m *SliderCaptchaManager) storeProof(ctx context.Context, proof string, sta
 	return nil
 }
 
-func (m *SliderCaptchaManager) storeRedis(ctx context.Context, key string, value any, ttl time.Duration) (bool, error) {
-	if m.client == nil {
-		return false, nil
-	}
-	payload, err := json.Marshal(value)
-	if err != nil {
-		return false, fmt.Errorf("encode captcha state: %w", err)
-	}
-	if err := m.client.Set(ctx, key, payload, ttl).Err(); err == nil {
-		return true, nil
-	} else if m.config.Strict {
-		return false, fmt.Errorf("store captcha in redis: %w", err)
-	} else {
-		m.logger.Warn("redis captcha store failed, using local fallback", "error", err)
-		return false, nil
-	}
-}
-
-func (m *SliderCaptchaManager) consumeChallenge(ctx context.Context, id string) (captchaChallengeState, bool, error) {
-	var state captchaChallengeState
-	found, fallback, err := m.consumeRedis(ctx, captchaChallengePrefix+id, &state)
-	if err != nil || found || !fallback {
-		return state, found, err
-	}
+func (m *SliderCaptchaManager) consumeChallengeLocal(id string) (captchaChallengeState, bool) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	state, found = m.challenges[id]
+	state, found := m.challenges[id]
 	delete(m.challenges, id)
-	return state, found, nil
+	return state, found
+}
+
+func (m *SliderCaptchaManager) verifyAndStoreProofRedis(
+	ctx context.Context,
+	challengeID string,
+	position int,
+	clientKey string,
+	proof string,
+	proofState captchaProofState,
+) (int64, error) {
+	payload, err := json.Marshal(proofState)
+	if err != nil {
+		return 0, fmt.Errorf("encode captcha proof state: %w", err)
+	}
+	return verifyAndStoreCaptchaProofScript.Run(
+		ctx,
+		m.client,
+		[]string{captchaChallengePrefix + challengeID, captchaProofPrefix + proof},
+		clientKey,
+		position,
+		m.config.Tolerance,
+		m.now().UnixMilli(),
+		payload,
+		redisTTLMilliseconds(m.config.ProofTTL),
+	).Int64()
+}
+
+func (m *SliderCaptchaManager) verifyLocal(challengeID string, position int, clientKey string) (string, bool, error) {
+	state, found := m.consumeChallengeLocal(challengeID)
+	if !found {
+		return "", false, nil
+	}
+	if state.ClientKey != clientKey || !state.ExpiresAt.After(m.now()) || absInt(state.ExpectedX-position) > m.config.Tolerance {
+		return "", false, nil
+	}
+	proof, proofState, err := m.newProof(clientKey)
+	if err != nil {
+		return "", false, err
+	}
+	if err := m.storeProofLocal(proof, proofState); err != nil {
+		return "", false, err
+	}
+	return proof, true, nil
+}
+
+func (m *SliderCaptchaManager) newProof(clientKey string) (string, captchaProofState, error) {
+	proof, err := securerand.Hex(captchaTokenBytes)
+	if err != nil {
+		return "", captchaProofState{}, fmt.Errorf("generate captcha proof: %w", err)
+	}
+	return proof, captchaProofState{
+		ClientKey: clientKey,
+		ExpiresAt: m.now().Add(m.config.ProofTTL),
+	}, nil
 }
 
 func (m *SliderCaptchaManager) consumeProof(ctx context.Context, proof string) (captchaProofState, bool, error) {
@@ -378,21 +478,24 @@ func (m *SliderCaptchaManager) pruneLocalLocked() {
 	}
 }
 
-func renderSliderCaptcha() (backgroundData string, pieceData string, expectedX int, pieceY int, err error) {
+func newSliderCaptchaPosition() (expectedX int, pieceY int, err error) {
 	expectedX, err = secureInt(captchaWidth - captchaPieceSize - 80)
 	if err != nil {
-		return "", "", 0, 0, err
+		return 0, 0, err
 	}
 	expectedX += 64
 	pieceY, err = secureInt(captchaHeight - captchaPieceSize - 28)
 	if err != nil {
-		return "", "", 0, 0, err
+		return 0, 0, err
 	}
 	pieceY += 14
+	return expectedX, pieceY, nil
+}
 
+func renderSliderCaptcha(expectedX, pieceY int) (backgroundData string, pieceData string, err error) {
 	source := image.NewRGBA(image.Rect(0, 0, captchaWidth, captchaHeight))
 	if err := paintCaptchaScene(source); err != nil {
-		return "", "", 0, 0, err
+		return "", "", err
 	}
 	background := image.NewRGBA(source.Bounds())
 	copy(background.Pix, source.Pix)
@@ -413,13 +516,21 @@ func renderSliderCaptcha() (backgroundData string, pieceData string, expectedX i
 
 	backgroundData, err = encodePNGDataURI(background)
 	if err != nil {
-		return "", "", 0, 0, err
+		return "", "", err
 	}
 	pieceData, err = encodePNGDataURI(piece)
 	if err != nil {
-		return "", "", 0, 0, err
+		return "", "", err
 	}
-	return backgroundData, pieceData, expectedX, pieceY, nil
+	return backgroundData, pieceData, nil
+}
+
+func redisTTLMilliseconds(ttl time.Duration) int64 {
+	milliseconds := ttl.Milliseconds()
+	if milliseconds < 1 {
+		return 1
+	}
+	return milliseconds
 }
 
 func paintCaptchaScene(target *image.RGBA) error {

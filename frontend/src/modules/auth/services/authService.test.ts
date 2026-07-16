@@ -55,6 +55,24 @@ describe('authService account profile', () => {
     });
   });
 
+  it('submits an administrator login captcha proof through the shared login endpoint', async () => {
+    apiClientMock.post.mockResolvedValue({
+      data: {
+        access_token: 'admin-token',
+        token_type: 'bearer',
+        user: { id: 'admin-1', username: 'admin', email: 'admin@example.com', role: 'admin' },
+      },
+    });
+
+    await authService.adminLogin({ username: 'admin', password: 'secret', captchaToken: 'admin-proof' });
+
+    expect(apiClientMock.post).toHaveBeenCalledWith('/auth/login', {
+      username: 'admin',
+      password: 'secret',
+      captcha_token: 'admin-proof',
+    });
+  });
+
   it('loads and verifies slider captcha challenges', async () => {
     const challenge = { captcha_id: 'challenge-1', width: 320, height: 160 };
     apiClientMock.get.mockResolvedValueOnce({ data: challenge });

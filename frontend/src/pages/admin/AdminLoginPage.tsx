@@ -39,6 +39,7 @@ export const AdminLoginPage: React.FC = () => {
       // 校验服务端返回的真实角色是否为管理员
       if (response.user.role !== 'admin') {
         setError('该账户不是管理员，请使用对应身份的登录入口');
+        setCaptchaToken(null);
         setCaptchaResetKey((value) => value + 1);
         return;
       }

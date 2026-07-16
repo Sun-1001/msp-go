@@ -7,8 +7,11 @@ import (
 	"encoding/json"
 	"errors"
 	"image/png"
+	"io"
+	"log/slog"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -131,6 +134,188 @@ func TestSliderCaptchaUsesRedisForSharedOneTimeState(t *testing.T) {
 	if err != nil || !valid {
 		t.Fatalf("shared ConsumeProof() = %t, %v", valid, err)
 	}
+	valid, err = first.ConsumeProof(context.Background(), proof, "client-a")
+	if err != nil || valid {
+		t.Fatalf("replayed shared ConsumeProof() = %t, %v", valid, err)
+	}
+}
+
+func TestSliderCaptchaRedisHotPathsUseOneCommandEach(t *testing.T) {
+	server := miniredis.RunT(t)
+	client := goredis.NewClient(&goredis.Options{Addr: server.Addr()})
+	t.Cleanup(func() { _ = client.Close() })
+	commandCounter := &redisCommandCounter{}
+	client.AddHook(commandCounter)
+	manager := newTestCaptchaManager(t, client, true)
+	ctx := context.Background()
+
+	if err := issueAndStoreCaptchaScript.Load(ctx, client).Err(); err != nil {
+		t.Fatalf("load issuance script: %v", err)
+	}
+	beforeIssue := commandCounter.commands.Load()
+	challenge, err := manager.NewChallenge(ctx, "client-a")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if commands := commandCounter.commands.Load() - beforeIssue; commands != 1 {
+		t.Fatalf("redis issuance commands = %d, want 1", commands)
+	}
+
+	payload, err := server.Get(captchaChallengePrefix + challenge.ID)
+	if err != nil {
+		t.Fatalf("read challenge state: %v", err)
+	}
+	var state captchaChallengeState
+	if err := json.Unmarshal([]byte(payload), &state); err != nil {
+		t.Fatalf("decode challenge state: %v", err)
+	}
+	if err := verifyAndStoreCaptchaProofScript.Load(ctx, client).Err(); err != nil {
+		t.Fatalf("load verification script: %v", err)
+	}
+	beforeVerify := commandCounter.commands.Load()
+	proof, ok, err := manager.Verify(ctx, challenge.ID, state.ExpectedX, "client-a")
+	if err != nil || !ok || proof == "" {
+		t.Fatalf("Verify() = %q, %t, %v", proof, ok, err)
+	}
+	if commands := commandCounter.commands.Load() - beforeVerify; commands != 1 {
+		t.Fatalf("redis verification commands = %d, want 1", commands)
+	}
+}
+
+func TestSliderCaptchaRedisRateLimitDoesNotStoreRejectedChallenge(t *testing.T) {
+	server := miniredis.RunT(t)
+	client := goredis.NewClient(&goredis.Options{Addr: server.Addr()})
+	t.Cleanup(func() { _ = client.Close() })
+	manager := newTestCaptchaManager(t, client, true)
+	manager.config.IssueLimit = 1
+
+	if _, err := manager.NewChallenge(context.Background(), "client-a"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := manager.NewChallenge(context.Background(), "client-a"); !errors.Is(err, ErrCaptchaRateLimited) {
+		t.Fatalf("rate-limited NewChallenge() error = %v", err)
+	}
+	challengeKeys := 0
+	for _, key := range server.Keys() {
+		if strings.HasPrefix(key, captchaChallengePrefix) {
+			challengeKeys++
+		}
+	}
+	if challengeKeys != 1 {
+		t.Fatalf("stored challenge keys = %d, want 1", challengeKeys)
+	}
+	if ttl := server.TTL(captchaIssuePrefix + "client-a"); ttl <= 0 {
+		t.Fatalf("captcha issue counter TTL = %s", ttl)
+	}
+}
+
+func TestSliderCaptchaRedisRejectsAndConsumesWrongPosition(t *testing.T) {
+	server := miniredis.RunT(t)
+	client := goredis.NewClient(&goredis.Options{Addr: server.Addr()})
+	t.Cleanup(func() { _ = client.Close() })
+	manager := newTestCaptchaManager(t, client, true)
+	challenge, err := manager.NewChallenge(context.Background(), "client-a")
+	if err != nil {
+		t.Fatal(err)
+	}
+	payload, err := server.Get(captchaChallengePrefix + challenge.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var state captchaChallengeState
+	if err := json.Unmarshal([]byte(payload), &state); err != nil {
+		t.Fatal(err)
+	}
+
+	proof, ok, err := manager.Verify(context.Background(), challenge.ID, state.ExpectedX+manager.config.Tolerance+1, "client-a")
+	if err != nil || ok || proof != "" {
+		t.Fatalf("wrong-position Verify() = %q, %t, %v", proof, ok, err)
+	}
+	if server.Exists(captchaChallengePrefix + challenge.ID) {
+		t.Fatal("wrong-position challenge was not consumed")
+	}
+	for _, key := range server.Keys() {
+		if strings.HasPrefix(key, captchaProofPrefix) {
+			t.Fatalf("wrong-position verification stored proof %q", key)
+		}
+	}
+	if _, ok, err := manager.Verify(context.Background(), challenge.ID, state.ExpectedX, "client-a"); err != nil || ok {
+		t.Fatalf("retried Verify() accepted consumed challenge: ok=%t, err=%v", ok, err)
+	}
+}
+
+func TestSliderCaptchaRedisRejectsExpiredApplicationState(t *testing.T) {
+	server := miniredis.RunT(t)
+	client := goredis.NewClient(&goredis.Options{Addr: server.Addr()})
+	t.Cleanup(func() { _ = client.Close() })
+	manager := newTestCaptchaManager(t, client, true)
+	now := time.Date(2026, 7, 16, 12, 0, 0, 0, time.UTC)
+	manager.now = func() time.Time { return now }
+	challenge, err := manager.NewChallenge(context.Background(), "client-a")
+	if err != nil {
+		t.Fatal(err)
+	}
+	payload, err := server.Get(captchaChallengePrefix + challenge.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var state captchaChallengeState
+	if err := json.Unmarshal([]byte(payload), &state); err != nil {
+		t.Fatal(err)
+	}
+	manager.now = func() time.Time { return now.Add(manager.config.ChallengeTTL + time.Second) }
+
+	if _, ok, err := manager.Verify(context.Background(), challenge.ID, state.ExpectedX, "client-a"); err != nil || ok {
+		t.Fatalf("expired Verify() accepted challenge: ok=%t, err=%v", ok, err)
+	}
+}
+
+func TestSliderCaptchaRedisAcceptsLegacyJSONChallenge(t *testing.T) {
+	server := miniredis.RunT(t)
+	client := goredis.NewClient(&goredis.Options{Addr: server.Addr()})
+	t.Cleanup(func() { _ = client.Close() })
+	manager := newTestCaptchaManager(t, client, true)
+	legacyState := captchaChallengeState{
+		ClientKey: "client-a",
+		ExpectedX: 123,
+		ExpiresAt: time.Now().UTC().Add(manager.config.ChallengeTTL),
+	}
+	payload, err := json.Marshal(legacyState)
+	if err != nil {
+		t.Fatal(err)
+	}
+	server.Set(captchaChallengePrefix+"legacy", string(payload))
+	server.SetTTL(captchaChallengePrefix+"legacy", manager.config.ChallengeTTL)
+
+	proof, ok, err := manager.Verify(context.Background(), "legacy", legacyState.ExpectedX, "client-a")
+	if err != nil || !ok || proof == "" {
+		t.Fatalf("legacy Verify() = %q, %t, %v", proof, ok, err)
+	}
+}
+
+func TestSliderCaptchaFallsBackLocallyWhenRedisIsUnavailable(t *testing.T) {
+	client := goredis.NewClient(&goredis.Options{Addr: "127.0.0.1:1"})
+	t.Cleanup(func() { _ = client.Close() })
+	client.AddHook(failingRedisHook{})
+	manager := newTestCaptchaManager(t, client, false)
+	manager.logger = slog.New(slog.NewTextHandler(io.Discard, nil))
+	ctx := context.Background()
+
+	challenge, err := manager.NewChallenge(ctx, "client-a")
+	if err != nil {
+		t.Fatal(err)
+	}
+	manager.mu.Lock()
+	expected := manager.challenges[challenge.ID].ExpectedX
+	manager.mu.Unlock()
+	proof, ok, err := manager.Verify(ctx, challenge.ID, expected, "client-a")
+	if err != nil || !ok || proof == "" {
+		t.Fatalf("fallback Verify() = %q, %t, %v", proof, ok, err)
+	}
+	valid, err := manager.ConsumeProof(ctx, proof, "client-a")
+	if err != nil || !valid {
+		t.Fatalf("fallback ConsumeProof() = %t, %v", valid, err)
+	}
 }
 
 func TestSliderCaptchaConfigurationAndLocalCapacity(t *testing.T) {
@@ -241,4 +426,44 @@ func assertCaptchaImage(t *testing.T, dataURI string, width, height int) {
 
 func errorsIs(err, target error) bool {
 	return errors.Is(err, target)
+}
+
+type redisCommandCounter struct {
+	commands atomic.Int64
+}
+
+func (h *redisCommandCounter) DialHook(next goredis.DialHook) goredis.DialHook {
+	return next
+}
+
+func (h *redisCommandCounter) ProcessHook(next goredis.ProcessHook) goredis.ProcessHook {
+	return func(ctx context.Context, command goredis.Cmder) error {
+		h.commands.Add(1)
+		return next(ctx, command)
+	}
+}
+
+func (h *redisCommandCounter) ProcessPipelineHook(next goredis.ProcessPipelineHook) goredis.ProcessPipelineHook {
+	return func(ctx context.Context, commands []goredis.Cmder) error {
+		h.commands.Add(1)
+		return next(ctx, commands)
+	}
+}
+
+type failingRedisHook struct{}
+
+func (failingRedisHook) DialHook(next goredis.DialHook) goredis.DialHook {
+	return next
+}
+
+func (failingRedisHook) ProcessHook(goredis.ProcessHook) goredis.ProcessHook {
+	return func(context.Context, goredis.Cmder) error {
+		return errors.New("redis unavailable")
+	}
+}
+
+func (failingRedisHook) ProcessPipelineHook(goredis.ProcessPipelineHook) goredis.ProcessPipelineHook {
+	return func(context.Context, []goredis.Cmder) error {
+		return errors.New("redis unavailable")
+	}
 }

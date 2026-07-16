@@ -69,4 +69,22 @@ describe('AdminLoginPage', () => {
     expect(mocks.dispatch).toHaveBeenCalled();
     expect(mocks.navigate).toHaveBeenCalledWith('/admin/dashboard');
   });
+
+  it('does not enter the dashboard when the server returns a non-admin account', async () => {
+    const user = userEvent.setup();
+    mocks.adminLogin.mockResolvedValue({
+      access_token: 'teacher-token',
+      token_type: 'bearer',
+      user: { id: 'teacher-1', username: 'teacher', email: 'teacher@example.com', role: 'teacher' },
+    });
+    render(<AdminLoginPage />);
+    await user.type(screen.getByPlaceholderText('请输入管理员账号'), 'teacher');
+    await user.type(screen.getByPlaceholderText('请输入密码'), 'secret');
+    await user.click(screen.getByRole('button', { name: '完成安全验证' }));
+    await user.click(screen.getByRole('button', { name: '登录管理后台' }));
+
+    expect(await screen.findByText('该账户不是管理员，请使用对应身份的登录入口')).toBeInTheDocument();
+    expect(mocks.dispatch).not.toHaveBeenCalled();
+    expect(mocks.navigate).not.toHaveBeenCalled();
+  });
 });

@@ -1,5 +1,5 @@
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { SliderCaptcha } from './SliderCaptcha';
 
 const mocks = vi.hoisted(() => ({
@@ -27,6 +27,10 @@ describe('SliderCaptcha', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mocks.getLoginCaptcha.mockResolvedValue(challenge);
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
   });
 
   it('loads a stable puzzle and verifies keyboard-selected position', async () => {
@@ -71,19 +75,68 @@ describe('SliderCaptcha', () => {
     await waitFor(() => expect(mocks.verifyLoginCaptcha).toHaveBeenCalledWith('challenge-1', 136));
   });
 
-  it('shows verification errors and allows an immediate manual refresh', async () => {
+  it('loads the replacement challenge immediately while preserving brief error feedback', async () => {
+    vi.useFakeTimers();
+    mocks.verifyLoginCaptcha.mockRejectedValue(new Error('位置不正确'));
+    render(<SliderCaptcha onTokenChange={vi.fn()} />);
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    const slider = screen.getByRole('slider', { name: '滑块验证码' });
+
+    fireEvent.keyDown(slider, { key: 'Enter' });
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    expect(mocks.verifyLoginCaptcha).toHaveBeenCalledOnce();
+    expect(mocks.getLoginCaptcha).toHaveBeenCalledTimes(2);
+    expect(screen.getByText('位置不正确')).toBeInTheDocument();
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(249);
+    });
+    expect(screen.getByText('位置不正确')).toBeInTheDocument();
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1);
+    });
+    expect(screen.getByText('请完成安全验证')).toBeInTheDocument();
+  });
+
+  it('does not let an older automatic reload overwrite a manual refresh', async () => {
+    let resolveAutomaticReload!: (value: typeof challenge) => void;
+    const automaticReload = new Promise<typeof challenge>((resolve) => {
+      resolveAutomaticReload = resolve;
+    });
+    const newerChallenge = {
+      ...challenge,
+      captcha_id: 'challenge-newer',
+      background_image: 'data:image/png;base64,newer',
+    };
+    const olderChallenge = {
+      ...challenge,
+      captcha_id: 'challenge-older',
+      background_image: 'data:image/png;base64,older',
+    };
+    mocks.getLoginCaptcha
+      .mockResolvedValueOnce(challenge)
+      .mockReturnValueOnce(automaticReload)
+      .mockResolvedValueOnce(newerChallenge);
     mocks.verifyLoginCaptcha.mockRejectedValue(new Error('位置不正确'));
     render(<SliderCaptcha onTokenChange={vi.fn()} />);
     const slider = await screen.findByRole('slider', { name: '滑块验证码' });
     await screen.findByText('请完成安全验证');
 
     fireEvent.keyDown(slider, { key: 'Enter' });
-    await waitFor(() => expect(mocks.verifyLoginCaptcha).toHaveBeenCalledOnce());
-    expect(screen.getByText('位置不正确')).toBeInTheDocument();
+    await waitFor(() => expect(mocks.getLoginCaptcha).toHaveBeenCalledTimes(2));
     fireEvent.click(screen.getByRole('button', { name: '刷新验证码' }));
 
-    await waitFor(() => expect(mocks.getLoginCaptcha).toHaveBeenCalledTimes(2));
-    expect(await screen.findByText('请完成安全验证')).toBeInTheDocument();
+    await waitFor(() => expect(screen.getByAltText('滑块验证码背景')).toHaveAttribute('src', newerChallenge.background_image));
+    resolveAutomaticReload(olderChallenge);
+    await act(async () => {
+      await new Promise((resolve) => window.setTimeout(resolve, 275));
+    });
+    expect(screen.getByAltText('滑块验证码背景')).toHaveAttribute('src', newerChallenge.background_image);
   });
 
   it('keeps login blocked when challenge loading fails', async () => {
