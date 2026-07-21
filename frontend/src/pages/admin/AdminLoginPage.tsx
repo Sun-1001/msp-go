@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useCallback, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useDispatch } from 'react-redux';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '../../components/ui/Card';
@@ -10,9 +10,14 @@ import { Shield, Lock, User, AlertCircle } from 'lucide-react';
 import { logger } from '../../libs/utils/logger';
 import { authService } from '@/modules/auth/services/authService';
 import { getApiErrorMessage } from '../../libs/http/apiClient';
-import { SliderCaptcha } from '@/modules/auth/components/SliderCaptcha';
+import { LoginCaptchaModal } from '@/modules/auth/components/LoginCaptchaModal';
 
 const adminLogger = logger.createContextLogger('AdminLogin');
+
+interface PendingAdminLogin {
+  username: string;
+  password: string;
+}
 
 export const AdminLoginPage: React.FC = () => {
   const navigate = useNavigate();
@@ -21,26 +26,27 @@ export const AdminLoginPage: React.FC = () => {
   const [password, setPassword] = useState('');
   const [error, setError] = useState('');
   const [isLoading, setIsLoading] = useState(false);
-  const [captchaToken, setCaptchaToken] = useState<string | null>(null);
-  const [captchaResetKey, setCaptchaResetKey] = useState(0);
+  const [pendingLogin, setPendingLogin] = useState<PendingAdminLogin | null>(null);
 
-  const handleLogin = async (e: React.FormEvent) => {
+  const handleLogin = (e: React.FormEvent) => {
     e.preventDefault();
     setError('');
-    if (!captchaToken) {
-      setError('请先完成安全验证');
-      return;
-    }
+    setPendingLogin({ username, password });
+  };
+
+  const handleCaptchaVerified = useCallback(async (captchaToken: string) => {
+    if (!pendingLogin || isLoading) return;
+
+    const credentials = pendingLogin;
+    setPendingLogin(null);
     setIsLoading(true);
 
     try {
-      const response = await authService.adminLogin({ username, password, captchaToken });
+      const response = await authService.adminLogin({ ...credentials, captchaToken });
 
       // 校验服务端返回的真实角色是否为管理员
       if (response.user.role !== 'admin') {
         setError('该账户不是管理员，请使用对应身份的登录入口');
-        setCaptchaToken(null);
-        setCaptchaResetKey((value) => value + 1);
         return;
       }
 
@@ -55,19 +61,21 @@ export const AdminLoginPage: React.FC = () => {
         },
       }));
 
-      adminLogger.info('Admin login successful', { username });
+      adminLogger.info('Admin login successful', { username: credentials.username });
       // 跳转到管理员控制台
       navigate('/admin/dashboard');
     } catch (err) {
       const errorMessage = getApiErrorMessage(err, '登录失败，请稍后重试');
       setError(errorMessage);
-      setCaptchaToken(null);
-      setCaptchaResetKey((value) => value + 1);
-      adminLogger.security('Admin login failed', { username, error: errorMessage });
+      adminLogger.security('Admin login failed', { username: credentials.username, error: errorMessage });
     } finally {
       setIsLoading(false);
     }
-  };
+  }, [dispatch, isLoading, navigate, pendingLogin]);
+
+  const handleCaptchaClose = useCallback(() => {
+    setPendingLogin(null);
+  }, []);
 
   return (
     <div className="min-h-screen bg-linear-to-br from-surface-50 to-surface-100 dark:from-surface-950 dark:to-surface-900 flex items-center justify-center p-6 relative">
@@ -119,6 +127,7 @@ export const AdminLoginPage: React.FC = () => {
                     value={username}
                     onChange={(e) => setUsername(e.target.value)}
                     className="pl-10"
+                    disabled={isLoading}
                     required
                   />
                 </div>
@@ -137,16 +146,11 @@ export const AdminLoginPage: React.FC = () => {
                     value={password}
                     onChange={(e) => setPassword(e.target.value)}
                     className="pl-10"
+                    disabled={isLoading}
                     required
                   />
                 </div>
               </div>
-
-              <SliderCaptcha
-                onTokenChange={setCaptchaToken}
-                resetKey={captchaResetKey}
-                disabled={isLoading}
-              />
 
               {/* 安全提示 */}
               <div className="flex items-start gap-2 p-3 rounded-lg bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-800">
@@ -171,6 +175,12 @@ export const AdminLoginPage: React.FC = () => {
           <p>© 2024 数学学习平台. All rights reserved.</p>
         </div>
       </div>
+
+      <LoginCaptchaModal
+        isOpen={Boolean(pendingLogin)}
+        onClose={handleCaptchaClose}
+        onVerified={handleCaptchaVerified}
+      />
     </div>
   );
 };

@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useCallback, useState } from 'react';
 import { motion, useReducedMotion } from 'framer-motion';
 import { Link, useNavigate } from 'react-router-dom';
 import { useAppDispatch } from '@/store';
@@ -21,7 +21,7 @@ import {
 } from '@/libs/form';
 import { ForgotPasswordModal } from './ForgotPasswordModal';
 import { AuthFormLayout } from './AuthFormLayout';
-import { SliderCaptcha } from './SliderCaptcha';
+import { LoginCaptchaModal } from './LoginCaptchaModal';
 
 const authLogger = logger.createContextLogger('Auth');
 
@@ -64,8 +64,8 @@ export const LoginForm: React.FC<LoginFormProps> = ({ onSuccess, onSwitchToRegis
   const shouldReduceMotion = useReducedMotion();
   const [showForgotPassword, setShowForgotPassword] = useState(false);
   const [showPassword, setShowPassword] = useState(false);
-  const [captchaToken, setCaptchaToken] = useState<string | null>(null);
-  const [captchaResetKey, setCaptchaResetKey] = useState(0);
+  const [pendingLogin, setPendingLogin] = useState<LoginFormData | null>(null);
+  const [isLoggingIn, setIsLoggingIn] = useState(false);
 
   const {
     register,
@@ -74,6 +74,7 @@ export const LoginForm: React.FC<LoginFormProps> = ({ onSuccess, onSwitchToRegis
     setValue,
     formState: { errors, isSubmitting },
     setError,
+    clearErrors,
   } = useForm<LoginFormData>({
     resolver: zodResolver(loginSchema),
     defaultValues: {
@@ -86,14 +87,17 @@ export const LoginForm: React.FC<LoginFormProps> = ({ onSuccess, onSwitchToRegis
   // 使用 useWatch 替代 watch()，与 React Compiler 兼容
   const role = useWatch({ control, name: 'role' });
 
-  const onSubmit = async (data: LoginFormData) => {
-    if (!captchaToken) {
-      setError('root', {
-        type: 'manual',
-        message: '请先完成安全验证',
-      });
-      return;
-    }
+  const onSubmit = (data: LoginFormData) => {
+    clearErrors('root');
+    setPendingLogin(data);
+  };
+
+  const handleCaptchaVerified = useCallback(async (captchaToken: string) => {
+    if (!pendingLogin || isLoggingIn) return;
+
+    const data = pendingLogin;
+    setPendingLogin(null);
+    setIsLoggingIn(true);
     try {
       const response = await authService.login({
         username: data.username,
@@ -110,7 +114,6 @@ export const LoginForm: React.FC<LoginFormProps> = ({ onSuccess, onSwitchToRegis
           type: 'manual',
           message: '管理员请使用管理员专用入口登录',
         });
-        setCaptchaResetKey((value) => value + 1);
         return;
       }
       if (selectedRole === 'student' && actualRole === 'teacher') {
@@ -118,7 +121,6 @@ export const LoginForm: React.FC<LoginFormProps> = ({ onSuccess, onSwitchToRegis
           type: 'manual',
           message: '您已注册为教师，请选择「教师」身份或使用教师入口登录',
         });
-        setCaptchaResetKey((value) => value + 1);
         return;
       }
       if (selectedRole === 'teacher' && actualRole === 'student') {
@@ -126,7 +128,6 @@ export const LoginForm: React.FC<LoginFormProps> = ({ onSuccess, onSwitchToRegis
           type: 'manual',
           message: '您已注册为学生，请选择「学生」身份或使用学生入口登录',
         });
-        setCaptchaResetKey((value) => value + 1);
         return;
       }
 
@@ -151,8 +152,6 @@ export const LoginForm: React.FC<LoginFormProps> = ({ onSuccess, onSwitchToRegis
         navigate('/my-class');
       }
     } catch (err) {
-      setCaptchaToken(null);
-      setCaptchaResetKey((value) => value + 1);
       authLogger.security('Login failed', {
         username: data.username,
         role: data.role,
@@ -162,8 +161,16 @@ export const LoginForm: React.FC<LoginFormProps> = ({ onSuccess, onSwitchToRegis
         type: 'manual',
         message: '登录失败，请检查用户名和密码',
       });
+    } finally {
+      setIsLoggingIn(false);
     }
-  };
+  }, [dispatch, isLoggingIn, navigate, onSuccess, pendingLogin, setError]);
+
+  const handleCaptchaClose = useCallback(() => {
+    setPendingLogin(null);
+  }, []);
+
+  const formBusy = isSubmitting || isLoggingIn;
 
   return (
     <>
@@ -171,7 +178,7 @@ export const LoginForm: React.FC<LoginFormProps> = ({ onSuccess, onSwitchToRegis
           <header className="space-y-2 text-center">
             <motion.div
               className="mx-auto flex h-10 w-10 items-center justify-center text-surface-900 dark:text-surface-100"
-              animate={!shouldReduceMotion && isSubmitting ? { rotate: 180 } : { rotate: 0 }}
+              animate={!shouldReduceMotion && formBusy ? { rotate: 180 } : { rotate: 0 }}
               transition={shouldReduceMotion ? { duration: 0 } : { duration: 0.45, ease: 'easeOut' }}
             >
               <Sparkles className="h-7 w-7" />
@@ -187,6 +194,7 @@ export const LoginForm: React.FC<LoginFormProps> = ({ onSuccess, onSwitchToRegis
               options={roleOptions}
               value={role}
               onChange={(value) => setValue('role', value)}
+              disabled={formBusy}
               label="选择身份"
               error={errors.role?.message}
               variant="compact"
@@ -196,7 +204,7 @@ export const LoginForm: React.FC<LoginFormProps> = ({ onSuccess, onSwitchToRegis
               label="用户名"
               placeholder="请输入用户名"
               autoComplete="username"
-              disabled={isSubmitting}
+              disabled={formBusy}
               error={errors.username?.message}
               className="h-11 rounded-none border-x-0 border-t-0 border-b bg-transparent px-0 py-2 focus:border-secondary-600 focus:bg-transparent focus:ring-0 focus-visible:ring-0 focus-visible:ring-offset-0 dark:bg-transparent dark:focus:border-secondary-400 dark:focus:bg-transparent"
               {...register('username')}
@@ -207,13 +215,13 @@ export const LoginForm: React.FC<LoginFormProps> = ({ onSuccess, onSwitchToRegis
               type={showPassword ? 'text' : 'password'}
               placeholder="请输入密码"
               autoComplete="current-password"
-              disabled={isSubmitting}
+              disabled={formBusy}
               error={errors.password?.message}
               className="h-11 rounded-none border-x-0 border-t-0 border-b bg-transparent px-0 py-2 focus:border-secondary-600 focus:bg-transparent focus:ring-0 focus-visible:ring-0 focus-visible:ring-offset-0 dark:bg-transparent dark:focus:border-secondary-400 dark:focus:bg-transparent"
               trailingAction={(
                 <button
                   type="button"
-                  disabled={isSubmitting}
+                  disabled={formBusy}
                   aria-label={showPassword ? '隐藏密码' : '显示密码'}
                   aria-pressed={showPassword}
                   onPointerDown={(event) => event.preventDefault()}
@@ -234,23 +242,18 @@ export const LoginForm: React.FC<LoginFormProps> = ({ onSuccess, onSwitchToRegis
               <button
                 type="button"
                 onClick={() => setShowForgotPassword(true)}
+                disabled={formBusy}
                 className="text-sm text-secondary-700 transition-colors hover:text-secondary-600 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-secondary-500/40 dark:text-secondary-300 dark:hover:text-secondary-200"
               >
                 忘记密码？
               </button>
             </div>
 
-            <SliderCaptcha
-              onTokenChange={setCaptchaToken}
-              resetKey={captchaResetKey}
-              disabled={isSubmitting}
-            />
-
             <FormRootError message={errors.root?.message} />
 
             <Button
               type="submit"
-              isLoading={isSubmitting}
+              isLoading={formBusy}
               className="group h-12 w-full rounded-full bg-surface-950 text-sm font-semibold text-white shadow-lg shadow-surface-950/15 hover:bg-secondary-700 dark:bg-white dark:text-surface-950 dark:hover:bg-secondary-200"
             >
               <span className="flex items-center justify-center gap-2">
@@ -289,6 +292,12 @@ export const LoginForm: React.FC<LoginFormProps> = ({ onSuccess, onSwitchToRegis
       <ForgotPasswordModal
         isOpen={showForgotPassword}
         onClose={() => setShowForgotPassword(false)}
+      />
+
+      <LoginCaptchaModal
+        isOpen={Boolean(pendingLogin)}
+        onClose={handleCaptchaClose}
+        onVerified={handleCaptchaVerified}
       />
     </>
   );
