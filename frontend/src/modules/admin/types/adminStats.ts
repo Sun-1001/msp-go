@@ -117,11 +117,85 @@ export interface SystemAlert {
   severity: 'error' | 'warning' | 'info';
 }
 
+export interface RuntimeStatus {
+  version: string;
+  environment: string;
+  started_at: string;
+  uptime_seconds: number;
+  cpu_usage_percent: number;
+  heap_used_bytes: number;
+  heap_reserved_bytes: number;
+  heap_usage_percent: number;
+  goroutines: number;
+  logical_cpus: number;
+  gomaxprocs: number;
+  go_version: string;
+  os: string;
+  arch: string;
+}
+
+export interface TrafficStatus {
+  window_started_at: string;
+  window_seconds: number;
+  requests_total: number;
+  average_qps: number;
+  client_errors_total: number;
+  client_error_rate_percent: number;
+  server_errors_total: number;
+  server_error_rate_percent: number;
+  average_latency_ms: number;
+  p95_latency_ms: number;
+  p95_clamped: boolean;
+}
+
+export interface ResetTrafficMetricsResponse {
+  success: boolean;
+  message: string;
+  reset_at: string;
+}
+
+export interface LearningStatus {
+  /** 当前存在未结束学习会话的学生数；null 表示采集失败。 */
+  online_users: number | null;
+  /** 当前未结束的学习会话数；null 表示采集失败。 */
+  active_sessions: number | null;
+}
+
+export interface DatabaseStatus {
+  max_connections: number;
+  total_connections: number;
+  acquired_connections: number;
+  idle_connections: number;
+  usage_percent: number;
+  empty_acquire_count: number;
+  canceled_acquire_count: number;
+}
+
+export interface RedisStatus {
+  max_connections: number;
+  total_connections: number;
+  idle_connections: number;
+  stale_connections: number;
+  usage_percent: number;
+  reuse_percent: number;
+  timeouts: number;
+  wait_count: number;
+  unusable: number;
+}
+
 export interface SystemStatusResponse {
+  /** healthy/degraded/unhealthy */
+  status: 'healthy' | 'degraded' | 'unhealthy';
+  checked_at: string;
   /** 服务状态列表 */
   services: ServiceStatus[];
   /** 系统警告列表 */
   alerts: SystemAlert[];
+  runtime: RuntimeStatus;
+  traffic: TrafficStatus;
+  learning: LearningStatus;
+  postgresql: DatabaseStatus;
+  redis: RedisStatus;
 }
 
 // =============================================================================

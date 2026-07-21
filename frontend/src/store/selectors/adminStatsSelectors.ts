@@ -64,6 +64,8 @@ export const selectSystemStatusData = createSelector(
     systemStatus: adminStats.systemStatus,
     systemStatusLoading: adminStats.systemStatusLoading,
     systemStatusError: adminStats.systemStatusError,
+    trafficResetLoading: adminStats.trafficResetLoading,
+    trafficResetError: adminStats.trafficResetError,
   })
 );
 
@@ -76,7 +78,8 @@ export const selectIsAnyLoading = createSelector(
     adminStats.overviewLoading === 'loading' ||
     adminStats.userGrowthLoading === 'loading' ||
     adminStats.activitiesLoading === 'loading' ||
-    adminStats.systemStatusLoading === 'loading'
+    adminStats.systemStatusLoading === 'loading' ||
+    adminStats.trafficResetLoading === 'loading'
 );
 
 /**

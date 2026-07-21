@@ -142,3 +142,17 @@ func (r AdminStatsRepository) RecentUsers(ctx context.Context, limit int) ([]adm
 	}
 	return users, rows.Err()
 }
+
+// LearningActivitySnapshot returns distinct learners and unfinished sessions.
+func (r AdminStatsRepository) LearningActivitySnapshot(ctx context.Context) (adminstatsapp.LearningActivitySnapshot, error) {
+	var snapshot adminstatsapp.LearningActivitySnapshot
+	err := r.DB().QueryRow(ctx, `
+		SELECT count(DISTINCT student_id)::int, count(id)::int
+		FROM public.learning_sessions
+		WHERE is_active = true AND ended_at IS NULL`,
+	).Scan(&snapshot.OnlineUsers, &snapshot.ActiveSessions)
+	if err != nil {
+		return adminstatsapp.LearningActivitySnapshot{}, err
+	}
+	return snapshot, nil
+}

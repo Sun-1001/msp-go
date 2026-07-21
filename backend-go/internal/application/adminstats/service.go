@@ -36,6 +36,11 @@ type Repository interface {
 	RecentUsers(context.Context, int) ([]RecentUser, error)
 }
 
+// LearningActivityRepository optionally supplies live learning-session counts.
+type LearningActivityRepository interface {
+	LearningActivitySnapshot(context.Context) (LearningActivitySnapshot, error)
+}
+
 // StatusProvider supplies process dependency status for /admin/stats/system-status.
 type StatusProvider interface {
 	ServiceStatuses(context.Context) ([]ServiceStatus, error)
@@ -47,6 +52,33 @@ type StatusProviderFunc func(context.Context) ([]ServiceStatus, error)
 // ServiceStatuses calls f(ctx).
 func (f StatusProviderFunc) ServiceStatuses(ctx context.Context) ([]ServiceStatus, error) {
 	return f(ctx)
+}
+
+// OperationsProvider supplies in-process metrics without coupling this package
+// to the platform metrics implementation.
+type OperationsProvider interface {
+	OperationsSnapshot() OperationsSnapshot
+}
+
+// OperationsProviderFunc adapts a function into an OperationsProvider.
+type OperationsProviderFunc func() OperationsSnapshot
+
+// OperationsSnapshot calls f().
+func (f OperationsProviderFunc) OperationsSnapshot() OperationsSnapshot {
+	return f()
+}
+
+// OperationsResetter starts a new admin traffic-analysis window.
+type OperationsResetter interface {
+	ResetTrafficMetrics() time.Time
+}
+
+// OperationsResetterFunc adapts a function into an OperationsResetter.
+type OperationsResetterFunc func() time.Time
+
+// ResetTrafficMetrics calls f().
+func (f OperationsResetterFunc) ResetTrafficMetrics() time.Time {
+	return f()
 }
 
 // OverviewSnapshot contains raw dashboard counters from storage.
@@ -144,6 +176,62 @@ type RecentActivitiesResponse struct {
 	Total int            `json:"total"`
 }
 
+// LearningActivitySnapshot contains current unfinished learning sessions.
+type LearningActivitySnapshot struct {
+	OnlineUsers    int
+	ActiveSessions int
+}
+
+// DatabasePoolSnapshot is the storage-neutral PostgreSQL pool view.
+type DatabasePoolSnapshot struct {
+	MaxConnections       int64
+	TotalConnections     int64
+	AcquiredConnections  int64
+	IdleConnections      int64
+	EmptyAcquireCount    int64
+	CanceledAcquireCount int64
+}
+
+// RedisPoolSnapshot is the storage-neutral Redis pool view.
+type RedisPoolSnapshot struct {
+	MaxConnections   int64
+	TotalConnections int64
+	IdleConnections  int64
+	StaleConnections int64
+	Hits             uint64
+	Misses           uint64
+	Timeouts         uint64
+	WaitCount        uint64
+	Unusable         uint64
+}
+
+// OperationsSnapshot contains raw process metrics supplied by the composition root.
+type OperationsSnapshot struct {
+	Version           string
+	Environment       string
+	StartedAt         time.Time
+	Uptime            time.Duration
+	CPUUsagePercent   float64
+	HeapUsedBytes     uint64
+	HeapReservedBytes uint64
+	Goroutines        int
+	LogicalCPUs       int
+	GOMAXPROCS        int
+	GoVersion         string
+	OS                string
+	Arch              string
+	RequestsTotal     uint64
+	ClientErrorsTotal uint64
+	ServerErrorsTotal uint64
+	AverageLatency    time.Duration
+	P95Latency        time.Duration
+	P95Clamped        bool
+	TrafficStartedAt  time.Time
+	TrafficWindow     time.Duration
+	PostgreSQL        DatabasePoolSnapshot
+	Redis             RedisPoolSnapshot
+}
+
 // ServiceStatus mirrors one dependency status item.
 type ServiceStatus struct {
 	Name      string   `json:"name"`
@@ -159,17 +247,106 @@ type SystemAlert struct {
 	Severity    string `json:"severity"`
 }
 
+// RuntimeStatus describes the current Go API process.
+type RuntimeStatus struct {
+	Version           string    `json:"version"`
+	Environment       string    `json:"environment"`
+	StartedAt         time.Time `json:"started_at"`
+	UptimeSeconds     int64     `json:"uptime_seconds"`
+	CPUUsagePercent   float64   `json:"cpu_usage_percent"`
+	HeapUsedBytes     uint64    `json:"heap_used_bytes"`
+	HeapReservedBytes uint64    `json:"heap_reserved_bytes"`
+	HeapUsagePercent  float64   `json:"heap_usage_percent"`
+	Goroutines        int       `json:"goroutines"`
+	LogicalCPUs       int       `json:"logical_cpus"`
+	GOMAXPROCS        int       `json:"gomaxprocs"`
+	GoVersion         string    `json:"go_version"`
+	OS                string    `json:"os"`
+	Arch              string    `json:"arch"`
+}
+
+// TrafficStatus summarizes request behavior in the current admin window.
+type TrafficStatus struct {
+	WindowStartedAt        time.Time `json:"window_started_at"`
+	WindowSeconds          int64     `json:"window_seconds"`
+	RequestsTotal          uint64    `json:"requests_total"`
+	AverageQPS             float64   `json:"average_qps"`
+	ClientErrorsTotal      uint64    `json:"client_errors_total"`
+	ClientErrorRatePercent float64   `json:"client_error_rate_percent"`
+	ServerErrorsTotal      uint64    `json:"server_errors_total"`
+	ServerErrorRatePercent float64   `json:"server_error_rate_percent"`
+	AverageLatencyMS       float64   `json:"average_latency_ms"`
+	P95LatencyMS           float64   `json:"p95_latency_ms"`
+	P95Clamped             bool      `json:"p95_clamped"`
+}
+
+// ResetTrafficMetricsResponse confirms a new operations-analysis window.
+type ResetTrafficMetricsResponse struct {
+	Success bool      `json:"success"`
+	Message string    `json:"message"`
+	ResetAt time.Time `json:"reset_at"`
+}
+
+// LearningStatus describes current unfinished learning sessions.
+type LearningStatus struct {
+	OnlineUsers    *int `json:"online_users"`
+	ActiveSessions *int `json:"active_sessions"`
+}
+
+// DatabaseStatus describes PostgreSQL connection-pool pressure.
+type DatabaseStatus struct {
+	MaxConnections       int64   `json:"max_connections"`
+	TotalConnections     int64   `json:"total_connections"`
+	AcquiredConnections  int64   `json:"acquired_connections"`
+	IdleConnections      int64   `json:"idle_connections"`
+	UsagePercent         float64 `json:"usage_percent"`
+	EmptyAcquireCount    int64   `json:"empty_acquire_count"`
+	CanceledAcquireCount int64   `json:"canceled_acquire_count"`
+}
+
+// RedisStatus describes Redis connection-pool pressure and reuse.
+type RedisStatus struct {
+	MaxConnections   int64   `json:"max_connections"`
+	TotalConnections int64   `json:"total_connections"`
+	IdleConnections  int64   `json:"idle_connections"`
+	StaleConnections int64   `json:"stale_connections"`
+	UsagePercent     float64 `json:"usage_percent"`
+	ReusePercent     float64 `json:"reuse_percent"`
+	Timeouts         uint64  `json:"timeouts"`
+	WaitCount        uint64  `json:"wait_count"`
+	Unusable         uint64  `json:"unusable"`
+}
+
 // SystemStatusResponse mirrors /admin/stats/system-status.
 type SystemStatusResponse struct {
-	Services []ServiceStatus `json:"services"`
-	Alerts   []SystemAlert   `json:"alerts"`
+	Status     string          `json:"status"`
+	CheckedAt  time.Time       `json:"checked_at"`
+	Services   []ServiceStatus `json:"services"`
+	Alerts     []SystemAlert   `json:"alerts"`
+	Runtime    RuntimeStatus   `json:"runtime"`
+	Traffic    TrafficStatus   `json:"traffic"`
+	Learning   LearningStatus  `json:"learning"`
+	PostgreSQL DatabaseStatus  `json:"postgresql"`
+	Redis      RedisStatus     `json:"redis"`
 }
 
 // Service implements admin dashboard stats use cases.
 type Service struct {
-	repo           Repository
-	statusProvider StatusProvider
-	now            func() time.Time
+	repo               Repository
+	statusProvider     StatusProvider
+	operationsProvider OperationsProvider
+	operationsResetter OperationsResetter
+	now                func() time.Time
+}
+
+// SetOperationsProvider configures process and dependency metrics at startup.
+func (s *Service) SetOperationsProvider(provider OperationsProvider) {
+	s.operationsProvider = provider
+}
+
+// SetOperationsResetter configures the traffic-window reset action at startup.
+func (s *Service) SetOperationsResetter(resetter OperationsResetter) {
+	s.operationsResetter = resetter
 }
 
 // NewService creates an admin stats service.
@@ -321,15 +498,15 @@ func (s *Service) SystemStatus(ctx context.Context) (SystemStatusResponse, error
 		if err != nil {
 			return SystemStatusResponse{}, err
 		}
-		if len(statuses) > 0 {
-			services = statuses
-		}
+		services = append(services, statuses...)
 	}
 
 	alerts := make([]SystemAlert, 0)
+	status := "healthy"
 	for _, service := range services {
 		switch service.Status {
 		case "stopped":
+			status = "unhealthy"
 			alerts = append(alerts, SystemAlert{
 				ID:          systemAlertID(service.Name, service.Status),
 				Title:       service.Name + "已停止",
@@ -337,6 +514,9 @@ func (s *Service) SystemStatus(ctx context.Context) (SystemStatusResponse, error
 				Severity:    "error",
 			})
 		case "warning":
+			if status == "healthy" {
+				status = "degraded"
+			}
 			alerts = append(alerts, SystemAlert{
 				ID:          systemAlertID(service.Name, service.Status),
 				Title:       service.Name + "状态异常",
@@ -344,6 +524,36 @@ func (s *Service) SystemStatus(ctx context.Context) (SystemStatusResponse, error
 				Severity:    "warning",
 			})
 		}
+	}
+
+	learning := LearningStatus{}
+	if activityRepo, ok := s.repo.(LearningActivityRepository); ok {
+		activity, err := activityRepo.LearningActivitySnapshot(ctx)
+		if err != nil {
+			if status == "healthy" {
+				status = "degraded"
+			}
+			alerts = append(alerts, SystemAlert{
+				ID:          "learning-activity-unavailable",
+				Title:       "在线学习统计暂不可用",
+				Description: "服务仍可运行，但当前无法读取未结束的学习会话",
+				Severity:    "warning",
+			})
+		} else {
+			onlineUsers := activity.OnlineUsers
+			activeSessions := activity.ActiveSessions
+			learning.OnlineUsers = &onlineUsers
+			learning.ActiveSessions = &activeSessions
+		}
+	}
+
+	runtimeStatus := RuntimeStatus{}
+	trafficStatus := TrafficStatus{}
+	databaseStatus := DatabaseStatus{}
+	redisStatus := RedisStatus{}
+	if s.operationsProvider != nil {
+		snapshot := s.operationsProvider.OperationsSnapshot()
+		runtimeStatus, trafficStatus, databaseStatus, redisStatus = buildOperationsStatus(snapshot)
 	}
 	if len(alerts) == 0 {
 		alerts = append(alerts, SystemAlert{
@@ -353,7 +563,102 @@ func (s *Service) SystemStatus(ctx context.Context) (SystemStatusResponse, error
 			Severity:    "info",
 		})
 	}
-	return SystemStatusResponse{Services: services, Alerts: alerts}, nil
+	return SystemStatusResponse{
+		Status:     status,
+		CheckedAt:  s.now(),
+		Services:   services,
+		Alerts:     alerts,
+		Runtime:    runtimeStatus,
+		Traffic:    trafficStatus,
+		Learning:   learning,
+		PostgreSQL: databaseStatus,
+		Redis:      redisStatus,
+	}, nil
+}
+
+// ResetTrafficMetrics starts a fresh request-analysis window. It does not
+// mutate users, learning sessions, logs, or any other persisted business data.
+func (s *Service) ResetTrafficMetrics(context.Context) (ResetTrafficMetricsResponse, error) {
+	if s.operationsResetter == nil {
+		return ResetTrafficMetricsResponse{}, errors.New("operations metrics resetter is not configured")
+	}
+	resetAt := s.operationsResetter.ResetTrafficMetrics()
+	return ResetTrafficMetricsResponse{
+		Success: true,
+		Message: "运维流量指标已重置，将从当前时间重新统计",
+		ResetAt: resetAt,
+	}, nil
+}
+
+func buildOperationsStatus(snapshot OperationsSnapshot) (RuntimeStatus, TrafficStatus, DatabaseStatus, RedisStatus) {
+	windowSeconds := snapshot.TrafficWindow.Seconds()
+	averageQPS := 0.0
+	if windowSeconds > 0 {
+		averageQPS = float64(snapshot.RequestsTotal) / windowSeconds
+	}
+
+	runtimeStatus := RuntimeStatus{
+		Version:           snapshot.Version,
+		Environment:       snapshot.Environment,
+		StartedAt:         snapshot.StartedAt,
+		UptimeSeconds:     max(snapshot.Uptime.Milliseconds()/1000, 0),
+		CPUUsagePercent:   numutil.RoundPlaces(snapshot.CPUUsagePercent, 1),
+		HeapUsedBytes:     snapshot.HeapUsedBytes,
+		HeapReservedBytes: snapshot.HeapReservedBytes,
+		HeapUsagePercent:  percentage(float64(snapshot.HeapUsedBytes), float64(snapshot.HeapReservedBytes)),
+		Goroutines:        snapshot.Goroutines,
+		LogicalCPUs:       snapshot.LogicalCPUs,
+		GOMAXPROCS:        snapshot.GOMAXPROCS,
+		GoVersion:         snapshot.GoVersion,
+		OS:                snapshot.OS,
+		Arch:              snapshot.Arch,
+	}
+	trafficStatus := TrafficStatus{
+		WindowStartedAt:        snapshot.TrafficStartedAt,
+		WindowSeconds:          max(snapshot.TrafficWindow.Milliseconds()/1000, 0),
+		RequestsTotal:          snapshot.RequestsTotal,
+		AverageQPS:             numutil.RoundPlaces(averageQPS, 2),
+		ClientErrorsTotal:      snapshot.ClientErrorsTotal,
+		ClientErrorRatePercent: percentage(float64(snapshot.ClientErrorsTotal), float64(snapshot.RequestsTotal)),
+		ServerErrorsTotal:      snapshot.ServerErrorsTotal,
+		ServerErrorRatePercent: percentage(float64(snapshot.ServerErrorsTotal), float64(snapshot.RequestsTotal)),
+		AverageLatencyMS:       durationMilliseconds(snapshot.AverageLatency),
+		P95LatencyMS:           durationMilliseconds(snapshot.P95Latency),
+		P95Clamped:             snapshot.P95Clamped,
+	}
+	databaseStatus := DatabaseStatus{
+		MaxConnections:       snapshot.PostgreSQL.MaxConnections,
+		TotalConnections:     snapshot.PostgreSQL.TotalConnections,
+		AcquiredConnections:  snapshot.PostgreSQL.AcquiredConnections,
+		IdleConnections:      snapshot.PostgreSQL.IdleConnections,
+		UsagePercent:         percentage(float64(snapshot.PostgreSQL.AcquiredConnections), float64(snapshot.PostgreSQL.MaxConnections)),
+		EmptyAcquireCount:    snapshot.PostgreSQL.EmptyAcquireCount,
+		CanceledAcquireCount: snapshot.PostgreSQL.CanceledAcquireCount,
+	}
+	redisRequests := snapshot.Redis.Hits + snapshot.Redis.Misses
+	redisStatus := RedisStatus{
+		MaxConnections:   snapshot.Redis.MaxConnections,
+		TotalConnections: snapshot.Redis.TotalConnections,
+		IdleConnections:  snapshot.Redis.IdleConnections,
+		StaleConnections: snapshot.Redis.StaleConnections,
+		UsagePercent:     percentage(float64(snapshot.Redis.TotalConnections), float64(snapshot.Redis.MaxConnections)),
+		ReusePercent:     percentage(float64(snapshot.Redis.Hits), float64(redisRequests)),
+		Timeouts:         snapshot.Redis.Timeouts,
+		WaitCount:        snapshot.Redis.WaitCount,
+		Unusable:         snapshot.Redis.Unusable,
+	}
+	return runtimeStatus, trafficStatus, databaseStatus, redisStatus
+}
+
+func percentage(value, total float64) float64 {
+	if total <= 0 {
+		return 0
+	}
+	return numutil.RoundPlaces(value/total*100, 1)
+}
+
+func durationMilliseconds(duration time.Duration) float64 {
+	return numutil.RoundPlaces(float64(duration.Microseconds())/1000, 1)
 }
 
 func normalizePeriod(period string) (int, string, error) {

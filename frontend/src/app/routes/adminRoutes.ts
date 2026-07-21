@@ -16,7 +16,7 @@ const AIRiskControlPage = lazy(() => import('@/pages/admin/AIRiskControlPage').t
  */
 export const adminRoutes: RouteConfig[] = [
   { path: '/admin', component: AdminLoginPage, title: '管理员登录', protected: false },
-  { path: '/admin/dashboard', component: AdminDashboardPage, title: '管理员控制台', protected: true, requiredRole: 'admin' },
+  { path: '/admin/dashboard', component: AdminDashboardPage, title: '运维控制台', protected: true, requiredRole: 'admin' },
   { path: '/admin/inbox', component: InboxPage, title: '信箱', protected: true, requiredRole: 'admin' },
   { path: '/admin/accounts', component: AccountManagementPage, title: '账户管理', protected: true, requiredRole: 'admin' },
   { path: '/admin/ai-models', component: AIModelSettingsPage, title: 'AI 模型设置', protected: true, requiredRole: 'admin' },

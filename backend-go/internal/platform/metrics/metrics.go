@@ -2,6 +2,9 @@ package metrics
 
 import (
 	"fmt"
+	"math"
+	"runtime"
+	runtimemetrics "runtime/metrics"
 	"sort"
 	"strconv"
 	"strings"
@@ -39,6 +42,7 @@ type PostgresPoolStats struct {
 
 // RedisPoolStats is a dependency-neutral snapshot of go-redis pool statistics.
 type RedisPoolStats struct {
+	MaxConnections   int64
 	TotalConnections int64
 	IdleConnections  int64
 	StaleConnections int64
@@ -48,6 +52,42 @@ type RedisPoolStats struct {
 	WaitCount        uint64
 	Unusable         uint64
 	WaitDuration     time.Duration
+}
+
+// HTTPStats summarizes bounded request metrics for the operations dashboard.
+type HTTPStats struct {
+	RequestsTotal     uint64
+	ClientErrorsTotal uint64
+	ServerErrorsTotal uint64
+	AverageDuration   time.Duration
+	P95Duration       time.Duration
+	P95Clamped        bool
+}
+
+// ProcessStats contains portable Go process and runtime measurements.
+type ProcessStats struct {
+	CPUUsagePercent   float64
+	HeapUsedBytes     uint64
+	HeapReservedBytes uint64
+	Goroutines        int
+	LogicalCPUs       int
+	GOMAXPROCS        int
+	GoVersion         string
+	OS                string
+	Arch              string
+}
+
+// OperationalSnapshot is a point-in-time view used by authenticated admin APIs.
+type OperationalSnapshot struct {
+	Version          string
+	Environment      string
+	StartedAt        time.Time
+	Uptime           time.Duration
+	TrafficStartedAt time.Time
+	TrafficWindow    time.Duration
+	HTTP             HTTPStats
+	Process          ProcessStats
+	Dependencies     RuntimeStats
 }
 
 type httpLabels struct {
@@ -73,19 +113,26 @@ type httpSnapshot struct {
 type Store struct {
 	version     string
 	environment string
+	startedAt   time.Time
 	requests    atomic.Uint64
 
 	mu                   sync.RWMutex
 	http                 map[httpLabels]*httpSeries
+	operationalHTTP      map[httpLabels]*httpSeries
+	operationalStartedAt time.Time
 	runtimeStatsProvider RuntimeStatsProvider
 }
 
 // NewStore creates a metrics store for the API process.
 func NewStore(version, environment string) *Store {
+	startedAt := time.Now().UTC()
 	return &Store{
-		version:     version,
-		environment: environment,
-		http:        make(map[httpLabels]*httpSeries),
+		version:              version,
+		environment:          environment,
+		startedAt:            startedAt,
+		http:                 make(map[httpLabels]*httpSeries),
+		operationalHTTP:      make(map[httpLabels]*httpSeries),
+		operationalStartedAt: startedAt,
 	}
 }
 
@@ -105,10 +152,27 @@ func (s *Store) ObserveHTTPRequest(method, route string, status int, duration ti
 	durationSeconds := nonNegativeSeconds(duration)
 
 	s.mu.Lock()
-	series := s.http[labels]
+	observeHTTPSeries(s.http, labels, durationSeconds)
+	observeHTTPSeries(s.operationalHTTP, labels, durationSeconds)
+	s.mu.Unlock()
+}
+
+// ResetOperationalHTTP starts a new traffic-analysis window for the admin
+// operations dashboard without changing process-lifetime Prometheus counters.
+func (s *Store) ResetOperationalHTTP() time.Time {
+	resetAt := time.Now().UTC()
+	s.mu.Lock()
+	s.operationalHTTP = make(map[httpLabels]*httpSeries)
+	s.operationalStartedAt = resetAt
+	s.mu.Unlock()
+	return resetAt
+}
+
+func observeHTTPSeries(target map[httpLabels]*httpSeries, labels httpLabels, durationSeconds float64) {
+	series := target[labels]
 	if series == nil {
 		series = &httpSeries{buckets: make([]uint64, len(httpDurationBuckets))}
-		s.http[labels] = series
+		target[labels] = series
 	}
 	series.count++
 	series.durationSum += durationSeconds
@@ -117,7 +181,6 @@ func (s *Store) ObserveHTTPRequest(method, route string, status int, duration ti
 			series.buckets[i]++
 		}
 	}
-	s.mu.Unlock()
 }
 
 // SetRuntimeStatsProvider configures dependency pool metrics sampled at scrape time.
@@ -125,6 +188,50 @@ func (s *Store) SetRuntimeStatsProvider(provider RuntimeStatsProvider) {
 	s.mu.Lock()
 	s.runtimeStatsProvider = provider
 	s.mu.Unlock()
+}
+
+// OperationalSnapshot returns request, process, and dependency metrics without
+// exposing Prometheus text parsing to application code.
+func (s *Store) OperationalSnapshot() OperationalSnapshot {
+	httpSnapshots, trafficStartedAt, runtimeProvider := s.operationalSnapshot()
+	dependencies := RuntimeStats{}
+	if runtimeProvider != nil {
+		dependencies = runtimeProvider()
+	}
+
+	var memory runtime.MemStats
+	runtime.ReadMemStats(&memory)
+	now := time.Now().UTC()
+	uptime := now.Sub(s.startedAt)
+	if uptime < 0 {
+		uptime = 0
+	}
+	trafficWindow := now.Sub(trafficStartedAt)
+	if trafficWindow < 0 {
+		trafficWindow = 0
+	}
+
+	return OperationalSnapshot{
+		Version:          s.version,
+		Environment:      s.environment,
+		StartedAt:        s.startedAt,
+		Uptime:           uptime,
+		TrafficStartedAt: trafficStartedAt,
+		TrafficWindow:    trafficWindow,
+		HTTP:             summarizeHTTP(httpSnapshots),
+		Dependencies:     dependencies,
+		Process: ProcessStats{
+			CPUUsagePercent:   goCPUUsagePercent(),
+			HeapUsedBytes:     memory.HeapAlloc,
+			HeapReservedBytes: memory.HeapSys,
+			Goroutines:        runtime.NumGoroutine(),
+			LogicalCPUs:       runtime.NumCPU(),
+			GOMAXPROCS:        runtime.GOMAXPROCS(0),
+			GoVersion:         runtime.Version(),
+			OS:                runtime.GOOS,
+			Arch:              runtime.GOARCH,
+		},
+	}
 }
 
 // Render returns Prometheus text exposition format.
@@ -150,8 +257,28 @@ func (s *Store) Render() string {
 
 func (s *Store) snapshot() ([]httpSnapshot, RuntimeStatsProvider) {
 	s.mu.RLock()
-	snapshots := make([]httpSnapshot, 0, len(s.http))
-	for labels, series := range s.http {
+	snapshots := cloneHTTPSnapshots(s.http)
+	runtimeProvider := s.runtimeStatsProvider
+	s.mu.RUnlock()
+
+	sortHTTPSnapshots(snapshots)
+	return snapshots, runtimeProvider
+}
+
+func (s *Store) operationalSnapshot() ([]httpSnapshot, time.Time, RuntimeStatsProvider) {
+	s.mu.RLock()
+	snapshots := cloneHTTPSnapshots(s.operationalHTTP)
+	startedAt := s.operationalStartedAt
+	runtimeProvider := s.runtimeStatsProvider
+	s.mu.RUnlock()
+
+	sortHTTPSnapshots(snapshots)
+	return snapshots, startedAt, runtimeProvider
+}
+
+func cloneHTTPSnapshots(source map[httpLabels]*httpSeries) []httpSnapshot {
+	snapshots := make([]httpSnapshot, 0, len(source))
+	for labels, series := range source {
 		snapshots = append(snapshots, httpSnapshot{
 			labels:      labels,
 			count:       series.count,
@@ -159,9 +286,10 @@ func (s *Store) snapshot() ([]httpSnapshot, RuntimeStatsProvider) {
 			buckets:     append([]uint64(nil), series.buckets...),
 		})
 	}
-	runtimeProvider := s.runtimeStatsProvider
-	s.mu.RUnlock()
+	return snapshots
+}
 
+func sortHTTPSnapshots(snapshots []httpSnapshot) {
 	sort.Slice(snapshots, func(i, j int) bool {
 		if snapshots[i].labels.method != snapshots[j].labels.method {
 			return snapshots[i].labels.method < snapshots[j].labels.method
@@ -171,7 +299,6 @@ func (s *Store) snapshot() ([]httpSnapshot, RuntimeStatsProvider) {
 		}
 		return snapshots[i].labels.statusClass < snapshots[j].labels.statusClass
 	})
-	return snapshots, runtimeProvider
 }
 
 func renderHTTPMetrics(b *strings.Builder, snapshots []httpSnapshot) {
@@ -255,6 +382,9 @@ func renderRuntimeMetrics(b *strings.Builder, stats RuntimeStats) {
 	b.WriteString("# TYPE msp_postgres_pool_empty_acquire_wait_seconds_total counter\n")
 	fmt.Fprintf(b, "msp_postgres_pool_empty_acquire_wait_seconds_total %s\n", formatFloat(nonNegativeSeconds(stats.Postgres.EmptyAcquireWaitTime)))
 
+	b.WriteString("# HELP msp_redis_pool_max_connections Configured Redis pool connection limit.\n")
+	b.WriteString("# TYPE msp_redis_pool_max_connections gauge\n")
+	fmt.Fprintf(b, "msp_redis_pool_max_connections %d\n", stats.Redis.MaxConnections)
 	b.WriteString("# HELP msp_redis_pool_connections Current Redis pool connections by state.\n")
 	b.WriteString("# TYPE msp_redis_pool_connections gauge\n")
 	fmt.Fprintf(b, "msp_redis_pool_connections{state=\"total\"} %d\n", stats.Redis.TotalConnections)
@@ -268,6 +398,58 @@ func renderRuntimeMetrics(b *strings.Builder, stats RuntimeStats) {
 	b.WriteString("# HELP msp_redis_pool_wait_duration_seconds_total Total time waiting for Redis pool connections.\n")
 	b.WriteString("# TYPE msp_redis_pool_wait_duration_seconds_total counter\n")
 	fmt.Fprintf(b, "msp_redis_pool_wait_duration_seconds_total %s\n", formatFloat(nonNegativeSeconds(stats.Redis.WaitDuration)))
+}
+
+func summarizeHTTP(snapshots []httpSnapshot) HTTPStats {
+	stats := HTTPStats{}
+	buckets := make([]uint64, len(httpDurationBuckets))
+	var durationSeconds float64
+	for _, snapshot := range snapshots {
+		stats.RequestsTotal += snapshot.count
+		durationSeconds += snapshot.durationSum
+		for i, count := range snapshot.buckets {
+			buckets[i] += count
+		}
+		switch snapshot.labels.statusClass {
+		case "4xx":
+			stats.ClientErrorsTotal += snapshot.count
+		case "5xx":
+			stats.ServerErrorsTotal += snapshot.count
+		}
+	}
+	if stats.RequestsTotal == 0 {
+		return stats
+	}
+
+	stats.AverageDuration = time.Duration(durationSeconds / float64(stats.RequestsTotal) * float64(time.Second))
+	target := uint64(math.Ceil(float64(stats.RequestsTotal) * 0.95))
+	for i, count := range buckets {
+		if count >= target {
+			stats.P95Duration = time.Duration(httpDurationBuckets[i] * float64(time.Second))
+			return stats
+		}
+	}
+	stats.P95Duration = time.Duration(httpDurationBuckets[len(httpDurationBuckets)-1] * float64(time.Second))
+	stats.P95Clamped = true
+	return stats
+}
+
+func goCPUUsagePercent() float64 {
+	samples := []runtimemetrics.Sample{
+		{Name: "/cpu/classes/total:cpu-seconds"},
+		{Name: "/cpu/classes/idle:cpu-seconds"},
+	}
+	runtimemetrics.Read(samples)
+	if samples[0].Value.Kind() != runtimemetrics.KindFloat64 || samples[1].Value.Kind() != runtimemetrics.KindFloat64 {
+		return 0
+	}
+	total := samples[0].Value.Float64()
+	idle := samples[1].Value.Float64()
+	if total <= 0 {
+		return 0
+	}
+	usage := (total - idle) / total * 100
+	return math.Max(0, math.Min(100, usage))
 }
 
 func renderRedisCounter(b *strings.Builder, name, help string, value uint64) {

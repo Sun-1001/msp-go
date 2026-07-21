@@ -97,6 +97,37 @@ func main() {
 		logger.Error("redis is required for production refresh sessions", "error", err)
 		os.Exit(1)
 	}
+	store := metrics.NewStore(cfg.AppVersion, cfg.Environment)
+	store.SetRuntimeStatsProvider(func() metrics.RuntimeStats {
+		postgresStats := dbPool.Stat()
+		redisStats := redisClient.PoolStats()
+		return metrics.RuntimeStats{
+			Postgres: metrics.PostgresPoolStats{
+				MaxConnections:          int64(postgresStats.MaxConns()),
+				TotalConnections:        int64(postgresStats.TotalConns()),
+				AcquiredConnections:     int64(postgresStats.AcquiredConns()),
+				IdleConnections:         int64(postgresStats.IdleConns()),
+				ConstructingConnections: int64(postgresStats.ConstructingConns()),
+				AcquireCount:            postgresStats.AcquireCount(),
+				EmptyAcquireCount:       postgresStats.EmptyAcquireCount(),
+				CanceledAcquireCount:    postgresStats.CanceledAcquireCount(),
+				AcquireDuration:         postgresStats.AcquireDuration(),
+				EmptyAcquireWaitTime:    postgresStats.EmptyAcquireWaitTime(),
+			},
+			Redis: metrics.RedisPoolStats{
+				MaxConnections:   int64(cfg.RedisMaxConnections),
+				TotalConnections: int64(redisStats.TotalConns),
+				IdleConnections:  int64(redisStats.IdleConns),
+				StaleConnections: int64(redisStats.StaleConns),
+				Hits:             uint64(redisStats.Hits),
+				Misses:           uint64(redisStats.Misses),
+				Timeouts:         uint64(redisStats.Timeouts),
+				WaitCount:        uint64(redisStats.WaitCount),
+				Unusable:         uint64(redisStats.Unusable),
+				WaitDuration:     time.Duration(redisStats.WaitDurationNs),
+			},
+		}
+	})
 
 	userRepo, err := adapterpostgres.NewUserRepository(dbPool)
 	if err != nil {
@@ -486,6 +517,8 @@ func main() {
 		logger.Error("configure admin stats service", "error", err)
 		os.Exit(1)
 	}
+	adminStatsService.SetOperationsProvider(adminOperationsProvider(store))
+	adminStatsService.SetOperationsResetter(adminstatsapp.OperationsResetterFunc(store.ResetOperationalHTTP))
 	adminStatsHandler, err := adminstatshttp.NewHandler(logger, adminStatsService, authService)
 	if err != nil {
 		logger.Error("configure admin stats handler", "error", err)
@@ -576,36 +609,6 @@ func main() {
 		os.Exit(1)
 	}
 
-	store := metrics.NewStore(cfg.AppVersion, cfg.Environment)
-	store.SetRuntimeStatsProvider(func() metrics.RuntimeStats {
-		postgresStats := dbPool.Stat()
-		redisStats := redisClient.PoolStats()
-		return metrics.RuntimeStats{
-			Postgres: metrics.PostgresPoolStats{
-				MaxConnections:          int64(postgresStats.MaxConns()),
-				TotalConnections:        int64(postgresStats.TotalConns()),
-				AcquiredConnections:     int64(postgresStats.AcquiredConns()),
-				IdleConnections:         int64(postgresStats.IdleConns()),
-				ConstructingConnections: int64(postgresStats.ConstructingConns()),
-				AcquireCount:            postgresStats.AcquireCount(),
-				EmptyAcquireCount:       postgresStats.EmptyAcquireCount(),
-				CanceledAcquireCount:    postgresStats.CanceledAcquireCount(),
-				AcquireDuration:         postgresStats.AcquireDuration(),
-				EmptyAcquireWaitTime:    postgresStats.EmptyAcquireWaitTime(),
-			},
-			Redis: metrics.RedisPoolStats{
-				TotalConnections: int64(redisStats.TotalConns),
-				IdleConnections:  int64(redisStats.IdleConns),
-				StaleConnections: int64(redisStats.StaleConns),
-				Hits:             uint64(redisStats.Hits),
-				Misses:           uint64(redisStats.Misses),
-				Timeouts:         uint64(redisStats.Timeouts),
-				WaitCount:        uint64(redisStats.WaitCount),
-				Unusable:         uint64(redisStats.Unusable),
-				WaitDuration:     time.Duration(redisStats.WaitDurationNs),
-			},
-		}
-	})
 	checker := health.NewChecker(cfg.AppVersion, dbPool, health.RedisPingerFunc(func(ctx context.Context) error {
 		return redisClient.Ping(ctx).Err()
 	}))
@@ -685,6 +688,54 @@ func adminStatusProvider(dbPool *pgxpool.Pool, redisClient *goredis.Client) admi
 			pingStatus(ctx, "PostgreSQL", func(ctx context.Context) error { return dbPool.Ping(ctx) }),
 			pingStatus(ctx, "Redis", func(ctx context.Context) error { return redisClient.Ping(ctx).Err() }),
 		}, nil
+	}
+}
+
+func adminOperationsProvider(store *metrics.Store) adminstatsapp.OperationsProviderFunc {
+	return func() adminstatsapp.OperationsSnapshot {
+		snapshot := store.OperationalSnapshot()
+		return adminstatsapp.OperationsSnapshot{
+			Version:           snapshot.Version,
+			Environment:       snapshot.Environment,
+			StartedAt:         snapshot.StartedAt,
+			Uptime:            snapshot.Uptime,
+			CPUUsagePercent:   snapshot.Process.CPUUsagePercent,
+			HeapUsedBytes:     snapshot.Process.HeapUsedBytes,
+			HeapReservedBytes: snapshot.Process.HeapReservedBytes,
+			Goroutines:        snapshot.Process.Goroutines,
+			LogicalCPUs:       snapshot.Process.LogicalCPUs,
+			GOMAXPROCS:        snapshot.Process.GOMAXPROCS,
+			GoVersion:         snapshot.Process.GoVersion,
+			OS:                snapshot.Process.OS,
+			Arch:              snapshot.Process.Arch,
+			RequestsTotal:     snapshot.HTTP.RequestsTotal,
+			ClientErrorsTotal: snapshot.HTTP.ClientErrorsTotal,
+			ServerErrorsTotal: snapshot.HTTP.ServerErrorsTotal,
+			AverageLatency:    snapshot.HTTP.AverageDuration,
+			P95Latency:        snapshot.HTTP.P95Duration,
+			P95Clamped:        snapshot.HTTP.P95Clamped,
+			TrafficStartedAt:  snapshot.TrafficStartedAt,
+			TrafficWindow:     snapshot.TrafficWindow,
+			PostgreSQL: adminstatsapp.DatabasePoolSnapshot{
+				MaxConnections:       snapshot.Dependencies.Postgres.MaxConnections,
+				TotalConnections:     snapshot.Dependencies.Postgres.TotalConnections,
+				AcquiredConnections:  snapshot.Dependencies.Postgres.AcquiredConnections,
+				IdleConnections:      snapshot.Dependencies.Postgres.IdleConnections,
+				EmptyAcquireCount:    snapshot.Dependencies.Postgres.EmptyAcquireCount,
+				CanceledAcquireCount: snapshot.Dependencies.Postgres.CanceledAcquireCount,
+			},
+			Redis: adminstatsapp.RedisPoolSnapshot{
+				MaxConnections:   snapshot.Dependencies.Redis.MaxConnections,
+				TotalConnections: snapshot.Dependencies.Redis.TotalConnections,
+				IdleConnections:  snapshot.Dependencies.Redis.IdleConnections,
+				StaleConnections: snapshot.Dependencies.Redis.StaleConnections,
+				Hits:             snapshot.Dependencies.Redis.Hits,
+				Misses:           snapshot.Dependencies.Redis.Misses,
+				Timeouts:         snapshot.Dependencies.Redis.Timeouts,
+				WaitCount:        snapshot.Dependencies.Redis.WaitCount,
+				Unusable:         snapshot.Dependencies.Redis.Unusable,
+			},
+		}
 	}
 }
 

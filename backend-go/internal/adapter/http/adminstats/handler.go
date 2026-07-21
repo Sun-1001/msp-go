@@ -20,6 +20,7 @@ type Service interface {
 	UserGrowth(context.Context, string) (adminstatsapp.UserGrowthResponse, error)
 	RecentActivities(context.Context, int) (adminstatsapp.RecentActivitiesResponse, error)
 	SystemStatus(context.Context) (adminstatsapp.SystemStatusResponse, error)
+	ResetTrafficMetrics(context.Context) (adminstatsapp.ResetTrafficMetricsResponse, error)
 }
 
 // Authenticator decodes Go/Python-compatible access tokens.
@@ -54,6 +55,7 @@ func (h *Handler) Register(mux *http.ServeMux, prefix string) {
 	mux.HandleFunc("GET "+prefix+"/user-growth", h.userGrowth)
 	mux.HandleFunc("GET "+prefix+"/recent-activities", h.recentActivities)
 	mux.HandleFunc("GET "+prefix+"/system-status", h.systemStatus)
+	mux.HandleFunc("POST "+prefix+"/system-status/reset", h.resetTrafficMetrics)
 }
 
 func (h *Handler) overview(w http.ResponseWriter, r *http.Request) {
@@ -108,6 +110,18 @@ func (h *Handler) systemStatus(w http.ResponseWriter, r *http.Request) {
 	response, err := h.service.SystemStatus(r.Context())
 	if err != nil {
 		h.writeServiceError(w, err, "获取系统状态失败")
+		return
+	}
+	httpjson.Write(w, http.StatusOK, response)
+}
+
+func (h *Handler) resetTrafficMetrics(w http.ResponseWriter, r *http.Request) {
+	if _, ok := h.requireAdmin(w, r); !ok {
+		return
+	}
+	response, err := h.service.ResetTrafficMetrics(r.Context())
+	if err != nil {
+		h.writeServiceError(w, err, "重置运维流量指标失败")
 		return
 	}
 	httpjson.Write(w, http.StatusOK, response)

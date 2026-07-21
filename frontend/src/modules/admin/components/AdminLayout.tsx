@@ -80,7 +80,7 @@ export const AdminLayout: React.FC<AdminLayoutProps> = ({ children, className = 
   const menuItems = [
     {
       icon: LayoutDashboard,
-      label: '控制台',
+      label: '运维控制台',
       path: '/admin/dashboard',
     },
     {
@@ -116,6 +116,7 @@ export const AdminLayout: React.FC<AdminLayoutProps> = ({ children, className = 
     },
   ];
 
+  const activeMenuItem = menuItems.find((item) => item.path === location.pathname);
   const mobileSidebarHidden = !desktopViewport && !sidebarOpen;
 
   return (
@@ -270,7 +271,7 @@ export const AdminLayout: React.FC<AdminLayoutProps> = ({ children, className = 
               <Menu className="h-5 w-5" />
             </Button>
             <h2 className="text-lg font-semibold text-surface-900 dark:text-surface-100">
-              管理员控制台
+              {activeMenuItem?.label ?? '管理后台'}
             </h2>
           </div>
           <div className="flex items-center gap-3">

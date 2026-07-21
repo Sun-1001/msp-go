@@ -14,6 +14,7 @@ import type {
   UserGrowthPeriod,
 } from '@/modules/admin/types/adminStats';
 import { adminStatsService } from '@/modules/admin/services/adminStatsService';
+import { getApiErrorMessage } from '@/libs/http/apiClient';
 
 // =============================================================================
 // State 类型定义
@@ -40,6 +41,8 @@ interface AdminStatsState {
   systemStatus: SystemStatusResponse | null;
   systemStatusLoading: LoadingState;
   systemStatusError: string | null;
+  trafficResetLoading: LoadingState;
+  trafficResetError: string | null;
 }
 
 // =============================================================================
@@ -63,6 +66,8 @@ const initialState: AdminStatsState = {
   systemStatus: null,
   systemStatusLoading: 'idle',
   systemStatusError: null,
+  trafficResetLoading: 'idle',
+  trafficResetError: null,
 };
 
 // =============================================================================
@@ -122,13 +127,27 @@ export const fetchRecentActivities = createAsyncThunk(
  */
 export const fetchSystemStatus = createAsyncThunk(
   'adminStats/fetchSystemStatus',
-  async (_, { rejectWithValue }) => {
+  async (_, { rejectWithValue, signal }) => {
     try {
-      return await adminStatsService.getSystemStatus();
+      return await adminStatsService.getSystemStatus(signal);
     } catch (error) {
       return rejectWithValue(
         error instanceof Error ? error.message : '获取系统状态失败'
       );
+    }
+  }
+);
+
+/**
+ * 重置运维流量统计窗口
+ */
+export const resetTrafficMetrics = createAsyncThunk(
+  'adminStats/resetTrafficMetrics',
+  async (_, { rejectWithValue }) => {
+    try {
+      return await adminStatsService.resetTrafficMetrics();
+    } catch (error) {
+      return rejectWithValue(getApiErrorMessage(error, '重置运维流量指标失败'));
     }
   }
 );
@@ -146,6 +165,10 @@ const adminStatsSlice = createSlice({
      */
     setUserGrowthPeriod(state, action: PayloadAction<UserGrowthPeriod>) {
       state.userGrowthPeriod = action.payload;
+    },
+
+    clearTrafficResetError(state) {
+      state.trafficResetError = null;
     },
 
     /**
@@ -216,6 +239,20 @@ const adminStatsSlice = createSlice({
         state.systemStatusLoading = 'error';
         state.systemStatusError = action.payload as string;
       });
+
+    // 运维流量统计窗口
+    builder
+      .addCase(resetTrafficMetrics.pending, (state) => {
+        state.trafficResetLoading = 'loading';
+        state.trafficResetError = null;
+      })
+      .addCase(resetTrafficMetrics.fulfilled, (state) => {
+        state.trafficResetLoading = 'success';
+      })
+      .addCase(resetTrafficMetrics.rejected, (state, action) => {
+        state.trafficResetLoading = 'error';
+        state.trafficResetError = action.payload as string;
+      });
   },
 });
 
@@ -223,6 +260,6 @@ const adminStatsSlice = createSlice({
 // 导出
 // =============================================================================
 
-export const { setUserGrowthPeriod, clearStats } = adminStatsSlice.actions;
+export const { setUserGrowthPeriod, clearTrafficResetError, clearStats } = adminStatsSlice.actions;
 
 export default adminStatsSlice.reducer;

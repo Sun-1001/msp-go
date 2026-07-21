@@ -10,6 +10,7 @@ import type {
   OverviewStats,
   UserGrowthResponse,
   RecentActivitiesResponse,
+  ResetTrafficMetricsResponse,
   SystemStatusResponse,
   UserGrowthPeriod,
 } from '@/modules/admin/types/adminStats';
@@ -84,10 +85,11 @@ export const adminStatsService = {
   /**
    * 获取系统状态
    */
-  async getSystemStatus(): Promise<SystemStatusResponse> {
+  async getSystemStatus(signal?: AbortSignal): Promise<SystemStatusResponse> {
     try {
       const response = await apiClient.get<SystemStatusResponse>(
-        `${BASE_PATH}/system-status`
+        `${BASE_PATH}/system-status`,
+        { signal }
       );
       statsLogger.debug('获取系统状态成功', {
         servicesCount: response.data.services.length,
@@ -96,6 +98,22 @@ export const adminStatsService = {
       return response.data;
     } catch (error) {
       statsLogger.error('获取系统状态失败', error);
+      throw error;
+    }
+  },
+
+  /**
+   * 开启新的运维流量统计窗口
+   */
+  async resetTrafficMetrics(): Promise<ResetTrafficMetricsResponse> {
+    try {
+      const response = await apiClient.post<ResetTrafficMetricsResponse>(
+        `${BASE_PATH}/system-status/reset`
+      );
+      statsLogger.info('重置运维流量指标成功', { resetAt: response.data.reset_at });
+      return response.data;
+    } catch (error) {
+      statsLogger.error('重置运维流量指标失败', error);
       throw error;
     }
   },

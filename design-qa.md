@@ -1,51 +1,47 @@
-# Welcome Design QA
+# Operations Dashboard Design QA
 
 ## Comparison Target
 
-- Source visual truth: `C:/Users/Administrator/Downloads/QQ20260713-205016.mp4`
-- Extracted source evidence: `C:/Users/Administrator/.codex/visualizations/2026/07/13/019f5b89-8a1f-7ea3-b11d-6f272abb6e68/welcome-reference/reference-contact-sheet.jpg`
-- Implementation URL: `http://127.0.0.1:4173/welcome`
-- Primary implementation screenshot: `C:/Users/Administrator/.codex/visualizations/2026/07/13/019f5b89-8a1f-7ea3-b11d-6f272abb6e68/welcome-reference/implementation-desktop-rich-v2.png`
-- Mobile implementation screenshot: `C:/Users/Administrator/.codex/visualizations/2026/07/13/019f5b89-8a1f-7ea3-b11d-6f272abb6e68/welcome-reference/implementation-mobile-rich-v2.png`
-- Role-view screenshots: `implementation-desktop-role-student-v2.png`, `implementation-desktop-role-teacher-v2.png`, and `implementation-mobile-role-preview-v2.png` in the same evidence directory.
-- Journey screenshots: `implementation-mobile-journey-v2.png` and `implementation-mobile-journey-dark-v2.png` in the same evidence directory.
-- Combined comparison evidence: `C:/Users/Administrator/.codex/visualizations/2026/07/13/019f5b89-8a1f-7ea3-b11d-6f272abb6e68/welcome-reference/motion-fidelity-comparison.jpg`
-- Viewports: 1280 x 720 desktop and 390 x 844 mobile.
-- State: public welcome route, light theme; dark theme also checked on mobile.
+- Source visual truth: `C:/Users/Administrator/AppData/Local/Temp/codex-clipboard-8630c0b6-8932-465d-8913-a1df9502c26c.png`.
+- User-reported before state: `C:/Users/Administrator/AppData/Local/Temp/codex-clipboard-8369a514-9062-4cf4-8120-df8d11393f4e.png`.
+- Implementation URL: `http://localhost:5173/admin/dashboard`.
+- Desktop implementation screenshot: `C:/Users/Administrator/.codex/visualizations/2026/07/21/019f8567-5822-7fe3-a66a-2bb543ff73b7/ops-dashboard/operations-dashboard-desktop-final.png`.
+- Mobile implementation screenshot: `C:/Users/Administrator/.codex/visualizations/2026/07/21/019f8567-5822-7fe3-a66a-2bb543ff73b7/ops-dashboard/operations-dashboard-mobile-final.png`.
+- Reset confirmation desktop screenshot: `C:/Users/Administrator/.codex/visualizations/2026/07/21/019f8567-5822-7fe3-a66a-2bb543ff73b7/ops-dashboard/operations-reset-confirm-desktop.png`.
+- Reset confirmation mobile screenshot: `C:/Users/Administrator/.codex/visualizations/2026/07/21/019f8567-5822-7fe3-a66a-2bb543ff73b7/ops-dashboard/operations-reset-confirm-mobile.png`.
+- Business overview screenshot: `C:/Users/Administrator/.codex/visualizations/2026/07/21/019f8567-5822-7fe3-a66a-2bb543ff73b7/ops-dashboard/business-overview-mobile-final.png`.
+- Combined comparison evidence: `C:/Users/Administrator/.codex/visualizations/2026/07/21/019f8567-5822-7fe3-a66a-2bb543ff73b7/ops-dashboard/reference-vs-implementation.png`.
+- Checked viewports: 1440 x 1000 desktop and 390 x 844 mobile.
+- State: authenticated administrator, light theme, `/admin/dashboard`, operations tab selected by default.
 
-The reference is animation-only by user instruction. Its fantasy imagery, typography, copy, and palette are intentionally excluded from the visual contract. The fidelity target is the motion grammar: an authored first scene, scale-led entry into an immersive scene, layered content arrival, horizontal scene handoff, and a clean transition into the next page band.
+The reference is an information-density and monitoring-hierarchy source, not a pixel-copy target. The user explicitly requested a project-specific adaptation. Filters, alert-rule configuration, host-wide resource values, token/TPS metrics, and fullscreen controls from the reference are intentionally omitted because this project does not currently provide those contracts.
 
 ## Full-View Comparison Evidence
 
-- The implementation preserves the reference's title-led opening while replacing fantasy destination cards with a real product workspace.
-- The title now uses a four-character staggered 3D entrance, a restrained project-blue/project-violet highlight on `智学`, and converging guide lines without changing the product name or palette.
-- The initial product workspace grows from a partial first-viewport preview into a viewport-dominant sticky scene.
-- AI, knowledge graph, and learning path workspaces hand off horizontally with overlapping crossfades, matching the reference's foreground/background separation and scene replacement rhythm.
-- The final scene releases into the learning-loop band without a blank frame or scroll trap.
-- The page now continues into a functional student/teacher role switch and an open timeline covering pre-class, active learning, and review, so the welcome surface explains a complete product journey rather than ending after the motion demo.
-- Desktop and mobile keep the same story order, interaction labels, theme tokens, and CTA hierarchy.
+- The previous page opened with four account cards and hid operations behind the fourth tab. The implementation now makes operations the first page signal and default selected tab.
+- The reference's health summary, traffic metrics, dependency status, and resource strip are preserved as information architecture while using this project's existing sidebar, surface tokens, typography, and icon family.
+- Project-specific data replaces reference-only concepts: online learners, active learning sessions, Go runtime, Goroutines, PostgreSQL pool, Redis pool reuse, and API process uptime.
+- At 1440 x 1000 the first viewport contains health, six traffic metrics, six resource/dependency metrics, service probes, and runtime summary without horizontal scrolling.
+- At 390 x 844 the hierarchy collapses to a single column, keeps the two primary tabs and refresh controls usable, and reports no horizontal overflow.
 
 ## Focused Region Comparison Evidence
 
-- Intro composition: `implementation-desktop-final.png` and `implementation-mobile-initial-final.png` verify brand hierarchy, CTA spacing, next-scene visibility, and responsive wrapping.
-- AI stage: `implementation-desktop-tutor-fixed.png` and `implementation-mobile-tutor.png` verify product-window scale, content legibility, and stage navigation.
-- Knowledge stage: `implementation-desktop-graph.png` and `implementation-mobile-graph-final.png` verify horizontal handoff, selected-state feedback, and mobile content reduction.
-- Path stage: `implementation-desktop-path-final.png` and `implementation-mobile-path-clean.png` verify the final scene, inactive-layer removal, and mobile secondary-panel suppression.
-- Role views: `implementation-desktop-role-student-v2.png` and `implementation-desktop-role-teacher-v2.png` verify selected states, content replacement, open feature lists, and role-specific product previews.
-- Mobile product view: `implementation-mobile-role-preview-v2.png` verifies the 334px-wide collapsed student workspace with no horizontal overflow.
-- Learning stages: `implementation-mobile-journey-v2.png` and `implementation-mobile-journey-dark-v2.png` verify the vertical mobile timeline, progressive reveal, and dark-theme contrast.
-- A separate crop was not required because all primary typography, icons, borders, controls, and content rows remain readable in these native screenshots.
+- Header and tab region: page, top-bar, and sidebar titles consistently read “运维控制台”; only “运维监控 / 业务概览” remain, with operations selected after a fresh reload.
+- Refresh controls: browser geometry verified the 20 px switch thumb remains inside the 44 px track in both checked states. The original QA pass found the thumb outside the track and the patch added an explicit left anchor.
+- Reset control: “重置指标” sits beside refresh controls with a RotateCcw icon. Its confirmation states exactly which traffic metrics reset, which live/process values remain, and that no business or database data is deleted.
+- Dependency strip: PostgreSQL and Redis values remain readable at desktop width and become two-column cells on mobile without clipped labels or values.
+- Business overview: the mobile screenshot verifies account cards, refresh action, tab selected state, and responsive stacking. A separate crop was unnecessary because the native screenshots keep all relevant type, icons, borders, and controls readable.
 
 ## Required Fidelity Surfaces
 
-- Fonts and typography: project sans-serif stack is preserved; the hero title uses stable breakpoint sizes rather than viewport-scaled type, explicit zero letter spacing, per-character transform-only entrance motion, deliberate Chinese line breaks, and no clipped display text.
-- Spacing and layout rhythm: the first viewport leaves the product preview visible, sticky scenes fill the usable viewport below the 64px header, and later sections use open bands rather than nested card grids.
-- Colors and visual tokens: existing `surface`, `primary`, `secondary`, emerald, and amber tokens are preserved in both themes. The fantasy reference palette is intentionally not copied.
-- Image quality and asset fidelity: no reference image is reused because the user requested motion-only reference. The primary visual is a code-native preview of the actual product workflow with the repository's existing Lucide icon family; no placeholder image or custom SVG substitute is present.
-- Copy and content: above-the-fold copy is limited to the project brand, product value statement, one description, and two functional CTAs. No reference-site claims, navigation, metrics, or fantasy copy were introduced.
-- Icons: all controls and status marks use the existing Lucide dependency with consistent stroke style and optical sizing.
-- States and interactions: start/login, register, modal close, demo jump, three stage selectors, student/teacher tabs, theme toggle, smooth scrolling, reduced-motion static rendering, and mobile/desktop layouts were exercised.
-- Accessibility: semantic headings, labelled stage navigation, 40px-or-larger controls, visible focus rings, `aria-current`, labelled product previews, and `prefers-reduced-motion` fallback are present.
+- Fonts and typography: the existing project sans-serif stack, weight scale, and zero letter spacing are preserved. Page, section, metric, label, and hint hierarchy remains distinct; no visible text clips or overlaps at checked viewports.
+- Spacing and layout rhythm: restrained 4/5/6 spacing steps, 8 px panel radii, single-level cards, borders, and full-width bands match the existing admin system. Stable grid tracks prevent metric changes from resizing the layout.
+- Colors and visual tokens: existing surface/primary tokens are used with emerald, amber, and red reserved for semantic health states. Light-theme contrast is clear and the page does not copy the reference's background treatment.
+- Image quality and asset fidelity: the target is an operational UI with no required product imagery. All interface icons use the repository's existing Lucide dependency; there are no placeholder images, custom SVG substitutes, CSS illustrations, or emoji icons.
+- Copy and content: copy describes this project's real measurements and distinguishes process-level values from host-level monitoring. Reference-only claims and controls are not reproduced.
+- Icons: status, latency, CPU, storage, database, Redis, server, navigation, refresh, and security actions use one consistent stroke family and aligned optical sizes.
+- States and interactions: default tab selection, operations/business tab switching, auto-refresh on/off, manual refresh, scoped metrics reset, stale/error/loading components, mobile navigation open/close, and desktop/mobile layouts are implemented. Browser checks exercised reset cancellation, confirmation, success feedback, window-start refresh, tab switching, switch state, and mobile navigation.
+- Accessibility: semantic headings/regions/tabs, labelled switch and icon buttons, selected/checked ARIA state, visible focus rings, 40 px control targets, and inert hidden mobile navigation are present.
 
 ## Findings
 
@@ -53,45 +49,41 @@ No actionable P0, P1, or P2 findings remain.
 
 ## Patches Made During QA
 
-- Replaced the welcome layout's horizontal overflow behavior with scoped `overflow: clip` so the sticky story remains attached to the viewport.
-- Corrected stage jump coordinates to include the sticky header's document offset.
-- Hid inactive story layers after each crossfade to remove compositor ghosting and reduce paint work.
-- Lowered the initial product window to prevent CTA overlap on desktop and mobile.
-- Added a deliberate two-line learning-loop heading to remove a desktop orphan line.
-- Shortened mobile stage labels and hid desktop-only analytics sidebars on small screens.
-- Added a reduced-motion-safe title entrance and disabled the title sheen when motion reduction is requested.
-- Added student and teacher views with realistic project functions sourced from the existing guide, student, and teacher screens.
-- Added a three-stage learning timeline that collapses to a vertical rail on mobile instead of becoming a card stack.
-- Lowered the initial product preview after increasing the title scale, leaving a measured 7px desktop and 16px mobile gap below the secondary CTA.
-
-## Residual Risk
-
-- Safari and Firefox were not separately exercised; the implementation uses standard sticky positioning, transforms, opacity, and `overflow: clip` supported by the project's modern browser baseline.
-- The isolated frontend server has no backend on port 8000, so application startup records the existing token-refresh failure in development logs. The public page, modal, and all welcome interactions continue to render correctly.
+- Promoted operations from a hidden fourth tab to the default dashboard view.
+- Moved account metrics, recent activity, and growth into “业务概览”.
+- Removed duplicate placeholder tabs for account management and AI models.
+- Renamed the dashboard route, sidebar item, top bar, and page heading to “运维控制台”.
+- Removed the unauthenticated temporary operations preview route and page.
+- Fixed the auto-refresh thumb positioning so it no longer leaves the track or covers the label.
+- Added a scoped “重置指标” action with destructive confirmation, explicit data-retention copy, failure feedback, and immediate post-reset refresh.
 
 ## Verification
 
-- `npm test`: 54 files and 345 tests passed.
-- `npm run lint`: passed with no lint errors.
-- `npm run build`: passed; existing Browserslist age and large vendor-chunk advisories remain unchanged.
-- In-app Browser: page identity, meaningful DOM, no framework overlay, role-tab interaction, light/dark themes, and 1280 x 720 plus 390 x 844 layouts passed.
-- Layout measurements: no horizontal overflow; the final CTA-to-preview gap is positive on both checked viewports.
+- Page identity: passed at `http://localhost:5173/admin/dashboard` with the expected application title.
+- Meaningful render and framework overlay: passed; the authenticated operations dashboard rendered and no Vite/React error overlay appeared.
+- Console health: passed; no application error or warning entries after reload and interactions.
+- Desktop: passed at 1440 x 1000 with 1424 px document width and no horizontal overflow.
+- Mobile: passed at 390 x 844 with 374 px document width, no horizontal overflow, and no off-screen visible elements.
+- Interaction proof: operations selected on fresh reload; business tab became selected and visible; auto-refresh changed `aria-checked` true -> false -> true; mobile navigation opened and closed.
+- Reset proof: controlled Chrome API fixtures verified cancel does not call reset, confirm updates “本轮统计自”, zeroes traffic/error-rate values, and shows success feedback. The 1440 x 1000 and 390 x 844 confirmation states had no horizontal overflow or console error/warning; the mobile dialog measured 342 x 394 px and its confirm target 96 x 40 px.
+- Build gates: `go test ./... -count=1`, `go vet ./...`, `go build ./...`, `npm test -- --passWithNoTests`, `npm run lint`, and `npm run build` passed.
 
-## Above-The-Fold Copy Diff
+## Residual Risk
 
-Allowed visible copy is present and ordered as designed: `高数智学`, `真正理解一道题，然后走向下一步。`, the product description, `开始学习`, and `查看产品演示`. No unapproved eyebrow, badge, metric, or reference-site copy appears.
+- Safari and Firefox were not separately exercised.
+- Host-wide CPU/memory, multi-instance aggregation, business cache hit ratio, and long-term trends are intentionally outside this page's current backend contract.
+- Real PostgreSQL/Redis outage switching and high-load behavior were not induced during visual QA; the implemented loading, stale, degraded, and unavailable states were covered by temporary component/service tests before their required deletion.
+- The irreversible reset was not executed against a production administrator session during visual QA. Browser interaction used controlled API fixtures; temporary Go tests covered the real handler authorization, service response, reset boundary, and Prometheus lifetime behavior before their required deletion.
 
 ## Implementation Checklist
 
-- [x] First viewport and next-scene preview verified.
-- [x] Three scroll stages and selector jumps verified.
-- [x] Desktop and mobile responsive states verified.
-- [x] Light and dark themes verified.
-- [x] Login modal open and close verified.
-- [x] Student and teacher role views switch content and selected state.
-- [x] Pre-class, active-learning, and review stages verified on desktop and mobile.
-- [x] No horizontal overflow at 1280 x 720 or 390 x 844.
-- [x] Reduced-motion path covered by automated test.
-- [x] Source and implementation opened together in a combined comparison board.
+- [x] Operations is the default first visual signal.
+- [x] Project-specific online, traffic, runtime, PostgreSQL, and Redis data is visible.
+- [x] Business statistics remain available in a dedicated tab.
+- [x] Desktop and mobile responsive states have no horizontal overflow.
+- [x] Refresh, tabs, and mobile navigation are functional.
+- [x] Reset is scoped to traffic metrics, requires confirmation, and refreshes into a visibly new statistics window.
+- [x] Temporary preview route and test sources are absent.
+- [x] Source and implementation were opened together in a combined comparison board.
 
 final result: passed
