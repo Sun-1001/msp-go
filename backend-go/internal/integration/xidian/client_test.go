@@ -68,16 +68,12 @@ func TestCompleteBindingSubmitsEncryptedPassword(t *testing.T) {
 			http.Redirect(w, r, "/new/index.html", http.StatusFound)
 		case "/new/index.html":
 			_, _ = w.Write([]byte("ok"))
-		case "/gsapp/sys/yjsemaphome/portal/index.do":
-			_, _ = w.Write([]byte("ok"))
-		case "/gsapp/sys/yjsemaphome/modules/pubWork/getCanVisitAppList.do":
-			_ = json.NewEncoder(w).Encode(map[string]any{"res": []any{"app"}})
 		default:
 			http.NotFound(w, r)
 		}
 	}))
 
-	result, err := client.CompleteBinding(context.Background(), xidianapp.ChallengeState{
+	err := client.CompleteBinding(context.Background(), xidianapp.ChallengeState{
 		PasswordSalt: "1234567890abcdef",
 		HiddenInputs: map[string]string{"lt": "token", "pwdEncryptSalt": "1234567890abcdef"},
 	}, xidianapp.LoginInput{Username: "student", Password: "plain", SliderPosition: 0.5})
@@ -86,9 +82,6 @@ func TestCompleteBindingSubmitsEncryptedPassword(t *testing.T) {
 	}
 	if !strings.Contains(loginBody, "username=student") || strings.Contains(loginBody, "password=plain") || !strings.Contains(loginBody, "lt=token") {
 		t.Fatalf("login body = %q", loginBody)
-	}
-	if result.IsPostgraduate == nil || !*result.IsPostgraduate {
-		t.Fatalf("result = %#v", result)
 	}
 }
 
@@ -104,7 +97,7 @@ func TestCompleteBindingRejectsRedirectOutsideConfiguredHosts(t *testing.T) {
 		}
 	}))
 
-	_, err := client.CompleteBinding(context.Background(), xidianapp.ChallengeState{
+	err := client.CompleteBinding(context.Background(), xidianapp.ChallengeState{
 		PasswordSalt: "1234567890abcdef",
 		HiddenInputs: map[string]string{"lt": "token"},
 		ServiceURL:   "https://ehall.example.com/login",
@@ -124,13 +117,13 @@ func TestNewClientRejectsMissingBaseURLs(t *testing.T) {
 
 func TestNewClientRejectsUnsafeBaseURLs(t *testing.T) {
 	cases := []Config{
-		{IDsBase: "http://ids.example.com", EhallBase: "https://ehall.example.com", YjsptBase: "https://yjspt.example.com"},
-		{IDsBase: "https://127.0.0.1:8443", EhallBase: "https://ehall.example.com", YjsptBase: "https://yjspt.example.com"},
-		{IDsBase: "https://ids.example.com", EhallBase: "https://10.0.0.1", YjsptBase: "https://yjspt.example.com"},
-		{IDsBase: "https://ids.example.com", EhallBase: "https://ehall.example.com?target=internal", YjsptBase: "https://yjspt.example.com"},
+		{IDsBase: "http://ids.example.com", EhallBase: "https://ehall.example.com"},
+		{IDsBase: "https://127.0.0.1:8443", EhallBase: "https://ehall.example.com"},
+		{IDsBase: "https://ids.example.com", EhallBase: "https://10.0.0.1"},
+		{IDsBase: "https://ids.example.com", EhallBase: "https://ehall.example.com?target=internal"},
 	}
 	for _, cfg := range cases {
-		t.Run(cfg.IDsBase+"|"+cfg.EhallBase+"|"+cfg.YjsptBase, func(t *testing.T) {
+		t.Run(cfg.IDsBase+"|"+cfg.EhallBase, func(t *testing.T) {
 			if _, err := NewClient(cfg); err == nil {
 				t.Fatal("NewClient() error = nil, want unsafe base URL error")
 			}
@@ -144,7 +137,6 @@ func newTestClient(t *testing.T, handler http.Handler) *Client {
 	client, err := NewClient(Config{
 		IDsBase:        "https://ids.example.com",
 		EhallBase:      "https://ehall.example.com",
-		YjsptBase:      "https://yjspt.example.com",
 		UserAgent:      "test-agent",
 		ConnectTimeout: time.Second,
 		ReadTimeout:    time.Second,

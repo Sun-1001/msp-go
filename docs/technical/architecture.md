@@ -16,7 +16,7 @@ Go net/http API
   |-- Redis
   |-- Local/Qiniu/S3 storage
   |-- OpenAI-compatible providers through Eino
-  `-- Xidian academic services
+  `-- Xidian IDS account verification
 ```
 
 Go API 是唯一默认后端。旧 Python FastAPI、LangGraph、LiteLLM、SymPy 和 OCR 工作流不属于当前运行链路。
@@ -61,7 +61,7 @@ backend-go/
 ├── internal/adapter/postgres/  # pgx Repository 和读模型
 ├── internal/adapter/llm/       # Eino Agent 适配
 ├── internal/adapter/storage/   # 本地、七牛和 S3 存储
-├── internal/integration/       # 西电教务等外部集成
+├── internal/integration/       # 西电账户验证等外部集成
 ├── internal/platform/          # 配置、HTTP 公共能力、缓存、指标和安全基础设施
 ├── migrations/                 # Go forward migrations
 └── tests/contract/             # 路由、前端调用面和 AI 边界契约
@@ -79,7 +79,7 @@ backend-go/
 | Classroom/Teacher | 班级、成员、题库、教学资源和教师分析 |
 | Resource/Upload | 资源元数据、收藏、上传和对象存储 |
 | AI Config | provider、model、凭据和 Agent 运行配置 |
-| Xidian/Security | 教务同步、安全日志、告警、健康检查和指标 |
+| Xidian/Security | 西电账户绑定、安全日志、告警、健康检查和指标 |
 
 ## AI 与降级边界
 
@@ -92,7 +92,7 @@ backend-go/
 - 无缓存解析时，Math Solver 不接收标准答案并独立求解；候选最终答案以及推导步骤需经过单独的 `solution_verification` 调用，未验证步骤不会返回给前端。
 - 自主出题模型不可用或结构化输出非法时返回 `503 AI_GENERATION_UNAVAILABLE`，不保存题目。
 - 未知 `/api/v1/*` 路径返回 JSON `404 NOT_FOUND`，不回落到旧后端。
-- 外部 provider、上传地址和教务地址经过出站地址校验，默认阻断本地和内网目标。
+- 外部 provider、上传地址和西电账户验证地址经过出站地址校验，默认阻断本地和内网目标。
 
 尚未完成的能力与验收项只在 [项目待办](../TODO.md) 中维护。
 

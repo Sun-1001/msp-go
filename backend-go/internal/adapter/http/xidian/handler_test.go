@@ -11,7 +11,6 @@ import (
 	"os"
 	"strings"
 	"testing"
-	"time"
 
 	authapp "mathstudy/backend-go/internal/application/auth"
 	xidianapp "mathstudy/backend-go/internal/application/xidian"
@@ -55,12 +54,10 @@ func TestBindingStatusForwardsUserID(t *testing.T) {
 	}
 }
 
-func TestStartCompleteUnbindAndSyncRoutes(t *testing.T) {
-	now := time.Date(2026, 5, 6, 10, 0, 0, 0, time.UTC)
+func TestStartCompleteAndUnbindRoutes(t *testing.T) {
 	service := &fakeXidianService{
 		start:    xidianapp.BindStartResponse{ChallengeID: "challenge-1"},
 		complete: xidianapp.BindCompleteResponse{IsBound: true, Username: "student"},
-		sync:     xidianapp.SyncResponse{Data: map[string]any{"scores": []any{}}, FetchedAt: now},
 	}
 	auth := &fakeAuthenticator{principal: authapp.Principal{UserID: "user-1", Role: user.RoleStudent}}
 	handler := newTestHandler(t, service, auth)
@@ -81,14 +78,6 @@ func TestStartCompleteUnbindAndSyncRoutes(t *testing.T) {
 	mux.ServeHTTP(recorder, request)
 	if recorder.Code != http.StatusOK || service.completeInput.ChallengeID != "challenge-1" || service.completeInput.SliderPosition != 0.5 {
 		t.Fatalf("complete status = %d input=%#v body=%s", recorder.Code, service.completeInput, recorder.Body.String())
-	}
-
-	recorder = httptest.NewRecorder()
-	request = httptest.NewRequest(http.MethodPost, "/api/v1/xidian/sync/scores", nil)
-	request.Header.Set("Authorization", "Bearer token")
-	mux.ServeHTTP(recorder, request)
-	if recorder.Code != http.StatusOK || service.syncType != "score" {
-		t.Fatalf("sync status = %d type=%q", recorder.Code, service.syncType)
 	}
 
 	recorder = httptest.NewRecorder()
@@ -158,29 +147,29 @@ func TestCompleteBindingRejectsTrailingJSON(t *testing.T) {
 	}
 }
 
-func TestSnapshotAndServiceErrorMapping(t *testing.T) {
-	service := &fakeXidianService{
-		snapshot: xidianapp.SnapshotResponse{Data: map[string]any{"scores": []any{}}, IsCached: true},
-		err:      xidianapp.ServiceError{Code: "NO_SNAPSHOT", Message: "暂无缓存数据", Status: http.StatusNotFound},
-	}
+func TestAcademicDerivativeRoutesAreNotRegistered(t *testing.T) {
+	service := &fakeXidianService{}
 	auth := &fakeAuthenticator{principal: authapp.Principal{UserID: "user-1", Role: user.RoleStudent}}
 	handler := newTestHandler(t, service, auth)
 	mux := http.NewServeMux()
 	handler.Register(mux, "/api/v1/xidian")
 
-	recorder := httptest.NewRecorder()
-	request := httptest.NewRequest(http.MethodGet, "/api/v1/xidian/snapshot/score", nil)
-	request.Header.Set("Authorization", "Bearer token")
-	mux.ServeHTTP(recorder, request)
-	if recorder.Code != http.StatusNotFound {
-		t.Fatalf("status = %d, body = %s", recorder.Code, recorder.Body.String())
-	}
-	var body map[string]string
-	if err := json.Unmarshal(recorder.Body.Bytes(), &body); err != nil {
-		t.Fatalf("invalid JSON: %v", err)
-	}
-	if body["code"] != "NO_SNAPSHOT" || body["message"] != "暂无缓存数据" {
-		t.Fatalf("body = %#v", body)
+	for _, route := range []struct {
+		method string
+		path   string
+	}{
+		{method: http.MethodPost, path: "/api/v1/xidian/sync/classtable"},
+		{method: http.MethodPost, path: "/api/v1/xidian/sync/exams"},
+		{method: http.MethodPost, path: "/api/v1/xidian/sync/scores"},
+		{method: http.MethodGet, path: "/api/v1/xidian/snapshot/score"},
+	} {
+		recorder := httptest.NewRecorder()
+		request := httptest.NewRequest(route.method, route.path, nil)
+		request.Header.Set("Authorization", "Bearer token")
+		mux.ServeHTTP(recorder, request)
+		if recorder.Code != http.StatusNotFound {
+			t.Fatalf("%s %s status = %d, body = %s", route.method, route.path, recorder.Code, recorder.Body.String())
+		}
 	}
 }
 
@@ -271,14 +260,11 @@ type fakeXidianService struct {
 	status        xidianapp.BindingStatus
 	start         xidianapp.BindStartResponse
 	complete      xidianapp.BindCompleteResponse
-	sync          xidianapp.SyncResponse
-	snapshot      xidianapp.SnapshotResponse
 	err           error
 	lastUserID    string
 	startCalled   bool
 	unbindCalled  bool
 	completeInput xidianapp.CompleteBindingInput
-	syncType      string
 }
 
 func (s *fakeXidianService) GetBindingStatus(_ context.Context, userID string) (xidianapp.BindingStatus, error) {
@@ -301,23 +287,4 @@ func (s *fakeXidianService) Unbind(_ context.Context, userID string) error {
 	s.lastUserID = userID
 	s.unbindCalled = true
 	return s.err
-}
-
-func (s *fakeXidianService) SyncClasstable(context.Context, string) (xidianapp.SyncResponse, error) {
-	s.syncType = "classtable"
-	return s.sync, s.err
-}
-
-func (s *fakeXidianService) SyncExams(context.Context, string) (xidianapp.SyncResponse, error) {
-	s.syncType = "exam"
-	return s.sync, s.err
-}
-
-func (s *fakeXidianService) SyncScores(context.Context, string) (xidianapp.SyncResponse, error) {
-	s.syncType = "score"
-	return s.sync, s.err
-}
-
-func (s *fakeXidianService) GetSnapshot(context.Context, string, string) (xidianapp.SnapshotResponse, error) {
-	return s.snapshot, s.err
 }

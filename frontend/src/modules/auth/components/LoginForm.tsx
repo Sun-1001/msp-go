@@ -148,7 +148,7 @@ export const LoginForm: React.FC<LoginFormProps> = ({ onSuccess, onSwitchToRegis
       if (response.user.role === 'teacher') {
         navigate('/teacher/dashboard');
       } else {
-        navigate('/course/overview');
+        navigate('/my-class');
       }
     } catch (err) {
       setCaptchaToken(null);

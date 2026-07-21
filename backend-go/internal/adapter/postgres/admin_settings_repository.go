@@ -16,9 +16,7 @@ import (
 )
 
 var sensitiveExportFields = map[string]bool{
-	"hashed_password":    true,
-	"encrypted_password": true,
-	"session_cookies":    true,
+	"hashed_password": true,
 }
 
 // AdminSettingsRepository persists system settings and database management operations.

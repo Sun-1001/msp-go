@@ -162,7 +162,7 @@ describe('LoginForm', () => {
       },
     }));
     expect(onSuccess).toHaveBeenCalledOnce();
-    expect(mocks.navigate).toHaveBeenCalledWith('/course/overview');
+    expect(mocks.navigate).toHaveBeenCalledWith('/my-class');
   });
 
   it('preserves the teacher route and selected role in the request', async () => {

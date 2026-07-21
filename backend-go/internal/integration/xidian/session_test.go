@@ -17,7 +17,6 @@ func TestSessionRetryBackoffStopsWhenContextIsCanceled(t *testing.T) {
 	session := newSession(client, Config{
 		IDsBase:    "https://ids.example.com",
 		EhallBase:  "https://ehall.example.com",
-		YjsptBase:  "https://yjspt.example.com",
 		RetryCount: 3,
 	}, nil)
 	ctx, cancel := context.WithCancel(context.Background())

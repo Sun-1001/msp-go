@@ -61,7 +61,7 @@ describe('useAuth logout', () => {
 
     render(
       <Provider store={store}>
-        <MemoryRouter initialEntries={['/course/overview']}>
+        <MemoryRouter initialEntries={['/my-class']}>
           <AuthHarness />
         </MemoryRouter>
       </Provider>

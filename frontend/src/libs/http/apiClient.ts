@@ -4,7 +4,6 @@ import { handle401Error } from './tokenRefresh';
 import { emitAuthExpired } from '../auth/authEvents';
 import { csrfHeader } from '../auth/csrfToken';
 import { authTokenStorage } from '../auth/tokenStorage';
-import { emitXidianReauth } from '../auth/xidianEvents';
 import { emitRateLimited } from './rateLimitEvents';
 
 /**
@@ -202,17 +201,6 @@ apiClient.interceptors.response.use(
         }
       }
     } else if (error.response) {
-      // 处理 409 CAPTCHA_REQUIRED 错误（西电会话过期）
-      if (error.response.status === 409) {
-        const errorData = error.response.data as { code?: string };
-        if (errorData?.code === 'CAPTCHA_REQUIRED') {
-          apiLogger.warn('西电会话过期，触发重新验证', {
-            url: error.config?.url,
-          });
-          emitXidianReauth();
-        }
-      }
-
       // 服务器返回错误响应
       apiLogger.error('API error response', {
         status: error.response.status,

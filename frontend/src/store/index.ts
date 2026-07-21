@@ -11,7 +11,6 @@ import aiConfigReducer from '@/modules/ai-config/store/aiConfigSlice';
 import adminStatsReducer from '@/modules/admin/store/adminStatsSlice';
 import securityLogReducer from '@/modules/admin/store/securityLogSlice';
 import resourceReducer from '@/modules/resource/store/resourceSlice';
-import classtableReducer from '@/modules/classroom/store/classtableSlice';
 import studentPortraitReducer from '@/modules/student/store/studentPortraitSlice';
 import knowledgeReducer from '@/modules/knowledge/store/knowledgeSlice';
 import knowledgeAdminReducer from '@/modules/admin/store/knowledgeAdminSlice';
@@ -29,7 +28,6 @@ import knowledgeAdminReducer from '@/modules/admin/store/knowledgeAdminSlice';
  * - adminStats: 管理员统计状态（概览、用户增长、系统状态）
  * - securityLog: 安全日志状态（日志列表、统计、筛选）
  * - resource: 资源状态（资源列表、统计、收藏、筛选）
- * - classtable: 课表状态（西电课表数据、同步状态）
  * - studentPortrait: 学生画像状态（画像内容、生成状态）
  * - knowledge: 知识图谱状态（节点、边、统计、筛选）
  * - knowledgeAdmin: 知识点管理状态（节点、关系 CRUD、筛选、分页）
@@ -45,7 +43,6 @@ export const store = configureStore({
     adminStats: adminStatsReducer,
     securityLog: securityLogReducer,
     resource: resourceReducer,
-    classtable: classtableReducer,
     studentPortrait: studentPortraitReducer,
     knowledge: knowledgeReducer,
     knowledgeAdmin: knowledgeAdminReducer,

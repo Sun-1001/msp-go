@@ -32,7 +32,7 @@ export function ProtectedRoute({ children, requiredRole }: ProtectedRouteProps):
       case 'teacher':
         return '/teacher/dashboard';
       default:
-        return '/course/overview';
+        return '/my-class';
     }
   };
 

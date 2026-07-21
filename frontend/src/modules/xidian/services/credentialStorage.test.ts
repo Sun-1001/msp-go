@@ -1,7 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { clearCredential, hasCredential, loadCredential, saveCredential } from './credentialStorage';
+import { clearLegacyXidianStorage } from './credentialStorage';
 
 const CREDENTIAL_KEY = 'xidian_cred';
+const CLASSTABLE_CACHE_KEY = 'xidian_classtable_cache';
 
 describe('credentialStorage legacy cleanup', () => {
   beforeEach(() => {
@@ -12,14 +13,14 @@ describe('credentialStorage legacy cleanup', () => {
     vi.restoreAllMocks();
   });
 
-  it('clears legacy localStorage credentials without persisting new values', () => {
+  it('clears legacy credentials and academic caches', () => {
     localStorage.setItem(CREDENTIAL_KEY, 'legacy');
+    localStorage.setItem(CLASSTABLE_CACHE_KEY, '{"courses":[]}');
 
-    saveCredential('student', 'password');
+    clearLegacyXidianStorage();
 
     expect(localStorage.getItem(CREDENTIAL_KEY)).toBeNull();
-    expect(loadCredential()).toBeNull();
-    expect(hasCredential()).toBe(false);
+    expect(localStorage.getItem(CLASSTABLE_CACHE_KEY)).toBeNull();
   });
 
   it('does not throw when browser storage blocks cleanup', () => {
@@ -27,9 +28,6 @@ describe('credentialStorage legacy cleanup', () => {
       throw new Error('storage blocked');
     });
 
-    expect(() => clearCredential()).not.toThrow();
-    expect(() => saveCredential('student', 'password')).not.toThrow();
-    expect(loadCredential()).toBeNull();
-    expect(hasCredential()).toBe(false);
+    expect(() => clearLegacyXidianStorage()).not.toThrow();
   });
 });

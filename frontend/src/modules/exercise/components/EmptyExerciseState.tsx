@@ -46,14 +46,6 @@ export const EmptyExerciseState: React.FC<EmptyExerciseStateProps> = ({
             </p>
             <div className={actionGroupClass}>
               <Button
-                variant="outline"
-                onClick={() => navigate('/course/overview')}
-                className={actionButtonClass}
-              >
-                <Home className="w-4 h-4 mr-2" />
-                返回首页
-              </Button>
-              <Button
                 onClick={() => navigate('/my-class')}
                 className={actionButtonClass}
               >
@@ -84,11 +76,11 @@ export const EmptyExerciseState: React.FC<EmptyExerciseStateProps> = ({
             <div className={actionGroupClass}>
               <Button
                 variant="outline"
-                onClick={() => navigate('/course/overview')}
+                onClick={() => navigate('/my-class')}
                 className={actionButtonClass}
               >
-                <Home className="w-4 h-4 mr-2" />
-                返回首页
+                <Users className="w-4 h-4 mr-2" />
+                我的班级
               </Button>
               <Button
                 variant="secondary"
@@ -119,11 +111,11 @@ export const EmptyExerciseState: React.FC<EmptyExerciseStateProps> = ({
             <div className={actionGroupClass}>
               <Button
                 variant="outline"
-                onClick={() => navigate('/course/overview')}
+                onClick={() => navigate('/my-class')}
                 className={actionButtonClass}
               >
                 <Home className="w-4 h-4 mr-2" />
-                返回首页
+                返回我的班级
               </Button>
               {onRetry && (
                 <Button onClick={onRetry} className={actionButtonClass}>
@@ -152,11 +144,11 @@ export const EmptyExerciseState: React.FC<EmptyExerciseStateProps> = ({
             <div className={`${actionGroupClass} mt-6`}>
               <Button
                 variant="outline"
-                onClick={() => navigate('/course/overview')}
+                onClick={() => navigate('/my-class')}
                 className={actionButtonClass}
               >
                 <Home className="w-4 h-4 mr-2" />
-                返回首页
+                返回我的班级
               </Button>
               {onRetry && (
                 <Button onClick={onRetry} className={actionButtonClass}>

@@ -9,7 +9,7 @@ const TestIcon = ({ className }: { className?: string }) => (
 );
 
 const navItems: NavItem[] = [
-  { label: '课程概览', href: '/course/overview', icon: TestIcon },
+  { label: '我的班级', href: '/my-class', icon: TestIcon },
   { label: '智能刷题', href: '/exercise', icon: TestIcon },
   { label: '资源中心', href: '/resources', icon: TestIcon },
 ];
@@ -74,7 +74,7 @@ function configureMeasurements(itemWidths: number[], overflowButtonWidth: number
   };
 }
 
-function renderNavigation(initialPath = '/course/overview') {
+function renderNavigation(initialPath = '/my-class') {
   render(
     <MemoryRouter initialEntries={[initialPath]}>
       <ResponsiveNavigation items={navItems} isTeacher={false} />
@@ -130,7 +130,7 @@ describe('ResponsiveNavigation', () => {
       within(screen.getByRole('navigation', { name: '主导航' }))
         .getAllByRole('link')
         .map((link) => link.textContent)
-    ).toEqual(['课程概览']);
+    ).toEqual(['我的班级']);
 
     fireEvent.click(screen.getByRole('button', { name: '更多导航' }));
     expect(
@@ -149,7 +149,7 @@ describe('ResponsiveNavigation', () => {
       within(screen.getByRole('navigation', { name: '主导航' }))
         .getAllByRole('link')
         .map((link) => link.textContent)
-    ).toEqual(['课程概览', '智能刷题', '资源中心']);
+    ).toEqual(['我的班级', '智能刷题', '资源中心']);
     expect(screen.queryByRole('button', { name: /更多导航/ })).not.toBeInTheDocument();
   });
 

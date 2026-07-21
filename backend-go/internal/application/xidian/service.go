@@ -12,33 +12,17 @@ import (
 	"mathstudy/backend-go/internal/platform/redact"
 )
 
-var (
-	// ErrNotBound is returned when a user has no Xidian account binding.
-	ErrNotBound = ServiceError{Code: "NOT_BOUND", Message: "请先绑定西电账号", Status: 400}
-)
-
-// Repository persists Xidian accounts and data snapshots.
+// Repository persists verified Xidian account bindings.
 type Repository interface {
 	GetAccount(context.Context, string) (Account, bool, error)
 	UpsertAccount(context.Context, AccountUpsert) (Account, error)
-	DeleteAccountAndSnapshots(context.Context, string) error
-	LatestSyncAt(context.Context, string) (*time.Time, error)
-	SaveSnapshot(context.Context, SnapshotInput) error
-	LatestSnapshot(context.Context, string, string) (Snapshot, bool, error)
-	UpdateCookies(context.Context, string, []Cookie, time.Time) error
+	DeleteAccount(context.Context, string) error
 }
 
-// PortalClient hides Xidian IDS/Ehall/Yjspt HTTP details behind the application boundary.
+// PortalClient verifies Xidian credentials through the IDS login flow.
 type PortalClient interface {
 	StartBinding(context.Context) (Challenge, error)
-	CompleteBinding(context.Context, ChallengeState, LoginInput) (LoginResult, error)
-	Sync(context.Context, SyncRequest) (SyncResult, error)
-}
-
-// Cipher protects the stored Xidian password.
-type Cipher interface {
-	Encrypt(string) (string, error)
-	Decrypt(string) (string, error)
+	CompleteBinding(context.Context, ChallengeState, LoginInput) error
 }
 
 // ChallengeStore stores short-lived login challenges.
@@ -48,37 +32,32 @@ type ChallengeStore interface {
 	Delete(context.Context, string) error
 }
 
-// Config contains application-level Xidian behavior settings.
+// Config contains application-level Xidian binding settings.
 type Config struct {
-	ChallengeTTL            time.Duration
-	SnapshotFallbackEnabled bool
-	CaptchaWidth            int
-	CaptchaHeight           int
-	PieceWidth              int
-	PieceHeight             int
+	ChallengeTTL  time.Duration
+	CaptchaWidth  int
+	CaptchaHeight int
+	PieceWidth    int
+	PieceHeight   int
 }
 
-// Service implements Xidian account binding and academic data sync use cases.
+// Service implements Xidian account binding use cases.
 type Service struct {
 	repo       Repository
 	client     PortalClient
-	cipher     Cipher
 	challenges ChallengeStore
 	config     Config
 	now        func() time.Time
 	newID      func() (string, error)
 }
 
-// NewService creates a Xidian application service.
-func NewService(repo Repository, client PortalClient, cipher Cipher, challenges ChallengeStore, config Config) (*Service, error) {
+// NewService creates a Xidian account binding service.
+func NewService(repo Repository, client PortalClient, challenges ChallengeStore, config Config) (*Service, error) {
 	if repo == nil {
 		return nil, errors.New("xidian repository is nil")
 	}
 	if client == nil {
 		return nil, errors.New("xidian portal client is nil")
-	}
-	if cipher == nil {
-		return nil, errors.New("xidian cipher is nil")
 	}
 	if challenges == nil {
 		return nil, errors.New("xidian challenge store is nil")
@@ -92,7 +71,6 @@ func NewService(repo Repository, client PortalClient, cipher Cipher, challenges 
 	return &Service{
 		repo:       repo,
 		client:     client,
-		cipher:     cipher,
 		challenges: challenges,
 		config:     config,
 		now:        func() time.Time { return time.Now().UTC() },
@@ -100,7 +78,7 @@ func NewService(repo Repository, client PortalClient, cipher Cipher, challenges 
 	}, nil
 }
 
-// GetBindingStatus returns the user's binding state and latest snapshot time.
+// GetBindingStatus returns the user's binding state.
 func (s *Service) GetBindingStatus(ctx context.Context, userID string) (BindingStatus, error) {
 	account, found, err := s.repo.GetAccount(ctx, userID)
 	if err != nil {
@@ -109,16 +87,10 @@ func (s *Service) GetBindingStatus(ctx context.Context, userID string) (BindingS
 	if !found {
 		return BindingStatus{IsBound: false}, nil
 	}
-	lastSyncAt, err := s.repo.LatestSyncAt(ctx, userID)
-	if err != nil {
-		return BindingStatus{}, err
-	}
 	return BindingStatus{
 		IsBound:        true,
 		Username:       &account.Username,
-		IsPostgraduate: account.IsPostgraduate,
 		LastVerifiedAt: account.LastVerifiedAt,
-		LastSyncAt:     lastSyncAt,
 	}, nil
 }
 
@@ -147,7 +119,7 @@ func (s *Service) StartBinding(ctx context.Context) (BindStartResponse, error) {
 	}, nil
 }
 
-// CompleteBinding verifies the captcha, logs in, and stores the account binding.
+// CompleteBinding verifies credentials and stores only the verified account identity.
 func (s *Service) CompleteBinding(ctx context.Context, userID string, input CompleteBindingInput) (BindCompleteResponse, error) {
 	if input.SliderPosition < 0 || input.SliderPosition > 1 {
 		return BindCompleteResponse{}, ServiceError{Code: "VALIDATION_ERROR", Message: "滑块位置必须在 0 到 1 之间", Status: 422}
@@ -159,11 +131,12 @@ func (s *Service) CompleteBinding(ctx context.Context, userID string, input Comp
 	if !found {
 		return BindCompleteResponse{}, ServiceError{Code: "CHALLENGE_EXPIRED", Message: "验证码已过期，请重新获取", Status: 400}
 	}
+
 	account, accountFound, err := s.repo.GetAccount(ctx, userID)
 	if err != nil {
 		return BindCompleteResponse{}, err
 	}
-	username := ptrutil.ValueOrZero(input.Username)
+	username := strings.TrimSpace(ptrutil.ValueOrZero(input.Username))
 	if username == "" {
 		if !accountFound {
 			return BindCompleteResponse{}, ServiceError{Code: "ACCOUNT_REQUIRED", Message: "缺少账号信息", Status: 400}
@@ -172,40 +145,27 @@ func (s *Service) CompleteBinding(ctx context.Context, userID string, input Comp
 	}
 	password := ptrutil.ValueOrZero(input.Password)
 	if password == "" {
-		if !accountFound || account.EncryptedPassword == "" {
-			return BindCompleteResponse{}, ServiceError{Code: "PASSWORD_REQUIRED", Message: "请输入密码完成绑定", Status: 400}
-		}
-		password, err = s.cipher.Decrypt(account.EncryptedPassword)
-		if err != nil || password == "" {
-			return BindCompleteResponse{}, ServiceError{Code: "PASSWORD_REQUIRED", Message: "请输入密码完成绑定", Status: 400}
-		}
+		return BindCompleteResponse{}, ServiceError{Code: "PASSWORD_REQUIRED", Message: "请输入密码完成验证", Status: 400}
 	}
-	login, err := s.client.CompleteBinding(ctx, state, LoginInput{
+	if err := s.client.CompleteBinding(ctx, state, LoginInput{
 		Username:       username,
 		Password:       password,
 		SliderPosition: input.SliderPosition,
-	})
-	if err != nil {
+	}); err != nil {
 		return BindCompleteResponse{}, normalizeServiceError(err, "LOGIN_FAILED", "登录失败，请稍后重试")
 	}
-	encryptedPassword, err := s.cipher.Encrypt(password)
-	if err != nil {
-		return BindCompleteResponse{}, err
-	}
+
 	accountID, err := s.newID()
 	if err != nil {
 		return BindCompleteResponse{}, err
 	}
 	now := s.now()
 	account, err = s.repo.UpsertAccount(ctx, AccountUpsert{
-		ID:                accountID,
-		UserID:            userID,
-		Username:          username,
-		EncryptedPassword: encryptedPassword,
-		IsPostgraduate:    login.IsPostgraduate,
-		SessionCookies:    login.Cookies,
-		LastVerifiedAt:    now,
-		Now:               now,
+		ID:             accountID,
+		UserID:         userID,
+		Username:       username,
+		LastVerifiedAt: now,
+		Now:            now,
 	})
 	if err != nil {
 		return BindCompleteResponse{}, err
@@ -214,94 +174,13 @@ func (s *Service) CompleteBinding(ctx context.Context, userID string, input Comp
 	return BindCompleteResponse{
 		IsBound:        true,
 		Username:       account.Username,
-		IsPostgraduate: account.IsPostgraduate,
 		LastVerifiedAt: account.LastVerifiedAt,
 	}, nil
 }
 
-// Unbind deletes a user's Xidian account and cached snapshots.
+// Unbind deletes a user's Xidian account binding.
 func (s *Service) Unbind(ctx context.Context, userID string) error {
-	return s.repo.DeleteAccountAndSnapshots(ctx, userID)
-}
-
-// SyncClasstable refreshes the user's timetable.
-func (s *Service) SyncClasstable(ctx context.Context, userID string) (SyncResponse, error) {
-	return s.sync(ctx, userID, "classtable")
-}
-
-// SyncExams refreshes the user's exam schedule.
-func (s *Service) SyncExams(ctx context.Context, userID string) (SyncResponse, error) {
-	return s.sync(ctx, userID, "exam")
-}
-
-// SyncScores refreshes the user's scores.
-func (s *Service) SyncScores(ctx context.Context, userID string) (SyncResponse, error) {
-	return s.sync(ctx, userID, "score")
-}
-
-// GetSnapshot returns the latest cached data for dataType.
-func (s *Service) GetSnapshot(ctx context.Context, userID string, dataType string) (SnapshotResponse, error) {
-	snapshot, found, err := s.repo.LatestSnapshot(ctx, userID, dataType)
-	if err != nil {
-		return SnapshotResponse{}, err
-	}
-	if !found {
-		return SnapshotResponse{}, ServiceError{Code: "NO_SNAPSHOT", Message: "暂无缓存数据", Status: 404}
-	}
-	cachedAt := snapshot.FetchedAt.Format(time.RFC3339Nano)
-	return SnapshotResponse{Data: snapshot.Payload, IsCached: true, CachedAt: &cachedAt}, nil
-}
-
-func (s *Service) sync(ctx context.Context, userID string, dataType string) (SyncResponse, error) {
-	account, found, err := s.repo.GetAccount(ctx, userID)
-	if err != nil {
-		return SyncResponse{}, err
-	}
-	if !found {
-		return SyncResponse{}, ErrNotBound
-	}
-	result, err := s.client.Sync(ctx, SyncRequest{
-		DataType:       dataType,
-		Username:       account.Username,
-		IsPostgraduate: account.IsPostgraduate,
-		Cookies:        account.SessionCookies,
-	})
-	if err != nil {
-		if s.config.SnapshotFallbackEnabled {
-			snapshot, ok, snapshotErr := s.repo.LatestSnapshot(ctx, userID, dataType)
-			if snapshotErr != nil {
-				return SyncResponse{}, snapshotErr
-			}
-			if ok {
-				payload := copyPayload(snapshot.Payload)
-				payload["is_cached"] = true
-				payload["cached_at"] = snapshot.FetchedAt.Format(time.RFC3339Nano)
-				return SyncResponse{Data: payload, FetchedAt: s.now(), IsCached: true}, nil
-			}
-		}
-		return SyncResponse{}, normalizeServiceError(err, "SYNC_FAILED", "同步失败，请稍后重试")
-	}
-	now := s.now()
-	snapshotID, err := s.newID()
-	if err != nil {
-		return SyncResponse{}, err
-	}
-	if len(result.Cookies) > 0 {
-		if err := s.repo.UpdateCookies(ctx, userID, result.Cookies, now); err != nil {
-			return SyncResponse{}, err
-		}
-	}
-	if err := s.repo.SaveSnapshot(ctx, SnapshotInput{
-		ID:           snapshotID,
-		UserID:       userID,
-		DataType:     dataType,
-		SemesterCode: stringPtrFromAny(result.Payload["semester_code"]),
-		Payload:      result.Payload,
-		FetchedAt:    now,
-	}); err != nil {
-		return SyncResponse{}, err
-	}
-	return SyncResponse{Data: result.Payload, FetchedAt: now, IsCached: false}, nil
+	return s.repo.DeleteAccount(ctx, userID)
 }
 
 func normalizeServiceError(err error, fallbackCode string, fallbackMessage string) error {
@@ -319,26 +198,6 @@ func sanitizeServiceError(serviceErr ServiceError) ServiceError {
 		serviceErr.Err = errors.New(redact.String(serviceErr.Err.Error()))
 	}
 	return serviceErr
-}
-
-func stringPtrFromAny(value any) *string {
-	switch typed := value.(type) {
-	case string:
-		if typed == "" {
-			return nil
-		}
-		return &typed
-	default:
-		return nil
-	}
-}
-
-func copyPayload(payload map[string]any) map[string]any {
-	copied := make(map[string]any, len(payload))
-	for key, value := range payload {
-		copied[key] = value
-	}
-	return copied
 }
 
 // MemoryChallengeStore stores challenges in process memory.

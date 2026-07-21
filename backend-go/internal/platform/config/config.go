@@ -112,20 +112,17 @@ type Config struct {
 
 	FernetSecretKey string
 
-	XidianIDsBase                 string
-	XidianEhallBase               string
-	XidianYjsptBase               string
-	XidianUserAgent               string
-	XidianHTTPConnectTimeout      time.Duration
-	XidianHTTPReadTimeout         time.Duration
-	XidianChallengeTTL            time.Duration
-	XidianSessionTTL              time.Duration
-	XidianSyncRetryCount          int
-	XidianSnapshotFallbackEnabled bool
-	XidianCaptchaWidth            int
-	XidianCaptchaHeight           int
-	XidianPieceWidth              int
-	XidianPieceHeight             int
+	XidianIDsBase            string
+	XidianEhallBase          string
+	XidianUserAgent          string
+	XidianHTTPConnectTimeout time.Duration
+	XidianHTTPReadTimeout    time.Duration
+	XidianChallengeTTL       time.Duration
+	XidianHTTPRetryCount     int
+	XidianCaptchaWidth       int
+	XidianCaptchaHeight      int
+	XidianPieceWidth         int
+	XidianPieceHeight        int
 
 	EinoEnabled       bool
 	EinoBaseURL       string
@@ -221,27 +218,24 @@ func Load() (Config, error) {
 		FernetSecretKey:           envString("FERNET_SECRET_KEY", ""),
 		XidianIDsBase:             envString("XIDIAN_IDS_BASE", "https://ids.xidian.edu.cn"),
 		XidianEhallBase:           envString("XIDIAN_EHALL_BASE", "https://ehall.xidian.edu.cn"),
-		XidianYjsptBase:           envString("XIDIAN_YJSPT_BASE", "https://yjspt.xidian.edu.cn"),
 		XidianUserAgent: envString("XIDIAN_USER_AGENT",
 			"Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36"),
-		XidianHTTPConnectTimeout:      envSeconds("XIDIAN_HTTP_CONNECT_TIMEOUT", 10*time.Second),
-		XidianHTTPReadTimeout:         envSeconds("XIDIAN_HTTP_READ_TIMEOUT", 30*time.Second),
-		XidianChallengeTTL:            time.Duration(envInt("XIDIAN_CHALLENGE_TTL", 600)) * time.Second,
-		XidianSessionTTL:              time.Duration(envInt("XIDIAN_SESSION_TTL", 86400)) * time.Second,
-		XidianSyncRetryCount:          envInt("XIDIAN_SYNC_RETRY_COUNT", 2),
-		XidianSnapshotFallbackEnabled: envBool("XIDIAN_SNAPSHOT_FALLBACK_ENABLED", true),
-		XidianCaptchaWidth:            envInt("XIDIAN_CAPTCHA_WIDTH", 280),
-		XidianCaptchaHeight:           envInt("XIDIAN_CAPTCHA_HEIGHT", 155),
-		XidianPieceWidth:              envInt("XIDIAN_PIECE_WIDTH", 44),
-		XidianPieceHeight:             envInt("XIDIAN_PIECE_HEIGHT", 155),
-		EinoEnabled:                   envBool("EINO_ENABLED", false),
-		EinoBaseURL:                   envString("EINO_BASE_URL", ""),
-		EinoAPIKey:                    envString("EINO_API_KEY", ""),
-		EinoModel:                     envString("EINO_MODEL", ""),
-		EinoTimeout:                   envSeconds("EINO_TIMEOUT_SECONDS", 45*time.Second),
-		EinoTemperature:               envFloat("EINO_TEMPERATURE", 0.3),
-		EinoMaxTokens:                 envInt("EINO_MAX_TOKENS", 1200),
-		EinoMaxIterations:             envInt("EINO_MAX_ITERATIONS", 8),
+		XidianHTTPConnectTimeout: envSeconds("XIDIAN_HTTP_CONNECT_TIMEOUT", 10*time.Second),
+		XidianHTTPReadTimeout:    envSeconds("XIDIAN_HTTP_READ_TIMEOUT", 30*time.Second),
+		XidianChallengeTTL:       time.Duration(envInt("XIDIAN_CHALLENGE_TTL", 600)) * time.Second,
+		XidianHTTPRetryCount:     envInt("XIDIAN_HTTP_RETRY_COUNT", 2),
+		XidianCaptchaWidth:       envInt("XIDIAN_CAPTCHA_WIDTH", 280),
+		XidianCaptchaHeight:      envInt("XIDIAN_CAPTCHA_HEIGHT", 155),
+		XidianPieceWidth:         envInt("XIDIAN_PIECE_WIDTH", 44),
+		XidianPieceHeight:        envInt("XIDIAN_PIECE_HEIGHT", 155),
+		EinoEnabled:              envBool("EINO_ENABLED", false),
+		EinoBaseURL:              envString("EINO_BASE_URL", ""),
+		EinoAPIKey:               envString("EINO_API_KEY", ""),
+		EinoModel:                envString("EINO_MODEL", ""),
+		EinoTimeout:              envSeconds("EINO_TIMEOUT_SECONDS", 45*time.Second),
+		EinoTemperature:          envFloat("EINO_TEMPERATURE", 0.3),
+		EinoMaxTokens:            envInt("EINO_MAX_TOKENS", 1200),
+		EinoMaxIterations:        envInt("EINO_MAX_ITERATIONS", 8),
 	}
 
 	if cfg.Port <= 0 || cfg.Port > 65535 {
@@ -690,11 +684,8 @@ func validateXidianConfig(cfg Config) error {
 	if cfg.XidianChallengeTTL <= 0 {
 		return errors.New("XIDIAN_CHALLENGE_TTL must be greater than 0")
 	}
-	if cfg.XidianSessionTTL <= 0 {
-		return errors.New("XIDIAN_SESSION_TTL must be greater than 0")
-	}
-	if cfg.XidianSyncRetryCount < 0 {
-		return errors.New("XIDIAN_SYNC_RETRY_COUNT must be zero or greater")
+	if cfg.XidianHTTPRetryCount < 0 {
+		return errors.New("XIDIAN_HTTP_RETRY_COUNT must be zero or greater")
 	}
 	if cfg.XidianCaptchaWidth <= 0 || cfg.XidianCaptchaHeight <= 0 || cfg.XidianPieceWidth <= 0 || cfg.XidianPieceHeight <= 0 {
 		return errors.New("xidian captcha dimensions must be greater than 0")
@@ -702,7 +693,6 @@ func validateXidianConfig(cfg Config) error {
 	return requireConfigValues("Xidian", map[string]string{
 		"XIDIAN_IDS_BASE":   cfg.XidianIDsBase,
 		"XIDIAN_EHALL_BASE": cfg.XidianEhallBase,
-		"XIDIAN_YJSPT_BASE": cfg.XidianYjsptBase,
 		"XIDIAN_USER_AGENT": cfg.XidianUserAgent,
 	})
 }

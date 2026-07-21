@@ -65,8 +65,6 @@ func SensitiveKey(key string) bool {
 	normalized = strings.ReplaceAll(normalized, " ", "_")
 	for _, marker := range []string{
 		"hashed_password",
-		"encrypted_password",
-		"session_cookies",
 		"password",
 		"passwd",
 		"secret",

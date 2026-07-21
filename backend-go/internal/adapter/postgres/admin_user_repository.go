@@ -124,7 +124,6 @@ func (r UserRepository) DeleteUser(ctx context.Context, userID string) (bool, er
 			`DELETE FROM public.content_attempts WHERE student_id = $1 OR content_id IN (SELECT id FROM public.contents WHERE owner_teacher_id = $1 OR generated_by_student_id = $1)`,
 			`DELETE FROM public.contents WHERE owner_teacher_id = $1 OR generated_by_student_id = $1`,
 			`DELETE FROM public.import_jobs WHERE created_by = $1`,
-			`DELETE FROM public.xidian_snapshots WHERE user_id = $1`,
 			`DELETE FROM public.xidian_accounts WHERE user_id = $1`,
 		}
 		for _, statement := range statements {

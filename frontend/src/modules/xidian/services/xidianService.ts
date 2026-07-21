@@ -3,9 +3,7 @@ import { apiClient } from '@/libs/http/apiClient';
 export interface XidianBindingStatus {
   is_bound: boolean;
   username?: string | null;
-  is_postgraduate?: boolean | null;
   last_verified_at?: string | null;
-  last_sync_at?: string | null;
 }
 
 export interface XidianCaptchaChallenge {
@@ -29,20 +27,7 @@ export interface XidianBindCompleteRequest {
 export interface XidianBindCompleteResponse {
   is_bound: boolean;
   username: string;
-  is_postgraduate?: boolean | null;
   last_verified_at?: string | null;
-}
-
-export interface XidianSyncResponse {
-  data: Record<string, unknown>;
-  fetched_at: string;
-  is_cached?: boolean;
-}
-
-export interface XidianSnapshotResponse {
-  data: Record<string, unknown>;
-  is_cached: boolean;
-  cached_at: string | null;
 }
 
 export const xidianService = {
@@ -63,26 +48,6 @@ export const xidianService = {
 
   async unbind(): Promise<void> {
     await apiClient.post('/xidian/binding/unbind');
-  },
-
-  async syncClasstable(): Promise<XidianSyncResponse> {
-    const response = await apiClient.post<XidianSyncResponse>('/xidian/sync/classtable');
-    return response.data;
-  },
-
-  async syncExams(): Promise<XidianSyncResponse> {
-    const response = await apiClient.post<XidianSyncResponse>('/xidian/sync/exams');
-    return response.data;
-  },
-
-  async syncScores(): Promise<XidianSyncResponse> {
-    const response = await apiClient.post<XidianSyncResponse>('/xidian/sync/scores');
-    return response.data;
-  },
-
-  async getSnapshot(dataType: string): Promise<XidianSnapshotResponse> {
-    const response = await apiClient.get<XidianSnapshotResponse>(`/xidian/snapshot/${dataType}`);
-    return response.data;
   },
 };
 

@@ -110,7 +110,7 @@ Go 重构时这些能力必须逐项映射，不能只迁移业务路由。
 | 学习进度 | `/progress` | 总览、掌握度、路径、知识图谱、排行、章节 |
 | 资源中心 | `/resources` | 资源 CRUD、统计、收藏 |
 | 文件上传 | `/upload` | 图片和资源上传 |
-| 西电教务 | `/xidian` | 绑定、同步课表/考试/成绩、快照 |
+| 西电账户绑定 | `/xidian` | 绑定状态、验证码挑战、绑定完成、解绑 |
 | 班级管理 | `/classes` | 班级 CRUD、成员、邀请和统计 |
 | 教师统计 | `/teacher` | 教师视角统计 |
 | 学生画像 | `/portrait` | 画像查询、生成、清理 |
@@ -128,7 +128,7 @@ Go 重构时这些能力必须逐项映射，不能只迁移业务路由。
 
 - 用户、学生画像、认证与密码重置。
 - DKT 学生知识点掌握状态。
-- 班级、班级成员、西电账号和同步快照。
+- 班级、班级成员和西电账号绑定。
 - 知识节点、知识关系。
 - 内容、内容资产、访问控制、嵌入、审计、导入任务。
 - Outbox 事件。
@@ -197,7 +197,7 @@ backend-go/
 | `adapter/postgres` | Repository、SQL、事务实现 | 反向依赖 HTTP 层 |
 | `adapter/redis` | 缓存、限流、短期状态 | 保存不可恢复的核心业务事实 |
 | `adapter/llm` | LLM provider、Agent 调用抽象 | 在业务层散落 provider 细节 |
-| `integration` | 第三方系统适配，如西电教务 | 绕过应用层直接写业务表 |
+| `integration` | 第三方系统适配，如西电账户验证 | 绕过应用层直接写业务表 |
 
 ### 4.3 兼容策略
 
@@ -221,7 +221,7 @@ backend-go/
 | P4 核心学习域 | IN_PROGRESS | 迁移会话、练习、错题、进度、画像 | `/session`、`/exercise`、`/mistakes`、`/progress`、`/portrait` | 12.5 |
 | P5 内容与教学管理域 | DONE | 迁移题库、资源、班级、教师统计、知识点 | `/questions`、`/resources`、`/classes`、`/teacher`、`/admin/knowledge` | 12.6 |
 | P6 AI and Agent capabilities | IN_PROGRESS | Integrate the new Eino-based AI/Agent architecture and remove explicit TODO/placeholders incrementally | Eino Tutor/Portrait/Diagnostician/Math Solver/Question Parser/Question Generator/OCR Agent and admin config loop wired; OCR/general-math slice delivered; token streaming and live provider quality acceptance pending | 12.7 |
-| P7 集成与运维域 | IN_PROGRESS | 迁移西电集成、上传、系统设置、安全日志、监控和管理员辅助能力 | `/xidian`、`/upload`、`/admin/settings`、`/admin/security-logs`、`/admin/inbox`、`/admin/stats`、`/metrics` | 12.8 |
+| P7 集成与运维域 | IN_PROGRESS | 维护西电账户绑定、上传、系统设置、安全日志、监控和管理员辅助能力 | `/xidian`、`/upload`、`/admin/settings`、`/admin/security-logs`、`/admin/inbox`、`/admin/stats`、`/metrics` | 12.8 |
 | P8 静态契约验证与用户验收交接 | DONE | 保留 Go 静态契约守卫，运行时双跑和业务验收由用户自行执行 | Contract tests、用户验收交接记录 | 12.9 |
 | P9 流量切换与 Python 下线 | DONE | 切换默认生产入口并删除旧 Python 后端目录 | 部署配置、下线记录、删除清单 | 12.10 |
 
@@ -367,13 +367,13 @@ backend-go/
 
 目标：
 
-- 迁移西电教务集成、文件上传、对象存储、系统设置、安全日志。
+- 维护西电账户绑定、文件上传、对象存储、系统设置、安全日志。
 - 迁移请求超时、安全头、限流、CORS、GZip、指标和日志脱敏。
 - 对齐 Docker、Nginx、生产环境配置。
 
 验收标准：
 
-- `/xidian/*`、`/upload/*`、管理员设置和安全日志契约测试通过。
+- `/xidian/binding*`、`/upload/*`、管理员设置和安全日志契约测试通过。
 - Prometheus 指标可采集。
 - 日志不泄露 token、密码、Cookie、API key。
 - 生产配置校验具备等价能力。
@@ -431,7 +431,7 @@ backend-go/
 | P3 | `/admin/knowledge` | DONE | Go P5 已承接知识节点/关系 CRUD、分页筛选、章节、简要节点列表和统计 |
 | P4 | `/admin/ai-config` | DONE | AI 配置；Go 已承接 provider/model/Agent 配置、provider test/fetch、模型列表替换和运行时 Tutor/Portrait/Diagnostician/Math Solver/Question Parser/Question Generator/OCR/Content Moderator 配置选择 |
 | P4 | `/admin/risk-control` | DONE | 管理员学生 AI 风控中心；统一每日成功聊天回复额度、每生 Redis 分布式并发上限、关键词与可选模型内容审查、AI 独立封禁/解封、学生用量列表、风险事件审计和概览均由 Go 承接 |
-| P5 | `/xidian` | DONE | Go P7 已承接绑定状态、验证码挑战、绑定完成、解绑、课表/考试/成绩同步和快照读取；外部门户 live 验证留到有西电凭证的集成环境 |
+| P5 | `/xidian` | DONE | Go P7 仅保留绑定状态、验证码挑战、绑定完成和解绑；2026-07-21 已删除课表/考试/成绩同步、快照读取及持久化密码/Cookie，外部 IDS live 验证留到有西电凭证的集成环境 |
 | P5 | `/upload` | DONE | Go P7 已承接图片上传、教师资源文件上传、本地 `/uploads` 文件落盘、S3 兼容对象存储和七牛云对象存储适配；2026-06-01 起图片上传要求登录、增加用户/IP 速率限制、按真实图片内容校验，本地 `/uploads` 禁止目录索引；2026-07-02 本地静态上传访问收紧到规范化的 `images/`、`documents/`、`videos/` 文件路径 |
 | P5 | `/admin/security-logs` | DONE | Go P7 已承接列表筛选/分页/日期分组、统计、删除、JSON/CSV 导出、归档、每日报告、清理和容量查询 |
 | P5 | `/admin/inbox` | DONE | Go P7 已承接密码重置申请列表、待处理计数和审批通过/拒绝；审批通过会重置用户密码并清理登录失败计数 |
@@ -514,7 +514,7 @@ pytest
 | R7 | 缺少 git 元数据时无法做变更边界检查 | 并行任务冲突风险增加 | OPEN | 修改前后记录文件清单，避免触碰无关文件 |
 | R8 | 默认入口已切到 Go，但未知 `/api/v1/*` 被迁移期兜底误报为 501 | 客户端把拼写错误或不存在的资源误判为可等待实现的功能，掩盖真实 404 | MITIGATED | 非 AI Python v1 路由已按清单迁移，AI 未完成能力在各自 handler 使用明确边界；2026-07-10 删除全局 `NOT_IMPLEMENTED` 子树兜底，未知 API 路径统一返回 JSON `404 NOT_FOUND`，且 `/api/v1` 不再发生补尾斜杠重定向；路由包装器区分 ServeMux 内部 404/405，已知路径使用错误方法返回 JSON `405 METHOD_NOT_ALLOWED` 并保留 `Allow`；禁止静默回落 Python |
 | R10 | 前端 AI 模型设置页功能完整度高于 Go 后端能力 | 管理员以为可配置 LLM/Agent，但请求返回 501 | MITIGATED | P6 已实现 provider/model/Agent 配置 CRUD、provider test/fetch、凭据 Fernet 加密存储和 Tutor/Portrait/Diagnostician/Math Solver/Question Parser/Question Generator/OCR 运行时配置注入；剩余风险是所选外部模型的视觉与数学质量差异 |
-| R11 | 可配置 AI provider `base_url`、七牛 `QINIU_UPLOAD_URL` 或西电门户 base URL 指向本机、内网、保留地址或经重定向/代理探测内部网络 | SSRF、内网信息探测、provider API key/上传 token/文件/校园账号凭据误发 | MITIGATED | 2026-07-01 新增出站 HTTP 防护：AI provider `base_url`、七牛上传 URL 和西电门户 base URL 仅允许公网 HTTPS，拒绝 userinfo/query/fragment、本机/内网/保留地址，默认 provider/Qiniu/Xidian HTTP client 禁用代理和重定向，并在拨号前校验 DNS 解析后的 IP；西电手动重定向只允许跳转到已配置 IDS/Ehall/Yjspt 主机；admin provider test/fetch、运行时 Agent 配置、Eino OpenAI-compatible 调用、七牛上传和西电门户同步均复用该防护 |
+| R11 | 可配置 AI provider `base_url`、七牛 `QINIU_UPLOAD_URL` 或西电账户验证 base URL 指向本机、内网、保留地址或经重定向/代理探测内部网络 | SSRF、内网信息探测、provider API key/上传 token/文件/校园账号凭据误发 | MITIGATED | 2026-07-01 新增出站 HTTP 防护：AI provider `base_url`、七牛上传 URL 和西电账户验证 base URL 仅允许公网 HTTPS，拒绝 userinfo/query/fragment、本机/内网/保留地址，默认 provider/Qiniu/Xidian HTTP client 禁用代理和重定向，并在拨号前校验 DNS 解析后的 IP；西电手动重定向只允许跳转到已配置 IDS/Ehall 主机；admin provider test/fetch、运行时 Agent 配置、Eino OpenAI-compatible 调用、七牛上传和西电账户验证均复用该防护 |
 | R12 | 生产环境 CORS 配置为 `*` 且接口使用 Authorization/refresh cookie | 跨站凭据边界混乱、生产误配置被静默接受 | MITIGATED | 2026-07-01 CORS 中间件改为仅精确 origin 返回 `Access-Control-Allow-Credentials: true`，通配 origin 不再允许 credentials；生产/非开发环境启动时拒绝 `CORS_ORIGINS=*` |
 | R13 | S3-compatible endpoint/public URL base 或七牛下载域名包含 userinfo/query/fragment | 对象存储签名目标和公开/私有下载 URL 混淆，凭据或静态参数被误拼接 | MITIGATED | 2026-07-01 S3 adapter 规范化 endpoint/public URL base，七牛 adapter 规范化 `QINIU_DOMAIN`，仅允许 http/https 且必须包含 scheme/host，拒绝 username/password、query 和 fragment，同时保留 path-style endpoint、CDN base path 和私有下载签名兼容 |
 | R14 | 资源文件上传仅信任 multipart Content-Type | 可上传伪装 PDF/Office/text 的非预期内容，后续预览、下载或解析链路风险上升 | MITIGATED | 2026-07-01 资源上传新增轻量内容校验：PDF 校验 `%PDF-`，旧版 doc/ppt 校验 OLE magic，docx/pptx 校验 ZIP magic，text/markdown 要求 UTF-8 且不含 NUL；校验后将已读取前缀拼回 reader，避免存储内容被截断；视频暂保持非空校验以避免误伤合法编码容器 |
@@ -531,7 +531,7 @@ pytest
 | R25 | 管理员数据库备份导出使用泛用 `SELECT *`，自由 JSON/文本字段可能带凭据片段 | `security_logs.metadata`、异常描述或未来扩展的设置值可能将 Bearer/JWT、query token、`api_key/password/secret` 等带入备份文件；`users` 表也会导出管理员账号非密码字段 | MITIGATED | 2026-07-01 PostgreSQL 备份导出层对 `users` 追加 `role <> 'ADMIN'` 过滤；导出时继续剔除密码/加密密码/session cookie，并对敏感字段名和嵌套 JSON 递归写入 `[REDACTED]`；文本值统一脱敏 Bearer、JWT、敏感 query 和 `key=value`/`key: value` 凭据片段；`security_logs.ip_address` 默认不进入数据库备份 |
 | R26 | `/admin/security-logs/export` JSON/CSV 导出原样输出日志描述、用户名、IP 和 extra_data | 安全日志可能记录请求错误上下文、Authorization、token query、api key、refresh token、管理员 IP 或 CSV 公式前缀，管理员下载后造成凭据扩散或表格公式注入 | MITIGATED | 2026-07-01 新增 Go `internal/platform/redact` 公共脱敏包，安全日志 JSON/CSV 导出复用同一规则：title/description/username 字符串脱敏 Bearer/JWT/query token/assignment token，extra_data 递归脱敏敏感 key，IP 字段导出为 `[REDACTED]`；CSV 导出继续叠加 `csvsafe.Row` 公式注入防护 |
 | R27 | `/admin/ai-config` provider test/fetch 和错误处理路径可能回显底层错误字符串 | 上游 HTTP client、代理或仓储错误若包含 Authorization、api_key、token query、JWT 等片段，可能被返回给管理员 UI 或写入服务端日志，扩大 provider API key 和访问令牌扩散面 | MITIGATED | 2026-07-01 AI 配置应用层 provider test/fetch 的外部错误消息、HTTP 层可公开 BadRequest/Conflict 错误和内部错误日志统一复用 `internal/platform/redact.String`；新增应用层和 HTTP 层测试覆盖响应体与日志不泄漏 Bearer、api_key 和 query token |
-| R28 | `/xidian` 绑定/同步链路可能透传外部门户错误消息或日志中的凭据片段 | 西电 IDS/Ehall/Yjspt 登录失败页、重定向/HTTP client 错误或仓储错误若夹带 Authorization、cookie、session id、token query、api_key 等信息，可能返回给学生用户或写入服务端日志，造成校园账号会话和访问令牌扩散 | MITIGATED | 2026-07-01 Xidian 应用层 `ServiceError` 规范化、`ServiceError.Error()` 和 HTTP 层响应/日志统一复用 `internal/platform/redact.String`；公共脱敏规则同步覆盖 cookie/session/session_id query 与 assignment 片段；新增应用层和 HTTP 层测试覆盖门户错误、响应体和日志不泄漏 Bearer、api_key、query token、cookie/session 片段 |
+| R28 | `/xidian` 绑定链路可能透传外部门户错误消息或日志中的凭据片段 | 西电 IDS/Ehall 登录失败页、重定向/HTTP client 错误或仓储错误若夹带 Authorization、cookie、session id、token query、api_key 等信息，可能返回给学生用户或写入服务端日志，造成校园账号会话和访问令牌扩散 | MITIGATED | 2026-07-01 Xidian 应用层 `ServiceError` 规范化、`ServiceError.Error()` 和 HTTP 层响应/日志统一复用 `internal/platform/redact.String`；公共脱敏规则同步覆盖 cookie/session/session_id query 与 assignment 片段；新增应用层和 HTTP 层测试覆盖门户错误、响应体和日志不泄漏 Bearer、api_key、query token、cookie/session 片段；2026-07-21 进一步取消密码和会话 Cookie 持久化 |
 | R29 | `/admin/users` 导入行结果和错误日志可能携带底层创建错误细节 | 管理员 CSV 导入包含明文临时密码，仓储/数据库/解析错误若带 SQL 参数、Authorization、api_key、token 或 password 片段，可能被写入导入结果详情或服务端日志，扩大账号导入凭据暴露面 | MITIGATED | 2026-07-01 管理员用户导入行级创建失败消息、HTTP 层 BadRequest/NotFound 可公开错误、文件读取/CSV 解析错误和 admin user 内部错误日志统一复用 `internal/platform/redact.String`；保留既有 CSV 公式注入防护，新增应用层和 HTTP 层测试覆盖导入详情、响应体和日志不泄漏 Bearer、api_key、query token、password 片段 |
 | R30 | `/auth` 登录、注册、刷新、改密、登出、当前用户和密码重置路径的内部错误日志可能携带凭据片段 | 仓储/JWT/session store 或密码重置错误若包含 Authorization、api_key、token query、password、session id 等内容，可能写入服务端日志，扩大账号凭据和会话标识暴露面 | MITIGATED | 2026-07-01 Auth HTTP 层所有直接记录底层错误的 Error/Warn 日志统一复用 `internal/platform/redact.String`；新增 HTTP 层测试覆盖 login/register/change-password/refresh/logout/me/registration-status/forgot-password/status 内部错误日志和响应体不泄漏 Bearer、api_key、query token、password、session_id 片段 |
 | R31 | `/resources` 创建/更新校验错误和内部错误日志可能携带凭据片段 | 资源 URL 校验、仓储或收藏/统计错误若带 Authorization、api_key、token query、password 等片段，可能返回给教师/学生或写入服务端日志，扩大资源中心点击链路与账号凭据暴露面 | MITIGATED | 2026-07-01 Resource HTTP 层 ErrBadRequest 公开消息和所有内部 Error 日志统一复用 `internal/platform/redact.String`；新增 HTTP 层测试覆盖 create/update 公开校验响应，以及 list/stats/favorites/detail/create/update/delete/favorite 内部错误日志与响应体不泄漏 Bearer、api_key、query token、password 片段 |
@@ -692,10 +692,15 @@ pytest
 - 开始日期：2026-05-01
 - 完成日期：TODO
 - 负责人：Codex
+- 2026-07-21 西电衍生能力下线切片：`COMPLETED`。开始日期：2026-07-21；完成日期：2026-07-21。删除课表/考试/成绩同步和快照 API、前端课程概览与教务成绩分析，保留错题本、学生画像及设置中的西电账户绑定；绑定完成后仅保存账号标识和验证时间，不持久化西电密码或门户 Cookie。
+- 2026-07-21 切片验证命令：Go `gofmt -w ...`、`go test ./internal/application/xidian ./internal/adapter/http/xidian ./internal/integration/xidian ./internal/adapter/postgres ./internal/platform/config ./cmd/api -count=1`、`go test ./migrations -count=1`、`go test -cover ./internal/application/xidian ./internal/adapter/http/xidian ./internal/integration/xidian -count=1`、`go test ./... -count=1`、`go test ./tests/contract -skip '^TestLegacyPythonBackendDirectoryIsAbsent$' -count=1`、`go vet ./...`；前端 `npm test -- --reporter=dot`、`npm test -- src/pages/common/ProfilePage.test.tsx`、`npm run lint`、`npm run build`；数据库两次执行 `go run ./cmd/migrate`；新版 API 在 8001 端口执行 `/health`、`GET /api/v1/xidian/binding` 和已删除 `POST /api/v1/xidian/sync/scores` smoke；浏览器验证桌面和 390x844 移动视口。
+- 2026-07-21 切片验证结果：前端 61 个测试文件、374 个用例通过，最终 Profile 定向 2 个用例通过，lint 0 error（仅跟踪中的 `coverage/` 既有 6 条 warning），生产构建通过；Xidian application/HTTP/integration 覆盖率分别为 91.2%、84.7%、62.9%，Go 业务包、排除既有 `backend/` 空目录守卫后的契约测试和 vet 通过。全量 `go test ./...` 唯一失败为任务前已有 `backend/` 目录触发 `TestLegacyPythonBackendDirectoryIsAbsent`。迁移首次执行应用版本 6 且 `applied_count=1`，重复执行为 0；绑定端点保持 401 鉴权边界，已删除同步端点返回 JSON 404。浏览器确认学生首页为“我的班级”、旧 `/course/overview` 为 404、错题本无成绩分析、设置页无同步按钮，桌面/移动端无横向溢出且控制台无相关 error。
+- 2026-07-21 切片交付物：`backend-go/internal/application/xidian/`、`backend-go/internal/adapter/http/xidian/`、`backend-go/internal/adapter/postgres/xidian_repository.go`、`backend-go/internal/integration/xidian/`、`backend-go/migrations/0006_remove_xidian_academic_derivatives.up.sql`、`backend-go/internal/platform/config/config.go`、`backend-go/cmd/api/main.go`、`frontend/src/modules/xidian/`、`frontend/src/modules/mistake/`、`frontend/src/pages/student/MistakeBookPage.tsx`、`frontend/src/pages/common/ProfilePage.tsx`、`frontend/src/app/routes/`、`.env.example`、`README.md` 和当前技术文档。
+- 2026-07-21 切片残余风险：未使用真实西电凭据执行 IDS/Ehall live 验证，滑块验证码和外部门户兼容性仍需在受控集成环境验收；生产执行版本 6 前应确认备份和不可逆数据删除窗口。P7 总体保持 `IN_PROGRESS`，其他运维域风险不因本切片关闭。
 - 验证命令（阶段进行中）：`gofmt -w ...`、`go test ./internal/application/admininbox ./internal/adapter/http/admininbox ./internal/adapter/postgres -count=1`、`go test ./internal/application/adminstats ./internal/adapter/http/adminstats ./internal/application/adminsettings ./internal/adapter/http/adminsettings ./internal/application/securitylog ./internal/adapter/http/securitylog ./internal/adapter/postgres ./internal/platform/config -count=1`、`go test ./internal/application/upload ./internal/adapter/http/upload ./internal/adapter/storage ./internal/platform/config -count=1`、`go test ./internal/application/xidian ./internal/adapter/http/xidian ./internal/adapter/postgres ./internal/integration/xidian ./internal/platform/secret ./internal/platform/config -count=1`、`go test ./... -count=1`、`go vet ./...`。2026-07-10 未知 API 404 收敛：`gofmt -w internal/platform/httpserver/server.go internal/platform/httpserver/server_test.go`、`go test ./internal/platform/httpserver -count=1`、`go test ./... -count=1`、`go vet ./...`、`git diff --check`
 - 验证结果（阶段进行中）：Go 全量单元/契约测试通过；Go vet 通过；覆盖 `/admin/inbox` 管理员鉴权、密码重置申请列表分页/状态筛选、待处理计数、审批通过生成临时密码并更新用户密码哈希、审批拒绝记录原因、已处理/不存在/用户缺失等业务分支；已补充 PostgreSQL 集成测试入口覆盖列表、计数和事务审批路径，未设置 `MSP_GO_TEST_DATABASE_URL` 时按既有模式跳过。2026-05-03 追加覆盖 `/admin/stats` 管理员鉴权、概览统计、用户增长序列、最近活动和 PostgreSQL/Redis 状态聚合；覆盖 `/admin/settings` 注册开关、通用系统信息、系统设置 upsert、可导出表、数据库 JSON 导入导出、敏感字段排除、连接池/表统计监控；覆盖 `/admin/security-logs` 管理员鉴权、事件/级别/时间筛选、分页日期分组、统计、删除、JSON/CSV Base64 导出、归档、每日报告生成、批量清理和容量阈值检查。2026-05-03 本轮 `go test ./... -count=1` 和 `go vet ./...` 通过。2026-05-06 追加覆盖 `/upload/image` 公开图片上传、`/upload/resource` 教师/管理员权限、multipart 解析、415/413/500 错误映射、图片/视频/文档 MIME 白名单、10MB/500MB 大小限制、本地 `/uploads` 落盘、S3 path-style 签名上传/私有桶预签名 URL、七牛上传 token/私有下载 URL；追加覆盖 `/xidian/binding` 鉴权和状态、验证码挑战、绑定完成、解绑、同步、快照和 Python 兼容错误映射，以及 Fernet 兼容密码加密、西电 IDS 登录页/验证码解析、登录表单提交和快照降级路径；本轮 `go test ./internal/application/xidian ./internal/adapter/http/xidian ./internal/adapter/postgres ./internal/integration/xidian ./internal/platform/secret ./internal/platform/config -count=1`、`go test ./... -count=1` 和 `go vet ./...` 通过。2026-07-10 删除迁移期全局 501 子树兜底，未知 `/api/v1/*` 的 GET/POST 和无尾斜杠 `/api/v1` 均稳定返回 JSON `404 NOT_FOUND`，已注册业务路由继续优先匹配，非 API 路径保留通用 404；路由包装器避免 methodless 根模式吞掉 ServeMux 方法语义，已知路径错误方法返回 JSON 405 并保留 `Allow`；httpserver 定向测试、Go 全量测试、vet 和差异检查通过。
 - 交付物链接：`backend-go/internal/application/admininbox/`、`backend-go/internal/adapter/http/admininbox/`、`backend-go/internal/adapter/postgres/password_reset_admin_repository.go`、`backend-go/internal/application/adminstats/`、`backend-go/internal/adapter/http/adminstats/`、`backend-go/internal/adapter/postgres/admin_stats_repository.go`、`backend-go/internal/application/adminsettings/`、`backend-go/internal/adapter/http/adminsettings/`、`backend-go/internal/adapter/postgres/admin_settings_repository.go`、`backend-go/internal/application/securitylog/`、`backend-go/internal/adapter/http/securitylog/`、`backend-go/internal/adapter/postgres/security_log_repository.go`、`backend-go/internal/application/upload/`、`backend-go/internal/adapter/http/upload/`、`backend-go/internal/adapter/storage/`、`backend-go/internal/application/xidian/`、`backend-go/internal/adapter/http/xidian/`、`backend-go/internal/adapter/postgres/xidian_repository.go`、`backend-go/internal/integration/xidian/`、`backend-go/internal/platform/secret/`、`backend-go/internal/platform/httpserver/server.go`、`backend-go/internal/platform/httpserver/server_test.go`、`backend-go/cmd/api/main.go`、`backend-go/internal/platform/config/`、`start.bat`
-- 遗留风险：P7 仍有更完整的生产运维检查未收敛；`/admin/settings` 数据库导入导出、`/admin/security-logs` 清理归档、对象存储真实云端写入和西电门户 live 同步仍需在可用外部环境中补充集成测试；Python 已删除且 P8 静态交接已完成，剩余 live 验证按 12.9 的用户验收范围执行。
+- 遗留风险：P7 仍有更完整的生产运维检查未收敛；`/admin/settings` 数据库导入导出、`/admin/security-logs` 清理归档、对象存储真实云端写入和西电账户绑定 live 验证仍需在可用外部环境中补充集成测试；Python 已删除且 P8 静态交接已完成，剩余 live 验证按 12.9 的用户验收范围执行。
 
 ### 12.9 P8 静态契约验证与用户验收交接
 
@@ -748,7 +753,7 @@ pytest
 1. Go 后端全量测试、vet 和集成测试。
 2. Docker/Compose 镜像构建、`msp-migrate` 实机烟测和迁移幂等验证。
 3. 浏览器/API flow smoke、核心业务读写流程和性能基线。
-4. 外部对象存储、西电门户 live 同步等外部服务集成验证。
+4. 外部对象存储、西电账户绑定 live 验证等外部服务集成验证。
 
 ### 14.3 回滚策略
 
@@ -812,7 +817,7 @@ pytest
 ### 2026-05-06
 
 - P7 `/upload` 首轮完成：新增 Go upload application service、HTTP handler 和 storage adapter，承接公开图片上传、教师/管理员资源文件上传、本地 `/uploads` 文件落盘、S3 兼容对象存储和七牛云对象存储适配；保持 Python 的 MIME 白名单、10MB 图片限制、500MB 资源文件限制、`images/`、`videos/`、`documents/` key 规则和响应字段；本轮 `go test ./internal/application/upload ./internal/adapter/http/upload ./internal/adapter/storage ./internal/platform/config -count=1`、`go test ./... -count=1` 和 `go vet ./...` 通过。
-- P7 `/xidian` 首轮完成：新增 Go xidian application service、PostgreSQL repository、HTTP handler、Fernet 兼容加密和 IDS/Ehall/Yjspt integration client，承接绑定状态、验证码挑战、绑定完成、解绑、课表/考试/成绩同步和快照读取；保留 Python 的快照降级、`CAPTCHA_REQUIRED`、`NO_SNAPSHOT` 等错误语义；本轮 `go test ./internal/application/xidian ./internal/adapter/http/xidian ./internal/adapter/postgres ./internal/integration/xidian ./internal/platform/secret ./internal/platform/config -count=1`、`go test ./... -count=1` 和 `go vet ./...` 通过；西电门户 live 同步仍需在有真实凭证和网络的集成环境验证。
+- P7 `/xidian` 首轮完成：新增 Go xidian application service、PostgreSQL repository、HTTP handler、Fernet 兼容加密和 IDS/Ehall/Yjspt integration client，曾承接绑定状态、验证码挑战、绑定完成、解绑、课表/考试/成绩同步和快照读取；该首轮 `go test ./internal/application/xidian ./internal/adapter/http/xidian ./internal/adapter/postgres ./internal/integration/xidian ./internal/platform/secret ./internal/platform/config -count=1`、`go test ./... -count=1` 和 `go vet ./...` 通过。2026-07-21 同步、快照、Fernet 密码持久化和 Yjspt 适配已由仅绑定切片下线，当前仅需在有真实凭证和网络的集成环境验证 IDS/Ehall 绑定流程。
 - P6 范围调整与 `/admin/ai-config` 占位完成：本轮非 AI 迁移明确不移植旧 Python AI/Agent/OCR/LLM 工作流；当时新增 Go admin AI config placeholder handler 并接入 `cmd/api`，保留 `/api/v1/admin/ai-config/*` 管理员鉴权接口边界，管理员访问返回 501 `AI_CONFIG_TODO`；本轮 `go test ./internal/adapter/http/adminaiconfig -count=1`、`go test ./... -count=1` 和 `go vet ./...` 通过。2026-06-29 该占位已被 provider/model/Agent 配置闭环替换。
 - P8 双跑与契约验证开始：新增 `backend-go/tests/contract/route_surface_test.go`，静态比较 legacy FastAPI v1 route surface 与 Go `ServeMux` route surface；非 AI 路由表面等价通过，当时 `/admin/ai-config` 要求 Go 保留 TODO placeholder（2026-06-29 已更新为真实路由存在性检查）；本轮 `go test ./tests/contract -count=1`、`go test ./... -count=1` 和 `go vet ./...` 通过；P8 仍需请求/响应字段、状态码、数据状态变化、性能和真实双跑验证。
 - P8 前端 API 覆盖审计追加：新增 `backend-go/tests/contract/frontend_route_surface_test.go`，静态提取前端 `apiClient`、`axios`、`fetch`、`createSSEConnection` 和默认 remote log endpoint，要求所有前端 API 调用被 Go 路由覆盖或显式分类；当时分类清单记录邮箱验证、作业管理、旧题库导入导出模板和 browser remote log endpoint 为 legacy Python v1 不存在的前端侧遗留/未实现路径，后续切片已逐项清理；本轮 `go test ./tests/contract -count=1`、`go test ./... -count=1` 和 `go vet ./...` 通过。

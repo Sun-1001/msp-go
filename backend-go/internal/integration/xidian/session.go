@@ -14,7 +14,6 @@ import (
 	"time"
 
 	xidianapp "mathstudy/backend-go/internal/application/xidian"
-	"mathstudy/backend-go/internal/platform/httpjson"
 )
 
 type session struct {
@@ -121,23 +120,6 @@ func (s *session) followRedirects(ctx context.Context, base *url.URL, location s
 	return response, nil
 }
 
-func (s *session) getJSON(ctx context.Context, rawURL string, form url.Values, headers map[string]string) (map[string]any, int, http.Header, error) {
-	method := http.MethodGet
-	if form != nil {
-		method = http.MethodPost
-	}
-	response, err := s.request(ctx, method, rawURL, nil, form, headers)
-	if err != nil {
-		return nil, 0, nil, err
-	}
-	defer response.Body.Close()
-	var payload map[string]any
-	if err := httpjson.DecodeLimited(response.Body, maxXidianJSONBytes, &payload); err != nil {
-		return nil, response.StatusCode, response.Header, err
-	}
-	return payload, response.StatusCode, response.Header, nil
-}
-
 func (s *session) exportCookies() []xidianapp.Cookie {
 	return s.jar.exportCookies()
 }
@@ -242,7 +224,7 @@ func validateXidianRequestURL(parsed *url.URL, config Config) error {
 	if parsed.User != nil {
 		return errors.New("xidian request URL must not include userinfo")
 	}
-	for _, baseURL := range []string{config.IDsBase, config.EhallBase, config.YjsptBase} {
+	for _, baseURL := range []string{config.IDsBase, config.EhallBase} {
 		base, err := url.Parse(baseURL)
 		if err == nil && strings.EqualFold(parsed.Host, base.Host) {
 			return nil

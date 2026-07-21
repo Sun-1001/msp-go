@@ -27,10 +27,6 @@ vi.mock('@/modules/xidian/services/xidianService', () => ({
   },
 }));
 
-vi.mock('@/modules/xidian', () => ({
-  clearCredential: vi.fn(),
-}));
-
 describe('ProfilePage account boundaries', () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -50,5 +46,24 @@ describe('ProfilePage account boundaries', () => {
     expect(within(emailSection).queryByRole('button')).not.toBeInTheDocument();
     expect(screen.queryByText('未验证')).not.toBeInTheDocument();
     expect(screen.queryByText('手机号码')).not.toBeInTheDocument();
+  });
+
+  it('keeps only account binding controls for a verified Xidian account', async () => {
+    mocks.getBindingStatus.mockResolvedValue({
+      is_bound: true,
+      username: '20260001',
+      last_verified_at: '2026-07-21T08:00:00Z',
+    });
+
+    render(
+      <MemoryRouter>
+        <ProfilePage />
+      </MemoryRouter>,
+    );
+
+    expect(await screen.findByText('已绑定（20260001）')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '解绑' })).toBeInTheDocument();
+    expect(screen.getByText(/不会保存西电密码或教务会话/)).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /同步/ })).not.toBeInTheDocument();
   });
 });

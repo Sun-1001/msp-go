@@ -1,49 +1,13 @@
-/**
- * 西电账号凭证兼容清理工具
- */
+const LEGACY_STORAGE_KEYS = ['xidian_cred', 'xidian_classtable_cache'] as const;
 
-const CREDENTIAL_KEY = 'xidian_cred';
-
-export interface XidianCredential {
-  username: string;
-  password: string;
-}
-
-/**
- * 不再在浏览器持久化西电密码；调用时同步清理旧版缓存。
- */
-export function saveCredential(username: string, password: string): void {
-  void username;
-  void password;
-  clearCredential();
-}
-
-/**
- * 旧版本曾从 localStorage 读取可逆混淆凭证；现在始终清理并返回空值。
- */
-export function loadCredential(): XidianCredential | null {
-  clearCredential();
-  return null;
-}
-
-/**
- * 清除保存的凭证
- */
-export function clearCredential(): void {
+/** 清理旧版本遗留的西电密码和教务课表缓存。 */
+export function clearLegacyXidianStorage(): void {
   if (typeof localStorage === 'undefined') {
     return;
   }
   try {
-    localStorage.removeItem(CREDENTIAL_KEY);
+    LEGACY_STORAGE_KEYS.forEach((key) => localStorage.removeItem(key));
   } catch {
-    // Storage may be blocked by browser privacy settings; credential cleanup must stay best-effort.
+    // 浏览器隐私策略可能禁用 Storage，遗留数据清理保持尽力而为。
   }
-}
-
-/**
- * 检查是否有保存的凭证
- */
-export function hasCredential(): boolean {
-  clearCredential();
-  return false;
 }

@@ -24,7 +24,7 @@ export const AppRoutes = () => {
       case 'teacher':
         return '/teacher/dashboard';
       default:
-        return '/course/overview';
+        return '/my-class';
     }
   };
 

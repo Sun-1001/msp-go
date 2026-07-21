@@ -549,24 +549,22 @@ func main() {
 	xidianPortalClient, err := xidianintegration.NewClient(xidianintegration.Config{
 		IDsBase:        cfg.XidianIDsBase,
 		EhallBase:      cfg.XidianEhallBase,
-		YjsptBase:      cfg.XidianYjsptBase,
 		UserAgent:      cfg.XidianUserAgent,
 		ConnectTimeout: cfg.XidianHTTPConnectTimeout,
 		ReadTimeout:    cfg.XidianHTTPReadTimeout,
-		RetryCount:     cfg.XidianSyncRetryCount,
+		RetryCount:     cfg.XidianHTTPRetryCount,
 		CaptchaWidth:   cfg.XidianCaptchaWidth,
 	})
 	if err != nil {
 		logger.Error("configure xidian portal client", "error", err)
 		os.Exit(1)
 	}
-	xidianService, err := xidianapp.NewService(xidianRepo, xidianPortalClient, appCipher, xidianapp.NewMemoryChallengeStore(cfg.RedisFallbackCacheMaxSize), xidianapp.Config{
-		ChallengeTTL:            cfg.XidianChallengeTTL,
-		SnapshotFallbackEnabled: cfg.XidianSnapshotFallbackEnabled,
-		CaptchaWidth:            cfg.XidianCaptchaWidth,
-		CaptchaHeight:           cfg.XidianCaptchaHeight,
-		PieceWidth:              cfg.XidianPieceWidth,
-		PieceHeight:             cfg.XidianPieceHeight,
+	xidianService, err := xidianapp.NewService(xidianRepo, xidianPortalClient, xidianapp.NewMemoryChallengeStore(cfg.RedisFallbackCacheMaxSize), xidianapp.Config{
+		ChallengeTTL:  cfg.XidianChallengeTTL,
+		CaptchaWidth:  cfg.XidianCaptchaWidth,
+		CaptchaHeight: cfg.XidianCaptchaHeight,
+		PieceWidth:    cfg.XidianPieceWidth,
+		PieceHeight:   cfg.XidianPieceHeight,
 	})
 	if err != nil {
 		logger.Error("configure xidian service", "error", err)

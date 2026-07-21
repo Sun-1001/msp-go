@@ -19,10 +19,6 @@ type Service interface {
 	StartBinding(context.Context) (xidianapp.BindStartResponse, error)
 	CompleteBinding(context.Context, string, xidianapp.CompleteBindingInput) (xidianapp.BindCompleteResponse, error)
 	Unbind(context.Context, string) error
-	SyncClasstable(context.Context, string) (xidianapp.SyncResponse, error)
-	SyncExams(context.Context, string) (xidianapp.SyncResponse, error)
-	SyncScores(context.Context, string) (xidianapp.SyncResponse, error)
-	GetSnapshot(context.Context, string, string) (xidianapp.SnapshotResponse, error)
 }
 
 // Authenticator decodes Go/Python-compatible access tokens.
@@ -57,10 +53,6 @@ func (h *Handler) Register(mux *http.ServeMux, prefix string) {
 	mux.HandleFunc("POST "+prefix+"/binding/start", h.startBinding)
 	mux.HandleFunc("POST "+prefix+"/binding/complete", h.completeBinding)
 	mux.HandleFunc("POST "+prefix+"/binding/unbind", h.unbind)
-	mux.HandleFunc("POST "+prefix+"/sync/classtable", h.syncClasstable)
-	mux.HandleFunc("POST "+prefix+"/sync/exams", h.syncExams)
-	mux.HandleFunc("POST "+prefix+"/sync/scores", h.syncScores)
-	mux.HandleFunc("GET "+prefix+"/snapshot/{data_type}", h.snapshot)
 }
 
 type errorResponse struct {
@@ -122,44 +114,6 @@ func (h *Handler) unbind(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	httpjson.Write(w, http.StatusOK, xidianapp.UnbindResponse{Success: true})
-}
-
-func (h *Handler) syncClasstable(w http.ResponseWriter, r *http.Request) {
-	h.sync(w, r, h.service.SyncClasstable, "同步课表失败")
-}
-
-func (h *Handler) syncExams(w http.ResponseWriter, r *http.Request) {
-	h.sync(w, r, h.service.SyncExams, "同步考试失败")
-}
-
-func (h *Handler) syncScores(w http.ResponseWriter, r *http.Request) {
-	h.sync(w, r, h.service.SyncScores, "同步成绩失败")
-}
-
-func (h *Handler) sync(w http.ResponseWriter, r *http.Request, fn func(context.Context, string) (xidianapp.SyncResponse, error), fallback string) {
-	principal, ok := h.requirePrincipal(w, r)
-	if !ok {
-		return
-	}
-	response, err := fn(r.Context(), principal.UserID)
-	if err != nil {
-		h.writeServiceError(w, err, fallback)
-		return
-	}
-	httpjson.Write(w, http.StatusOK, response)
-}
-
-func (h *Handler) snapshot(w http.ResponseWriter, r *http.Request) {
-	principal, ok := h.requirePrincipal(w, r)
-	if !ok {
-		return
-	}
-	response, err := h.service.GetSnapshot(r.Context(), principal.UserID, r.PathValue("data_type"))
-	if err != nil {
-		h.writeServiceError(w, err, "获取缓存失败")
-		return
-	}
-	httpjson.Write(w, http.StatusOK, response)
 }
 
 func (h *Handler) requirePrincipal(w http.ResponseWriter, r *http.Request) (authapp.Principal, bool) {

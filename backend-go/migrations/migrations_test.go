@@ -114,3 +114,32 @@ func TestLoadIncludesStudentAIModelModerationMigration(t *testing.T) {
 		}
 	}
 }
+
+func TestLoadIncludesXidianAcademicDerivativeRemoval(t *testing.T) {
+	migrations, err := Load()
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+
+	var migrationSQL string
+	for _, migration := range migrations {
+		if migration.Version == 6 && migration.Name == "remove_xidian_academic_derivatives" {
+			migrationSQL = migration.SQL
+			break
+		}
+	}
+	if migrationSQL == "" {
+		t.Fatal("Load() missing 0006_remove_xidian_academic_derivatives")
+	}
+	for _, want := range []string{
+		"DROP TABLE IF EXISTS public.xidian_snapshots",
+		"DROP COLUMN IF EXISTS encrypted_password",
+		"DROP COLUMN IF EXISTS is_postgraduate",
+		"DROP COLUMN IF EXISTS session_cookies",
+		"DROP COLUMN IF EXISTS cookies_updated_at",
+	} {
+		if !strings.Contains(migrationSQL, want) {
+			t.Fatalf("migration SQL missing %q", want)
+		}
+	}
+}

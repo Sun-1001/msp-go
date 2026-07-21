@@ -13,7 +13,6 @@ import { getApiErrorMessage } from '@/libs/http/apiClient';
 import { passwordChangeSchema, type PasswordChangeFormData } from '@/libs/validation/schemas';
 import { authService } from '@/modules/auth/services/authService';
 import { xidianService, type XidianBindingStatus, type XidianCaptchaChallenge } from '@/modules/xidian/services/xidianService';
-import { clearCredential } from '@/modules/xidian';
 
 export const ProfilePage: React.FC = () => {
   const user = useAppSelector(selectCurrentUser);
@@ -32,7 +31,6 @@ export const ProfilePage: React.FC = () => {
   const [bindingError, setBindingError] = useState<string | null>(null);
   const [bindingSubmitting, setBindingSubmitting] = useState(false);
   const [xidianActionStatus, setXidianActionStatus] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
-  const [syncingType, setSyncingType] = useState<'classtable' | 'exams' | 'scores' | null>(null);
 
   const {
     register,
@@ -94,7 +92,6 @@ export const ProfilePage: React.FC = () => {
     setBindingModalOpen(true);
     setBindingError(null);
     setSliderValue(0);
-    clearCredential();
     setBindingForm({ username: '', password: '' });
     setCaptchaLoading(true);
     try {
@@ -138,7 +135,6 @@ export const ProfilePage: React.FC = () => {
       setXidianStatus({
         is_bound: response.is_bound,
         username: response.username,
-        is_postgraduate: response.is_postgraduate,
         last_verified_at: response.last_verified_at,
       });
       setXidianActionStatus({ type: 'success', message: '绑定成功' });
@@ -157,42 +153,15 @@ export const ProfilePage: React.FC = () => {
     try {
       await xidianService.unbind();
       setXidianStatus({ is_bound: false });
-      // 解绑时清除保存的凭证
-      clearCredential();
       setXidianActionStatus({ type: 'success', message: '已解绑' });
     } catch (error) {
       setXidianActionStatus({ type: 'error', message: parseXidianError(error).message });
     }
   };
 
-  const handleSync = async (type: 'classtable' | 'exams' | 'scores') => {
-    setSyncingType(type);
-    setXidianActionStatus(null);
-    try {
-      if (type === 'classtable') {
-        await xidianService.syncClasstable();
-      } else if (type === 'exams') {
-        await xidianService.syncExams();
-      } else {
-        await xidianService.syncScores();
-      }
-      setXidianActionStatus({ type: 'success', message: '同步成功' });
-      await loadXidianStatus();
-    } catch (error) {
-      const parsed = parseXidianError(error);
-      setXidianActionStatus({ type: 'error', message: parsed.message });
-      if (parsed.code === 'CAPTCHA_REQUIRED') {
-        await handleOpenBinding();
-        setBindingError('会话已过期，请重新验证');
-      }
-    } finally {
-      setSyncingType(null);
-    }
-  };
-
   const isXidianBound = xidianStatus?.is_bound;
-  const lastSyncText = xidianStatus?.last_sync_at
-    ? new Date(xidianStatus.last_sync_at).toLocaleString()
+  const lastVerifiedText = xidianStatus?.last_verified_at
+    ? new Date(xidianStatus.last_verified_at).toLocaleString()
     : null;
 
   return (
@@ -218,17 +187,17 @@ export const ProfilePage: React.FC = () => {
             <CardDescription>查看和管理您的个人基本信息</CardDescription>
           </CardHeader>
           <CardContent className="space-y-4">
-            <div className="flex items-center gap-6">
+            <div className="flex flex-col items-start gap-4 sm:flex-row sm:items-center sm:gap-6">
               <div className="h-24 w-24 rounded-full bg-linear-to-tr from-primary-100 to-secondary-100 dark:from-primary-900 dark:to-secondary-900 flex items-center justify-center text-primary-700 dark:text-primary-300 font-bold text-3xl shadow-md">
                 <User className="w-12 h-12" />
               </div>
-              <div className="space-y-1">
+              <div className="min-w-0 space-y-1">
                 <h3 className="text-2xl font-bold text-surface-900 dark:text-surface-100">{user?.name || '未登录'}</h3>
-                <div className="flex items-center gap-2 text-surface-500 dark:text-surface-400">
-                  <span className="px-2 py-0.5 bg-surface-100 dark:bg-surface-700 rounded text-xs font-medium border border-surface-200 dark:border-surface-600">
+                <div className="flex flex-wrap items-center gap-2 text-surface-500 dark:text-surface-400">
+                  <span className="whitespace-nowrap px-2 py-0.5 bg-surface-100 dark:bg-surface-700 rounded text-xs font-medium border border-surface-200 dark:border-surface-600">
                     {user?.role === 'student' ? '学生' : user?.role === 'teacher' ? '教师' : '访客'}
                   </span>
-                  <span className="text-sm">ID: {user?.id}</span>
+                  <span className="break-all text-xs sm:text-sm">ID: {user?.id}</span>
                 </div>
               </div>
             </div>
@@ -242,7 +211,7 @@ export const ProfilePage: React.FC = () => {
               <Lock className="w-5 h-5" />
               账号安全与绑定
             </CardTitle>
-            <CardDescription>查看注册邮箱并管理学校账户绑定</CardDescription>
+            <CardDescription>查看注册邮箱并管理可用于身份验证的学校账户</CardDescription>
           </CardHeader>
           <CardContent className="space-y-4">
             {/* Email */}
@@ -264,8 +233,8 @@ export const ProfilePage: React.FC = () => {
             </div>
 
              {/* Xidian Account */}
-             <div className="flex items-center justify-between p-4 border border-surface-200 dark:border-surface-700 rounded-lg bg-surface-50/50 dark:bg-surface-800/50 hover:bg-surface-50 dark:hover:bg-surface-800 transition-colors">
-                <div className="flex items-center gap-4">
+             <div className="flex flex-col gap-4 p-4 border border-surface-200 dark:border-surface-700 rounded-lg bg-surface-50/50 dark:bg-surface-800/50 hover:bg-surface-50 dark:hover:bg-surface-800 transition-colors sm:flex-row sm:items-center sm:justify-between">
+                <div className="flex min-w-0 items-center gap-4">
                     <div className="p-2.5 bg-white dark:bg-surface-700 rounded-full border border-surface-200 dark:border-surface-600 text-surface-600 dark:text-surface-400">
                         <School className="w-5 h-5" />
                     </div>
@@ -280,52 +249,26 @@ export const ProfilePage: React.FC = () => {
                         </p>
                         {isXidianBound && (
                           <p className="text-xs text-surface-400 dark:text-surface-500">
-                            {xidianStatus?.is_postgraduate ? '研究生账户' : '本科账户'}
-                            {lastSyncText ? ` · 最近同步：${lastSyncText}` : ''}
+                            {lastVerifiedText ? `最近验证：${lastVerifiedText}` : '已验证账户归属'}
                           </p>
                         )}
                     </div>
                 </div>
-                <div className="flex items-center gap-2">
+                <div className="flex shrink-0 items-center gap-2 self-end sm:self-auto">
                   {isXidianBound ? (
-                    <Button variant="outline" size="sm" onClick={handleUnbind}>
+                    <Button variant="outline" size="sm" onClick={handleUnbind} className="whitespace-nowrap">
                       解绑
                     </Button>
                   ) : (
-                    <Button variant="outline" size="sm" onClick={handleOpenBinding}>
+                    <Button variant="outline" size="sm" onClick={handleOpenBinding} className="whitespace-nowrap">
                       绑定
                     </Button>
                   )}
                 </div>
             </div>
-            {isXidianBound && (
-              <div className="flex flex-wrap gap-2">
-                <Button
-                  variant="outline"
-                  size="sm"
-                  disabled={syncingType === 'classtable'}
-                  onClick={() => handleSync('classtable')}
-                >
-                  {syncingType === 'classtable' ? '同步中...' : '同步课表'}
-                </Button>
-                <Button
-                  variant="outline"
-                  size="sm"
-                  disabled={syncingType === 'exams'}
-                  onClick={() => handleSync('exams')}
-                >
-                  {syncingType === 'exams' ? '同步中...' : '同步考试'}
-                </Button>
-                <Button
-                  variant="outline"
-                  size="sm"
-                  disabled={syncingType === 'scores'}
-                  onClick={() => handleSync('scores')}
-                >
-                  {syncingType === 'scores' ? '同步中...' : '同步成绩'}
-                </Button>
-              </div>
-            )}
+            <p className="text-xs text-surface-500 dark:text-surface-400">
+              绑定仅用于验证西电账号归属；平台不会保存西电密码或教务会话。
+            </p>
             {xidianActionStatus && (
               <div
                 className={`flex items-center gap-2 p-3 rounded-lg ${
@@ -512,7 +455,10 @@ export const ProfilePage: React.FC = () => {
             <Button variant="outline" onClick={() => setBindingModalOpen(false)} disabled={bindingSubmitting}>
               取消
             </Button>
-            <Button onClick={handleCompleteBinding} disabled={bindingSubmitting || captchaLoading}>
+            <Button
+              onClick={handleCompleteBinding}
+              disabled={bindingSubmitting || captchaLoading || !bindingForm.username.trim() || !bindingForm.password}
+            >
               {bindingSubmitting ? '绑定中...' : '提交绑定'}
             </Button>
           </div>

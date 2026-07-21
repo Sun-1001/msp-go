@@ -107,7 +107,6 @@ go test ./migrations -count=1
 - CORS 和管理端允许网段
 - Eino provider 的兼容配置
 - Local、Qiniu 或 S3 存储配置
-- 西电教务端点和超时
+- 西电账户绑定端点和超时
 
 不要提交 `.env`、API key、密码或真实用户数据。
-

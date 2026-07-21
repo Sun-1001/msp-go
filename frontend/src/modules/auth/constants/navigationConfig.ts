@@ -1,5 +1,4 @@
 import {
-  BookOpen,
   GraduationCap,
   LayoutDashboard,
   MessageSquare,
@@ -8,7 +7,6 @@ import {
   FolderOpen,
   Users,
   FileText,
-  TrendingUp
 } from 'lucide-react';
 
 /**
@@ -28,10 +26,10 @@ export interface NavItem {
  * - 单一职责: 只负责导航配置，不包含业务逻辑
  */
 export const studentNavItems: NavItem[] = [
-  { label: '课程概览', href: '/course/overview', icon: BookOpen },
+  { label: '我的班级', href: '/my-class', icon: Users },
   { label: '智能刷题', href: '/exercise', icon: GraduationCap },
   { label: 'AI 辅导', href: '/session/new', icon: MessageSquare },
-  { label: '成绩分析', href: '/mistake-book', icon: TrendingUp },
+  { label: '错题本', href: '/mistake-book', icon: FileText },
   { label: '知识图谱', href: '/knowledge-graph', icon: GitBranch },
   { label: '学习统计', href: '/analytics', icon: BarChart3 },
   { label: '资源中心', href: '/resources', icon: FolderOpen },

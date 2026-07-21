@@ -17,11 +17,8 @@ import (
 )
 
 const (
-	ehallAppIDClasstable = "4770397878132218"
-	ehallAppIDScore      = "4768574631264620"
-	ehallAppIDExam       = "4768687067472349"
-	maxXidianHTMLBytes   = 2 << 20
-	maxXidianJSONBytes   = 5 << 20
+	maxXidianHTMLBytes = 2 << 20
+	maxXidianJSONBytes = 5 << 20
 )
 
 var errXidianResponseTooLarge = errors.New("xidian response body too large")
@@ -30,7 +27,6 @@ var errXidianResponseTooLarge = errors.New("xidian response body too large")
 type Config struct {
 	IDsBase        string
 	EhallBase      string
-	YjsptBase      string
 	UserAgent      string
 	ConnectTimeout time.Duration
 	ReadTimeout    time.Duration
@@ -38,7 +34,7 @@ type Config struct {
 	CaptchaWidth   int
 }
 
-// Client implements Xidian IDS/Ehall/Yjspt portal calls.
+// Client implements the Xidian IDS account verification flow.
 type Client struct {
 	config Config
 	client *http.Client
@@ -47,7 +43,7 @@ type Client struct {
 
 // NewClient creates a Xidian integration client.
 func NewClient(config Config, clients ...*http.Client) (*Client, error) {
-	if strings.TrimSpace(config.IDsBase) == "" || strings.TrimSpace(config.EhallBase) == "" || strings.TrimSpace(config.YjsptBase) == "" {
+	if strings.TrimSpace(config.IDsBase) == "" || strings.TrimSpace(config.EhallBase) == "" {
 		return nil, errors.New("xidian base urls must not be empty")
 	}
 	if config.UserAgent == "" {
@@ -67,9 +63,6 @@ func NewClient(config Config, clients ...*http.Client) (*Client, error) {
 		return nil, err
 	}
 	if config.EhallBase, err = normalizeXidianBaseURL("XIDIAN_EHALL_BASE", config.EhallBase); err != nil {
-		return nil, err
-	}
-	if config.YjsptBase, err = normalizeXidianBaseURL("XIDIAN_YJSPT_BASE", config.YjsptBase); err != nil {
 		return nil, err
 	}
 	return &Client{
@@ -150,7 +143,7 @@ func (c *Client) StartBinding(ctx context.Context) (xidianapp.Challenge, error) 
 }
 
 // CompleteBinding verifies captcha and submits the IDS login form.
-func (c *Client) CompleteBinding(ctx context.Context, state xidianapp.ChallengeState, input xidianapp.LoginInput) (xidianapp.LoginResult, error) {
+func (c *Client) CompleteBinding(ctx context.Context, state xidianapp.ChallengeState, input xidianapp.LoginInput) error {
 	session := newSession(c.client, c.config, state.Cookies)
 	verifyURL := c.config.IDsBase + "/authserver/common/verifySliderCaptcha.htl"
 	verifyData := url.Values{
@@ -162,22 +155,22 @@ func (c *Client) CompleteBinding(ctx context.Context, state xidianapp.ChallengeS
 		"Origin":       c.config.IDsBase,
 	})
 	if err != nil {
-		return xidianapp.LoginResult{}, err
+		return err
 	}
 	defer verifyResponse.Body.Close()
 	var verifyPayload map[string]any
 	if err := httpjson.DecodeLimited(verifyResponse.Body, maxXidianJSONBytes, &verifyPayload); err != nil {
-		return xidianapp.LoginResult{}, err
+		return err
 	}
 	if intFromAny(verifyPayload["errorCode"], 0) != 1 {
-		return xidianapp.LoginResult{}, xidianapp.ServiceError{Code: "CAPTCHA_FAILED", Message: "验证码校验失败", Status: 400}
+		return xidianapp.ServiceError{Code: "CAPTCHA_FAILED", Message: "验证码校验失败", Status: 400}
 	}
 	if state.PasswordSalt == "" {
-		return xidianapp.LoginResult{}, xidianapp.ServiceError{Code: "LOGIN_PAGE_INVALID", Message: "登录参数缺失", Status: 400}
+		return xidianapp.ServiceError{Code: "LOGIN_PAGE_INVALID", Message: "登录参数缺失", Status: 400}
 	}
 	encryptedPassword, err := aesEncryptPassword(input.Password, state.PasswordSalt)
 	if err != nil {
-		return xidianapp.LoginResult{}, err
+		return err
 	}
 	form := url.Values{}
 	for key, value := range state.HiddenInputs {
@@ -195,50 +188,12 @@ func (c *Client) CompleteBinding(ctx context.Context, state xidianapp.ChallengeS
 	loginURL := c.config.IDsBase + "/authserver/login"
 	response, err := session.request(ctx, http.MethodPost, loginURL, nil, form, nil)
 	if err != nil {
-		return xidianapp.LoginResult{}, err
+		return err
 	}
 	if err := c.handleLoginResponse(ctx, session, response); err != nil {
-		return xidianapp.LoginResult{}, err
+		return err
 	}
-	isPostgraduate := c.detectPostgraduate(ctx, session)
-	return xidianapp.LoginResult{Cookies: session.exportCookies(), IsPostgraduate: isPostgraduate}, nil
-}
-
-// Sync fetches classtable, exam, or score data.
-func (c *Client) Sync(ctx context.Context, request xidianapp.SyncRequest) (xidianapp.SyncResult, error) {
-	if len(request.Cookies) == 0 {
-		return xidianapp.SyncResult{}, xidianapp.ServiceError{Code: "CAPTCHA_REQUIRED", Message: "会话已过期，请重新验证", Status: 409}
-	}
-	session := newSession(c.client, c.config, request.Cookies)
-	postgraduate := request.IsPostgraduate != nil && *request.IsPostgraduate
-	var payload map[string]any
-	var err error
-	switch request.DataType {
-	case "classtable":
-		if postgraduate {
-			payload, err = c.fetchClasstableYjspt(ctx, session, request.Username)
-		} else {
-			payload, err = c.fetchClasstableEhall(ctx, session, request.Username)
-		}
-	case "exam":
-		if postgraduate {
-			payload, err = c.fetchExamsYjspt(ctx, session, request.Username)
-		} else {
-			payload, err = c.fetchExamsEhall(ctx, session, request.Username)
-		}
-	case "score":
-		if postgraduate {
-			payload, err = c.fetchScoresYjspt(ctx, session, request.Username)
-		} else {
-			payload, err = c.fetchScoresEhall(ctx, session, request.Username)
-		}
-	default:
-		return xidianapp.SyncResult{}, xidianapp.ServiceError{Code: "INVALID_DATA_TYPE", Message: "不支持的数据类型: " + request.DataType, Status: 400}
-	}
-	if err != nil {
-		return xidianapp.SyncResult{}, err
-	}
-	return xidianapp.SyncResult{Payload: payload, Cookies: session.exportCookies()}, nil
+	return nil
 }
 
 func (c *Client) handleLoginResponse(ctx context.Context, session *session, response *http.Response) error {
@@ -305,22 +260,4 @@ func readLimitedString(reader io.Reader, maxBytes int64) (string, error) {
 		return "", errXidianResponseTooLarge
 	}
 	return string(data), nil
-}
-
-func (c *Client) detectPostgraduate(ctx context.Context, session *session) *bool {
-	portalURL := c.config.YjsptBase + "/gsapp/sys/yjsemaphome/portal/index.do"
-	response, err := session.followRedirects(ctx, nil, portalURL, nil)
-	if err != nil || response == nil {
-		return nil
-	}
-	_ = response.Body.Close()
-	if response.StatusCode == http.StatusMovedPermanently || response.StatusCode == http.StatusFound {
-		return nil
-	}
-	payload, status, _, err := session.getJSON(ctx, c.config.YjsptBase+"/gsapp/sys/yjsemaphome/modules/pubWork/getCanVisitAppList.do", nil, nil)
-	if err != nil || status == http.StatusMovedPermanently || status == http.StatusFound {
-		return nil
-	}
-	value := payload["res"] != nil
-	return &value
 }

@@ -90,7 +90,7 @@ docker compose logs --tail 200 backend
 3. 登录、刷新令牌和角色权限符合预期。
 
 4. 数据库迁移首次执行有新增版本，重复执行无待应用版本。
-5. 文件上传、对象存储、外部 AI provider 和西电教务按部署配置进行连通性验证；`ocr` Agent 必须选择支持图片输入的模型。
+5. 文件上传、对象存储、外部 AI provider 和西电账户绑定按部署配置进行连通性验证；`ocr` Agent 必须选择支持图片输入的模型。
 6. 分别提交真实 PNG、JPEG 图片和空白/低对比图片，确认成功路径只产生一次 attempt，并各执行一次 session、DKT 和 profile 更新；OCR/数学不确定或失败路径的这些写入均为零。图片 OCR 当前只接受 PNG、JPEG 和 GIF。
 7. 验证通用数学判定的 `correct`、`incorrect`、`indeterminate` 响应，以及解析生成不可用、超时、取消、无效输出和验证失败的 `failure.stage`、`failure.code`、`retryable` 契约。
 
