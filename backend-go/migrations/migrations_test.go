@@ -50,3 +50,34 @@ func TestLoadIncludesStudentGeneratedExerciseMigration(t *testing.T) {
 		}
 	}
 }
+
+func TestLoadIncludesStudentAIRiskControlMigration(t *testing.T) {
+	migrations, err := Load()
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+
+	var migrationSQL string
+	for _, migration := range migrations {
+		if migration.Version == 4 && migration.Name == "student_ai_risk_control" {
+			migrationSQL = migration.SQL
+			break
+		}
+	}
+	if migrationSQL == "" {
+		t.Fatal("Load() missing 0004_student_ai_risk_control")
+	}
+	for _, want := range []string{
+		"student_ai_daily_reply_limit",
+		"student_ai_max_concurrency",
+		"student_ai_access_controls",
+		"student_ai_reply_usage",
+		"student_ai_risk_events",
+		"uq_student_ai_reply_usage_message",
+		"ON DELETE SET NULL",
+	} {
+		if !strings.Contains(migrationSQL, want) {
+			t.Fatalf("migration SQL missing %q", want)
+		}
+	}
+}

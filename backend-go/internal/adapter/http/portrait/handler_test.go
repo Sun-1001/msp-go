@@ -12,6 +12,7 @@ import (
 	"strings"
 	"testing"
 
+	airiskapp "mathstudy/backend-go/internal/application/airisk"
 	authapp "mathstudy/backend-go/internal/application/auth"
 	portraitapp "mathstudy/backend-go/internal/application/portrait"
 	"mathstudy/backend-go/internal/domain/user"
@@ -121,6 +122,40 @@ func TestGenerateAndClearPortrait(t *testing.T) {
 	}
 }
 
+func TestGeneratePortraitAppliesAIGuard(t *testing.T) {
+	service := &fakePortraitService{generated: portraitapp.GenerateResponse{PortraitContent: "generated"}}
+	auth := &fakeAuthenticator{principal: authapp.Principal{UserID: "student-1", Role: user.RoleStudent}}
+	guard := &fakePortraitAIGuard{err: airiskapp.Error{Kind: airiskapp.ErrAccessBlocked, Message: "AI 已封禁"}}
+	handler, err := NewHandler(nil, service, auth, WithAIRequestGuard(guard))
+	if err != nil {
+		t.Fatalf("NewHandler() error = %v", err)
+	}
+	mux := http.NewServeMux()
+	handler.Register(mux, "/api/v1/portrait")
+
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodPost, "/api/v1/portrait/generate", nil)
+	request.Header.Set("Authorization", "Bearer token")
+	mux.ServeHTTP(recorder, request)
+	if recorder.Code != http.StatusForbidden || service.lastUserID != "" {
+		t.Fatalf("blocked status=%d user=%q body=%s", recorder.Code, service.lastUserID, recorder.Body.String())
+	}
+
+	lease := &fakePortraitAILease{}
+	guard.err = nil
+	guard.lease = lease
+	recorder = httptest.NewRecorder()
+	request = httptest.NewRequest(http.MethodPost, "/api/v1/portrait/generate", nil)
+	request.Header.Set("Authorization", "Bearer token")
+	mux.ServeHTTP(recorder, request)
+	if recorder.Code != http.StatusOK || service.lastUserID != "student-1" || lease.releases != 1 {
+		t.Fatalf("allowed status=%d user=%q releases=%d", recorder.Code, service.lastUserID, lease.releases)
+	}
+	if guard.source != "portrait_generate" || guard.metered {
+		t.Fatalf("guard = %#v", guard)
+	}
+}
+
 func TestInternalErrorsRedactLogs(t *testing.T) {
 	credentialErr := errors.New("portrait repo failed Authorization: Bearer portrait-secret token=query-token api_key=plain password=letmein")
 	tests := []struct {
@@ -206,6 +241,26 @@ func assertNoPortraitCredentialLeak(t *testing.T, value string) {
 
 type fakeAuthenticator struct {
 	principal authapp.Principal
+}
+
+type fakePortraitAIGuard struct {
+	lease   airiskapp.Lease
+	err     error
+	source  string
+	metered bool
+}
+
+type fakePortraitAILease struct{ releases int }
+
+func (l *fakePortraitAILease) Release(context.Context) error {
+	l.releases++
+	return nil
+}
+
+func (g *fakePortraitAIGuard) Acquire(_ context.Context, _ string, source, _ string, metered bool) (airiskapp.Lease, error) {
+	g.source = source
+	g.metered = metered
+	return g.lease, g.err
 }
 
 func (a *fakeAuthenticator) DecodeAccessToken(string) (authapp.Principal, bool) {

@@ -13,6 +13,7 @@ import (
 	goredis "github.com/redis/go-redis/v9"
 
 	adminaiconfighthttp "mathstudy/backend-go/internal/adapter/http/adminaiconfig"
+	adminairiskhttp "mathstudy/backend-go/internal/adapter/http/adminairisk"
 	admininboxhttp "mathstudy/backend-go/internal/adapter/http/admininbox"
 	adminsettingshttp "mathstudy/backend-go/internal/adapter/http/adminsettings"
 	adminstatshttp "mathstudy/backend-go/internal/adapter/http/adminstats"
@@ -33,12 +34,14 @@ import (
 	xidianhttp "mathstudy/backend-go/internal/adapter/http/xidian"
 	einoagent "mathstudy/backend-go/internal/adapter/llm/einoagent"
 	adapterpostgres "mathstudy/backend-go/internal/adapter/postgres"
+	adapterredis "mathstudy/backend-go/internal/adapter/redis"
 	storageadapter "mathstudy/backend-go/internal/adapter/storage"
 	adminaiconfigapp "mathstudy/backend-go/internal/application/adminaiconfig"
 	admininboxapp "mathstudy/backend-go/internal/application/admininbox"
 	adminsettingsapp "mathstudy/backend-go/internal/application/adminsettings"
 	adminstatsapp "mathstudy/backend-go/internal/application/adminstats"
 	adminuserapp "mathstudy/backend-go/internal/application/adminuser"
+	airiskapp "mathstudy/backend-go/internal/application/airisk"
 	answerocrapp "mathstudy/backend-go/internal/application/answerocr"
 	authapp "mathstudy/backend-go/internal/application/auth"
 	classroomapp "mathstudy/backend-go/internal/application/classroom"
@@ -151,6 +154,26 @@ func main() {
 		logger.Error("configure auth handler", "error", err)
 		os.Exit(1)
 	}
+	aiRiskRepo, err := adapterpostgres.NewAIRiskRepository(dbPool)
+	if err != nil {
+		logger.Error("configure AI risk repository", "error", err)
+		os.Exit(1)
+	}
+	aiRiskSlots, err := adapterredis.NewAIRiskSlotStore(redisClient)
+	if err != nil {
+		logger.Error("configure AI risk slot store", "error", err)
+		os.Exit(1)
+	}
+	aiRiskService, err := airiskapp.NewService(aiRiskRepo, aiRiskSlots)
+	if err != nil {
+		logger.Error("configure AI risk service", "error", err)
+		os.Exit(1)
+	}
+	aiRiskHandler, err := adminairiskhttp.NewHandler(logger, aiRiskService, authService)
+	if err != nil {
+		logger.Error("configure AI risk handler", "error", err)
+		os.Exit(1)
+	}
 	progressRepo, err := adapterpostgres.NewProgressRepository(dbPool)
 	if err != nil {
 		logger.Error("configure progress repository", "error", err)
@@ -215,7 +238,7 @@ func main() {
 		logger.Error("configure portrait service", "error", err)
 		os.Exit(1)
 	}
-	portraitHandler, err := portraithttp.NewHandler(logger, portraitService, authService)
+	portraitHandler, err := portraithttp.NewHandler(logger, portraitService, authService, portraithttp.WithAIRequestGuard(aiRiskService))
 	if err != nil {
 		logger.Error("configure portrait handler", "error", err)
 		os.Exit(1)
@@ -307,6 +330,7 @@ func main() {
 		exerciseService,
 		authService,
 		exercisehttp.WithRedisRateLimit(redisClient, cfg.RedisFallbackCacheMaxSize),
+		exercisehttp.WithAIRequestGuard(aiRiskService),
 	)
 	if err != nil {
 		logger.Error("configure exercise handler", "error", err)
@@ -327,7 +351,11 @@ func main() {
 		MaxTokens:     cfg.EinoMaxTokens,
 		MaxIterations: cfg.EinoMaxIterations,
 	})
-	sessionService, err := sessionapp.NewService(sessionRepo, sessionapp.WithChatAgent(tutorAgent))
+	sessionService, err := sessionapp.NewService(
+		sessionRepo,
+		sessionapp.WithChatAgent(tutorAgent),
+		sessionapp.WithAIRequestGuard(aiRiskService),
+	)
 	if err != nil {
 		logger.Error("configure session service", "error", err)
 		os.Exit(1)
@@ -597,6 +625,7 @@ func main() {
 			classHandler.Register(mux, cfg.APIV1Prefix+"/classes")
 			teacherHandler.Register(mux, cfg.APIV1Prefix+"/teacher")
 			adminUserHandler.Register(mux, cfg.APIV1Prefix+"/admin/users")
+			aiRiskHandler.Register(mux, cfg.APIV1Prefix+"/admin/risk-control")
 			adminInboxHandler.Register(mux, cfg.APIV1Prefix+"/admin/inbox")
 			adminAIConfigHandler.Register(mux, cfg.APIV1Prefix+"/admin/ai-config")
 			adminStatsHandler.Register(mux, cfg.APIV1Prefix+"/admin/stats")

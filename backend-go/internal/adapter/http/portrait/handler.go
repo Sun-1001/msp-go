@@ -5,7 +5,9 @@ import (
 	"errors"
 	"log/slog"
 	"net/http"
+	"time"
 
+	airiskapp "mathstudy/backend-go/internal/application/airisk"
 	authapp "mathstudy/backend-go/internal/application/auth"
 	portraitapp "mathstudy/backend-go/internal/application/portrait"
 	"mathstudy/backend-go/internal/platform/httpauth"
@@ -25,15 +27,29 @@ type Authenticator interface {
 	DecodeAccessToken(string) (authapp.Principal, bool)
 }
 
+// AIRequestGuard applies AI-only access and concurrency controls.
+type AIRequestGuard interface {
+	Acquire(context.Context, string, string, string, bool) (airiskapp.Lease, error)
+}
+
 // Handler serves /portrait endpoints.
 type Handler struct {
 	service Service
 	auth    Authenticator
 	logger  *slog.Logger
+	guard   AIRequestGuard
+}
+
+// Option customizes the portrait HTTP handler.
+type Option func(*Handler)
+
+// WithAIRequestGuard enables student AI controls for portrait generation.
+func WithAIRequestGuard(guard AIRequestGuard) Option {
+	return func(handler *Handler) { handler.guard = guard }
 }
 
 // NewHandler creates a portrait HTTP handler.
-func NewHandler(logger *slog.Logger, service Service, auth Authenticator) (*Handler, error) {
+func NewHandler(logger *slog.Logger, service Service, auth Authenticator, options ...Option) (*Handler, error) {
 	if service == nil {
 		return nil, errors.New("portrait service is nil")
 	}
@@ -43,7 +59,13 @@ func NewHandler(logger *slog.Logger, service Service, auth Authenticator) (*Hand
 	if logger == nil {
 		logger = slog.Default()
 	}
-	return &Handler{service: service, auth: auth, logger: logger}, nil
+	handler := &Handler{service: service, auth: auth, logger: logger}
+	for _, option := range options {
+		if option != nil {
+			option(handler)
+		}
+	}
+	return handler, nil
 }
 
 // Register attaches portrait routes under prefix, for example /api/v1/portrait.
@@ -72,6 +94,14 @@ func (h *Handler) generate(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	if h.guard != nil {
+		lease, err := h.guard.Acquire(r.Context(), principal.UserID, "portrait_generate", "", false)
+		if err != nil {
+			writePortraitAIRiskError(w, err)
+			return
+		}
+		defer releasePortraitAILease(lease)
+	}
 	response, err := h.service.GeneratePortrait(r.Context(), principal.UserID)
 	if err != nil {
 		h.logPortraitError("generate portrait failed", err)
@@ -79,6 +109,28 @@ func (h *Handler) generate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	httpjson.Write(w, http.StatusOK, response)
+}
+
+func writePortraitAIRiskError(w http.ResponseWriter, err error) {
+	switch {
+	case errors.Is(err, airiskapp.ErrAccessBlocked):
+		writePortraitError(w, http.StatusForbidden, "AI_ACCESS_BLOCKED", err.Error())
+	case errors.Is(err, airiskapp.ErrConcurrencyExceeded):
+		writePortraitError(w, http.StatusTooManyRequests, "AI_CONCURRENCY_LIMIT", err.Error())
+	case errors.Is(err, airiskapp.ErrUnavailable):
+		writePortraitError(w, http.StatusServiceUnavailable, "AI_GUARD_UNAVAILABLE", "AI 风控服务暂不可用，请稍后重试")
+	default:
+		writePortraitError(w, http.StatusInternalServerError, "INTERNAL_ERROR", "画像生成失败，请稍后重试")
+	}
+}
+
+func releasePortraitAILease(lease airiskapp.Lease) {
+	if lease == nil {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	_ = lease.Release(ctx)
 }
 
 func (h *Handler) clear(w http.ResponseWriter, r *http.Request) {

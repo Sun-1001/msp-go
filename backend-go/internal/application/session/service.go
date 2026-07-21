@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	airiskapp "mathstudy/backend-go/internal/application/airisk"
 	uploadapp "mathstudy/backend-go/internal/application/upload"
 	"mathstudy/backend-go/internal/platform/ptrutil"
 	"mathstudy/backend-go/internal/platform/sliceutil"
@@ -24,6 +25,7 @@ type Repository interface {
 	CreateSession(context.Context, LearningSession, Message) error
 	GetSession(context.Context, string, string) (LearningSession, bool, error)
 	InsertMessage(context.Context, Message) error
+	InsertMeteredAssistantMessage(context.Context, string, Message, string) error
 	ListMessages(context.Context, string, int, int) ([]Message, int, error)
 	ListSessions(context.Context, string, int, int) ([]SessionListItem, int, error)
 	EndSession(context.Context, string, string, time.Time) (EndState, bool, error)
@@ -168,6 +170,11 @@ type ChatAgentOutput struct {
 	Content string
 }
 
+// AIRequestGuard applies student AI access, content, quota, and concurrency rules.
+type AIRequestGuard interface {
+	Acquire(context.Context, string, string, string, bool) (airiskapp.Lease, error)
+}
+
 // CancelTaskResponse is the Python-compatible task cancellation response.
 type CancelTaskResponse struct {
 	Success bool   `json:"success"`
@@ -178,6 +185,7 @@ type CancelTaskResponse struct {
 type Service struct {
 	repo  Repository
 	agent ChatAgent
+	guard AIRequestGuard
 	now   func() time.Time
 	newID func() (string, error)
 }
@@ -189,6 +197,13 @@ type Option func(*Service)
 func WithChatAgent(agent ChatAgent) Option {
 	return func(service *Service) {
 		service.agent = agent
+	}
+}
+
+// WithAIRequestGuard enables student AI risk-control checks for chat replies.
+func WithAIRequestGuard(guard AIRequestGuard) Option {
+	return func(service *Service) {
+		service.guard = guard
 	}
 }
 
@@ -272,6 +287,13 @@ func (s *Service) ProcessChat(ctx context.Context, sessionID string, userID stri
 	if err != nil {
 		return ChatResult{}, err
 	}
+	if s.guard != nil {
+		lease, err := s.guard.Acquire(ctx, userID, "session_chat", message, true)
+		if err != nil {
+			return ChatResult{}, err
+		}
+		defer releaseAILease(lease)
+	}
 	now := s.now()
 	userMessageID, err := s.newID()
 	if err != nil {
@@ -295,28 +317,30 @@ func (s *Service) ProcessChat(ctx context.Context, sessionID string, userID stri
 	}); err != nil {
 		return ChatResult{}, err
 	}
-	output, err := s.generateAssistant(ctx, ChatAgentInput{
+	output, metered := s.generateAssistant(ctx, ChatAgentInput{
 		SessionID:   sessionID,
 		StudentID:   userID,
 		Message:     message,
 		Attachments: attachments,
 		History:     history,
 	})
-	if err != nil {
-		return ChatResult{}, err
-	}
 	agent := output.Agent
 	if agent == "" {
 		agent = "tutor"
 	}
-	if err := s.repo.InsertMessage(ctx, Message{
+	assistantMessage := Message{
 		ID:        assistantMessageID,
 		SessionID: sessionID,
 		Role:      "assistant",
 		Content:   output.Content,
 		Agent:     &agent,
 		CreatedAt: now,
-	}); err != nil {
+	}
+	if metered {
+		if err := s.repo.InsertMeteredAssistantMessage(ctx, userID, assistantMessage, airiskapp.UsageDate(now)); err != nil {
+			return ChatResult{}, err
+		}
+	} else if err := s.repo.InsertMessage(ctx, assistantMessage); err != nil {
 		return ChatResult{}, err
 	}
 	return ChatResult{TaskID: taskID, MessageID: assistantMessageID, Agent: agent, Content: output.Content}, nil
@@ -356,27 +380,37 @@ func (s *Service) recentHistory(ctx context.Context, sessionID string) ([]Messag
 	return messages, nil
 }
 
-func (s *Service) generateAssistant(ctx context.Context, input ChatAgentInput) (ChatAgentOutput, error) {
+func (s *Service) generateAssistant(ctx context.Context, input ChatAgentInput) (ChatAgentOutput, bool) {
 	if s.agent == nil {
 		return ChatAgentOutput{
 			Agent:   "tutor",
 			Content: "智能导师尚未配置；你的消息已保存。请管理员在 AI 模型设置中配置导师智能体，或在后端配置 EINO_ENABLED、EINO_API_KEY 和 EINO_MODEL 后恢复回复。",
-		}, nil
+		}, false
 	}
 	output, err := s.agent.Generate(ctx, input)
 	if err != nil {
 		return ChatAgentOutput{
 			Agent:   "tutor",
 			Content: "智能导师暂时不可用；你的消息已保存。请稍后重试，或联系管理员检查导师智能体模型配置。",
-		}, nil
+		}, false
 	}
 	if output.Agent == "" {
 		output.Agent = "tutor"
 	}
 	if output.Content == "" {
 		output.Content = "智能导师暂未生成有效回复，请稍后重试。"
+		return output, false
 	}
-	return output, nil
+	return output, true
+}
+
+func releaseAILease(lease airiskapp.Lease) {
+	if lease == nil {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	_ = lease.Release(ctx)
 }
 
 // GetHistory returns a page of session messages.

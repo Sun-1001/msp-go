@@ -18,6 +18,7 @@ import {
   ChevronRight,
   Network,
   Inbox,
+  ShieldAlert,
 } from 'lucide-react';
 import { ThemeToggle } from '@/components/ui/ThemeToggle';
 import { passwordResetService } from '@/modules/password-reset/services/passwordResetService';
@@ -69,6 +70,11 @@ export const AdminLayout: React.FC<AdminLayoutProps> = ({ children, className = 
       icon: Brain,
       label: 'AI 模型',
       path: '/admin/ai-models',
+    },
+    {
+      icon: ShieldAlert,
+      label: '风控中心',
+      path: '/admin/risk-control',
     },
     {
       icon: Network,

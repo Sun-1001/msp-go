@@ -6,6 +6,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	airiskapp "mathstudy/backend-go/internal/application/airisk"
 )
 
 func TestCreateSessionStoresWelcomeMessage(t *testing.T) {
@@ -41,6 +43,9 @@ func TestProcessChatUsesConfiguredAgentAndReturnsSSEData(t *testing.T) {
 	}
 	service := newTestService(repo, now, "user-msg", "ai-msg", "task-1")
 	service.agent = fakeChatAgent{output: ChatAgentOutput{Agent: "tutor", Content: "Eino 回复"}}
+	lease := &fakeAILease{}
+	guard := &fakeAIGuard{lease: lease}
+	WithAIRequestGuard(guard)(service)
 
 	result, err := service.ProcessChat(context.Background(), "session-1", "student-1", "你好", []string{"/uploads/images/a.png"})
 	if err != nil {
@@ -57,6 +62,29 @@ func TestProcessChatUsesConfiguredAgentAndReturnsSSEData(t *testing.T) {
 	}
 	if repo.insertedMessages[1].Role != "assistant" || repo.insertedMessages[1].Content != "Eino 回复" {
 		t.Fatalf("assistant message = %#v", repo.insertedMessages[1])
+	}
+	if repo.meteredMessages != 1 || repo.meteredStudentID != "student-1" || repo.meteredUsageDate != "2026-04-26" {
+		t.Fatalf("metered reply = count=%d student=%q date=%q", repo.meteredMessages, repo.meteredStudentID, repo.meteredUsageDate)
+	}
+	if guard.source != "session_chat" || guard.content != "你好" || !guard.metered || lease.releases != 1 {
+		t.Fatalf("guard=%#v lease releases=%d", guard, lease.releases)
+	}
+}
+
+func TestProcessChatStopsBeforePersistenceWhenGuardRejects(t *testing.T) {
+	repo := &fakeSessionRepo{
+		session:    LearningSession{ID: "session-1", StudentID: "student-1", IsActive: true},
+		hasSession: true,
+	}
+	service := newTestService(repo, time.Date(2026, time.April, 26, 9, 0, 0, 0, time.UTC), "user-msg")
+	service.guard = &fakeAIGuard{err: airiskapp.ErrContentBlocked}
+
+	_, err := service.ProcessChat(context.Background(), "session-1", "student-1", "违规内容", nil)
+	if !errors.Is(err, airiskapp.ErrContentBlocked) {
+		t.Fatalf("ProcessChat() error = %v", err)
+	}
+	if len(repo.insertedMessages) != 0 {
+		t.Fatalf("inserted messages = %#v", repo.insertedMessages)
 	}
 }
 
@@ -116,6 +144,9 @@ func TestProcessChatFallsBackWhenAgentIsNotConfigured(t *testing.T) {
 	if !strings.Contains(result.Content, "智能导师尚未配置") {
 		t.Fatalf("fallback content = %q", result.Content)
 	}
+	if repo.meteredMessages != 0 {
+		t.Fatalf("fallback metered messages = %d", repo.meteredMessages)
+	}
 }
 
 func TestProcessChatFallsBackWhenAgentFails(t *testing.T) {
@@ -136,6 +167,9 @@ func TestProcessChatFallsBackWhenAgentFails(t *testing.T) {
 	}
 	if len(repo.insertedMessages) != 2 || repo.insertedMessages[1].Role != "assistant" {
 		t.Fatalf("messages = %#v", repo.insertedMessages)
+	}
+	if repo.meteredMessages != 0 {
+		t.Fatalf("failed-agent fallback metered messages = %d", repo.meteredMessages)
 	}
 }
 
@@ -267,6 +301,9 @@ type fakeSessionRepo struct {
 	session           LearningSession
 	hasSession        bool
 	insertedMessages  []Message
+	meteredMessages   int
+	meteredStudentID  string
+	meteredUsageDate  string
 	messages          []Message
 	messageTotal      int
 	lastMessageLimit  int
@@ -284,6 +321,30 @@ type fakeSessionRepo struct {
 type fakeChatAgent struct {
 	output ChatAgentOutput
 	err    error
+}
+
+type fakeAIGuard struct {
+	lease     airiskapp.Lease
+	err       error
+	studentID string
+	source    string
+	content   string
+	metered   bool
+}
+
+type fakeAILease struct{ releases int }
+
+func (l *fakeAILease) Release(context.Context) error {
+	l.releases++
+	return nil
+}
+
+func (g *fakeAIGuard) Acquire(_ context.Context, studentID, source, content string, metered bool) (airiskapp.Lease, error) {
+	g.studentID = studentID
+	g.source = source
+	g.content = content
+	g.metered = metered
+	return g.lease, g.err
 }
 
 func (a fakeChatAgent) Generate(context.Context, ChatAgentInput) (ChatAgentOutput, error) {
@@ -305,6 +366,14 @@ func (r *fakeSessionRepo) GetSession(context.Context, string, string) (LearningS
 
 func (r *fakeSessionRepo) InsertMessage(_ context.Context, message Message) error {
 	r.insertedMessages = append(r.insertedMessages, message)
+	return nil
+}
+
+func (r *fakeSessionRepo) InsertMeteredAssistantMessage(_ context.Context, studentID string, message Message, usageDate string) error {
+	r.insertedMessages = append(r.insertedMessages, message)
+	r.meteredMessages++
+	r.meteredStudentID = studentID
+	r.meteredUsageDate = usageDate
 	return nil
 }
 

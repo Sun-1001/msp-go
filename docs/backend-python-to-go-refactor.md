@@ -2,8 +2,8 @@
 
 > 文档定位：本文是仓库规则要求保留的迁移阶段跟踪与验证证据，不作为通用路线图。当前跨模块未完成事项统一维护在 [项目待办](TODO.md)；任何迁移阶段的开始、阻塞、恢复或完成仍必须同步更新本文。
 
-**Document status**: P4 in progress; P5 done; P6 AI/Agent in progress (Eino Tutor/Portrait/Diagnostician/Math Solver/Question Parser/Question Generator/OCR Agent and admin LLM/Agent config loop wired; OCR and general-math slice delivered, token streaming and live external-provider quality acceptance pending); P7 in progress; P8 static contract handoff done; P9 Python backend removed by user confirmation; repository-wide quality cleanup batch done 2026-07-12
-**Last updated**: 2026-07-17
+**Document status**: P4 in progress; P5 done; P6 AI/Agent in progress (Eino Tutor/Portrait/Diagnostician/Math Solver/Question Parser/Question Generator/OCR Agent, admin LLM/Agent config loop, and uniform student AI risk center wired; OCR, general-math, and student AI risk-control slices delivered, token streaming and live external-provider quality acceptance pending); P7 in progress; P8 static contract handoff done; P9 Python backend removed by user confirmation; repository-wide quality cleanup batch done 2026-07-12
+**Last updated**: 2026-07-21
 **适用范围**：原 `backend/` Python FastAPI 后端整体迁移到 Go 后端；`backend/` 已从当前工作区删除
 **重构原则**：接口兼容、数据连续、分阶段验收、每阶段完成必须更新本文档
 
@@ -339,6 +339,7 @@ backend-go/
 - 已落地 Go/Eino 错因诊断 Diagnostician Agent：`/exercise/submit` 对错误答案优先读取持久化 `diagnostician` Agent 配置生成结构化 C/P/L/S-Type 诊断；没有后台配置、模型不可用、JSON 格式无效或生成空内容时保留本地基础诊断降级。
 - 已落地 Go/Eino 题目解析 Question Parser Agent：`/questions/ai-parse` 优先读取持久化 `question_parser` Agent 配置抽取题目候选；没有后台配置、模型不可用、JSON 格式无效或必填字段缺失时保留确定性形状兼容解析降级。
 - `/admin/ai-config/*` 已实现管理员鉴权后的 provider/model/Agent 配置闭环，支持 provider/model CRUD、provider test、模型拉取、provider 模型列表替换和 Agent 配置 CRUD；前端 AI 模型设置页已具备后端闭环。
+- 已落地管理员学生 AI 风控中心：所有学生共享系统级每日成功聊天回复额度和每生并发上限，不提供单生差异化额度；额度按 `Asia/Shanghai` 自然日统计，仅成功持久化的真实 Tutor 回复计数，欢迎语、模型失败/空回复降级、取消和风控拦截不计数。会话聊天、AI 出题、判题、解析和画像生成共享 AI 独立封禁、管理员解封、关键词内容拦截和 Redis 分布式并发租约；非聊天 AI 能力按产品口径不消耗回复额度。
 - 已落地 Go/Eino 图片答案 OCR：`/exercise/submit` 从当前 Local/Qiniu/S3 存储可信命名空间回读并完整解码 PNG/JPEG/GIF，以多模态 Base64 调用 `ocr` Agent；文本与图片同时提交时文本优先。授权、OCR、数学判定和诊断都在事务前完成，任何不确定、超时、不可用或无效响应均不创建 attempt、diagnosis、learning session，不更新 DKT/profile。
 - 已扩展通用数学求解：本地三态比较覆盖规范化文本、表达式、证明、有理数、科学计数法和绝对/相对容差；超出本地确定性范围的代数、三角、极限、导数、积分、方程/解集、矩阵和证明题交由 Eino `math_solver`。无缓存解析先盲解，再分别验证候选答案和推导步骤；失败返回结构化 `failure`，不暴露未验证步骤。
 
@@ -428,6 +429,7 @@ backend-go/
 | P3 | `/teacher` | DONE | Go P5 已承接教师工作台统计、学生管理统计、教师数据分析、班级分析和教师视角学生详情 |
 | P3 | `/admin/knowledge` | DONE | Go P5 已承接知识节点/关系 CRUD、分页筛选、章节、简要节点列表和统计 |
 | P4 | `/admin/ai-config` | DONE | AI 配置；Go 已承接 provider/model/Agent 配置、provider test/fetch、模型列表替换和运行时 Tutor/Portrait/Diagnostician/Math Solver/Question Parser/Question Generator/OCR 配置选择 |
+| P4 | `/admin/risk-control` | DONE | 管理员学生 AI 风控中心；统一每日成功聊天回复额度、每生 Redis 分布式并发上限、关键词内容拦截、AI 独立封禁/解封、学生用量列表、风险事件审计和概览均由 Go 承接 |
 | P5 | `/xidian` | DONE | Go P7 已承接绑定状态、验证码挑战、绑定完成、解绑、课表/考试/成绩同步和快照读取；外部门户 live 验证留到有西电凭证的集成环境 |
 | P5 | `/upload` | DONE | Go P7 已承接图片上传、教师资源文件上传、本地 `/uploads` 文件落盘、S3 兼容对象存储和七牛云对象存储适配；2026-06-01 起图片上传要求登录、增加用户/IP 速率限制、按真实图片内容校验，本地 `/uploads` 禁止目录索引；2026-07-02 本地静态上传访问收紧到规范化的 `images/`、`documents/`、`videos/` 文件路径 |
 | P5 | `/admin/security-logs` | DONE | Go P7 已承接列表筛选/分页/日期分组、统计、删除、JSON/CSV 导出、归档、每日报告、清理和容量查询 |
@@ -566,6 +568,8 @@ pytest
 | R63 | OCR 未实现或不可靠时把纯图片答案按错误作答持久化 | 无法解析的图片会被误记为错误答案并生成 S-Type 诊断，污染 attempt、learning session 与 DKT 掌握度 | MITIGATED | 2026-07-15 已接入可信存储回读、完整图片解码、多模态 OCR、最低置信度和三态数学判定；授权、OCR、判题、诊断全部位于事务前，事务内以 `FOR SHARE` 锁定题目到学习状态写入提交，不确定/失败/并发变化路径写入增量为零。文本附图保持文本优先；历史图片答案 attempt、DKT state 与 profile mastery 的扫描/清理仍作为独立待办保留 |
 | R64 | 教师作业页在无后端路由、仓储或数据表时仍暴露完整可操作 UI | 教师进入后只会看到恒空列表，创建、发布、批改等按钮无事件，形成虚假功能承诺 | MITIGATED | 2026-07-10 删除恒空 assignment service/test、不可达作业类型和完整假页面，并移除教师路由、导航、工作台、学生详情、指南与 README 中的作业入口；恢复前必须先实现 Go 路由、持久化、权限和端到端测试 |
 | R65 | 个人中心邮箱验证/换绑按钮必然本地抛错，手机绑定按钮无事件，且 `email_verified` 无 Go 数据来源 | 用户被长期显示为“未验证”并进入必败或无响应交互，前端缓存维护不存在的服务端状态 | MITIGATED | 2026-07-10 删除邮箱绑定/验证弹窗、占位 service/test、`email_verified` 缓存字段和无事件手机绑定行；注册邮箱保留只读展示并继续用于账户联系与密码找回；未来恢复自助换绑需先补完整 Go 安全边界 |
+| R66 | 学生 AI 内容风控仅使用管理员配置的大小写不敏感子串关键词 | 变体、谐音、拆字、多语言或隐含意图可能绕过规则，宽泛关键词也可能误拦正常学习讨论 | ACCEPTED | 2026-07-21 首版按产品要求提供可审计的确定性关键词拦截，命中时不调用模型并记录规则、内容摘要和哈希；明确不宣称等同语义审核。后续应结合教育场景审核模型、规则版本、申诉/复核和误报指标迭代 |
+| R67 | 学生 AI 并发与在途额度预留依赖 Redis，且数据库用量账本与 Redis 租约不存在跨系统事务 | Redis 故障会暂时拒绝全部受控 AI 请求；回复持久化失败或租约释放失败时可能在 TTL 内少一个可用槽位 | MITIGATED | 2026-07-21 风控采用 fail-closed，禁止 Redis 故障时绕过封禁/并发/额度；每个租约有 10 分钟 TTL，释放幂等，数据库以单条 CTE 原子写入成功回复和不可回退的额度账本。后续应增加 Redis 可用性告警、租约拒绝指标和多节点故障演练；当前 key 设计仅按单节点 Redis 验证，未声明 Redis Cluster 兼容 |
 | R9 | 当前机器未配置可连接 PostgreSQL 测试库且 Docker CLI 不可用 | P2 数据库迁移/Repository 集成验收不能在本机闭环 | CLOSED | 已使用本地 PostgreSQL `math_platform` 执行清库、Go 迁移、重复迁移和迁移集成测试；Docker CLI 仍不可用但不阻塞 P2 |
 
 ---
@@ -1390,3 +1394,15 @@ pytest
 - 验证结果（2026-07-17）：metrics、middleware、httpserver、cmd/api 定向测试和竞态检查通过；全部实现包与 migration 测试通过；`go vet ./...` 和本批次包 staticcheck 通过；metrics 语句覆盖率 98.3%。`BenchmarkStoreObserveHTTPRequest-32` 三次为 36.74-37.40 ns/op，并行版本为 68.02-74.92 ns/op，均为 0 B/op、0 allocs/op。契约测试仍且仅 `TestLegacyPythonBackendDirectoryIsAbsent` 因本批次前已存在的 `backend/uploads/` 失败。
 - 交付物：`backend-go/internal/platform/metrics/metrics.go` 及测试、`backend-go/internal/platform/middleware/middleware.go` 及测试、HTTP server 集成测试、`backend-go/cmd/api/main.go` 连接池适配、部署监控说明、TODO 和本迁移追踪记录。
 - 残余风险：微基准只覆盖 Store 观察核心，不包含 `time.Now`、ResponseWriter 包装和真实 Prometheus 抓取；直方图 bucket 需要结合生产分布再校准。指标为进程内状态，实例重启会归零；当前不含 response size、SQL 单查询耗时或 exemplars。预存 `backend/uploads/` 继续阻断唯一 Go-only 目录契约，本批次未在笼统优化授权下删除该既有目录。
+
+### 2026-07-21
+
+- 学生 AI 风控中心切片（P6 横切）启动状态：`IN_PROGRESS`；启动日期：2026-07-21；最终状态：`DONE`；完成日期：2026-07-21。P6 整体仍为 `IN_PROGRESS`，token 级流式和真实外部 provider 质量验收范围不变。
+- 本切片范围与口径：参考 `Wei-Shaw/sub2api` 的用户额度、Redis 在途租约和审核日志边界，在管理员端新增学生 AI 风控中心。所有学生共享同一系统级每日额度和每生并发上限，不支持单生差异化额度；每日额度按 `Asia/Shanghai` 自然日重置，只在真实 Tutor 输出成功且助手消息与额度账本以同一 SQL 持久化后按一条回复计 1。欢迎语、模型未配置/调用失败/空输出降级、取消和风控拒绝不计数；AI 出题、答案判定/OCR/诊断、题目解析和画像生成共享 AI 独立封禁、关键词与并发限制，但按产品决定不消耗聊天回复额度。
+- 已完成实现：新增 `0004_student_ai_risk_control.up.sql`，保存统一策略、学生 AI 独立封禁、不可因删除会话退还的成功回复账本和风险事件；新增 Go `application/airisk`、PostgreSQL repository、Redis ZSET/Lua 分布式租约、管理员 handler 和 composition-root 接线。Redis 或风控存储失败时 fail-closed；聊天返回稳定 SSE 风控错误码，其他受控 HTTP 能力返回稳定 JSON 错误码。管理员可查看概览、搜索/筛选学生用量、封禁/解封 AI 权限、编辑统一策略和查询内容/管理员动作事件；前端新增 `/admin/risk-control` 页面、导航、service、types 和交互测试。
+- 管理员 API：`GET /api/v1/admin/risk-control/overview`、`GET/PUT /api/v1/admin/risk-control/settings`、`GET /api/v1/admin/risk-control/students`、`PATCH /api/v1/admin/risk-control/students/{id}/access`、`GET /api/v1/admin/risk-control/events`。封禁只暂停学生 AI 能力，不停用平台账户。
+- 验证命令：`go test ./internal/adapter/postgres ./internal/adapter/http/session -count=1`；`go test ./cmd/api ./internal/application/airisk ./internal/application/session ./internal/adapter/http/adminairisk ./internal/adapter/http/exercise ./internal/adapter/http/portrait ./internal/adapter/http/session ./internal/adapter/postgres ./internal/adapter/redis ./migrations -count=1`；`go test ./internal/application/airisk ./internal/adapter/http/adminairisk ./internal/adapter/redis -cover -count=1`；`go test ./... -count=1`；`go test -race ./cmd/api ./internal/... ./migrations -count=1`；`go vet ./...`；`go build -o C:\tmp\msp-go-api.exe ./cmd/api`；`go test ./tests/contract -run "TestFrontendAPICallsAreCoveredByGoOrExplicitlyClassified|TestGoRouteModulesAreRegistered|TestGoErrorBodiesExposeStableCompatibilityFields" -count=1`；前端 `pnpm.cmd exec vitest run src/pages/admin/AIRiskControlPage.test.tsx src/modules/admin/services/aiRiskService.test.ts`、`pnpm.cmd test`、`pnpm.cmd run lint`、`pnpm.cmd run build`；`git diff --check`。
+- 验证结果：风控应用层、Redis 租约、PostgreSQL 原子回复账本/管理员仓储、管理员 HTTP、会话 SSE 错误码、练习/画像接线和 migration 定向测试通过；核心 `application/airisk` 语句覆盖率为 87.4%。全部 Go 实现包及 migration 竞态检测通过，`go vet` 和后端构建通过；新增前后端路由契约通过。前端 62 个测试文件共 412 项测试通过，ESLint 0 错误（仅既有 `coverage/` 生成文件 6 条 warning），TypeScript 与 Vite 生产构建通过。`go test ./... -count=1` 的全部实现包通过，仅 `TestLegacyPythonBackendDirectoryIsAbsent` 因本切片前已存在且被忽略的 `backend/uploads/` 失败；本切片未擅自删除该目录。
+- 浏览器验收结果：应用内浏览器首次检查命中了开发服务器在页面文件创建前留下的 Vite 热更新错误覆盖层；随后刷新被宿主 URL 安全策略拒绝，且浏览器技能禁止改用其他浏览器或命令行 Playwright 绕过。因此本切片未声明真实桌面/移动视口验收通过；组件交互测试和生产构建已通过，视觉与实际后端联调仍需在允许访问本地 URL 的浏览器环境补验。
+- 交付物：`backend-go/internal/application/airisk`、`backend-go/internal/adapter/http/adminairisk`、`backend-go/internal/adapter/postgres/ai_risk_repository.go`、`backend-go/internal/adapter/redis/ai_risk_slot_store.go`、`backend-go/migrations/0004_student_ai_risk_control.up.sql`、聊天/练习/画像风控接线及测试、`frontend/src/pages/admin/AIRiskControlPage.tsx`、管理员风控 service/types/routes/navigation 及测试、本迁移追踪记录。
+- 残余风险：关键词子串规则不等同语义安全审核，仍存在变体绕过和误报，需要后续引入教育场景审核模型、申诉复核、规则版本与误报/漏报指标；Redis fail-closed 会在依赖故障时暂停全部受控 AI 请求，租约/数据库跨系统无事务且当前未验证 Redis Cluster；非聊天 AI 能力按产品口径不计额度，仍应以独立速率限制和成本指标控制资源消耗；风险事件保存命中摘要，尚未定义自动保留/脱敏周期；本轮未执行真实 PostgreSQL migration、真实多实例 Redis 故障演练、外部 LLM 成本/质量压测和浏览器视觉验收。预存 `backend/uploads/` 继续阻断唯一 Go-only 目录契约。

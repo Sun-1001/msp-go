@@ -12,6 +12,7 @@ import (
 	"strings"
 	"testing"
 
+	airiskapp "mathstudy/backend-go/internal/application/airisk"
 	authapp "mathstudy/backend-go/internal/application/auth"
 	sessionapp "mathstudy/backend-go/internal/application/session"
 	"mathstudy/backend-go/internal/domain/user"
@@ -123,6 +124,75 @@ func TestChatNotFoundWritesSSEError(t *testing.T) {
 	}
 	if !strings.Contains(recorder.Body.String(), "SESSION_NOT_FOUND") {
 		t.Fatalf("body = %s", recorder.Body.String())
+	}
+}
+
+func TestChatMapsAIRiskErrorsToSSECodes(t *testing.T) {
+	tests := []struct {
+		name        string
+		err         error
+		wantCode    string
+		wantMessage string
+	}{
+		{
+			name:        "access blocked",
+			err:         airiskapp.Error{Kind: airiskapp.ErrAccessBlocked, Message: "你的 AI 使用权限已被管理员暂停：违规"},
+			wantCode:    "AI_ACCESS_BLOCKED",
+			wantMessage: "你的 AI 使用权限已被管理员暂停：违规",
+		},
+		{
+			name:        "content blocked",
+			err:         airiskapp.Error{Kind: airiskapp.ErrContentBlocked, Message: "该内容触发平台安全规则，请调整后重试"},
+			wantCode:    "AI_CONTENT_BLOCKED",
+			wantMessage: "该内容触发平台安全规则，请调整后重试",
+		},
+		{
+			name:        "quota exceeded",
+			err:         airiskapp.Error{Kind: airiskapp.ErrQuotaExceeded, Message: "今日 AI 回复额度已用完，请明天再试"},
+			wantCode:    "AI_DAILY_QUOTA_EXCEEDED",
+			wantMessage: "今日 AI 回复额度已用完，请明天再试",
+		},
+		{
+			name:        "concurrency exceeded",
+			err:         airiskapp.Error{Kind: airiskapp.ErrConcurrencyExceeded, Message: "已有 AI 请求处理中，请等待完成后再试"},
+			wantCode:    "AI_CONCURRENCY_LIMIT",
+			wantMessage: "已有 AI 请求处理中，请等待完成后再试",
+		},
+		{
+			name:        "guard unavailable is redacted",
+			err:         airiskapp.Error{Kind: airiskapp.ErrUnavailable, Message: "redis failed token=secret"},
+			wantCode:    "AI_GUARD_UNAVAILABLE",
+			wantMessage: "AI 风控服务暂不可用，请稍后重试",
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			service := &fakeSessionService{chatErr: test.err}
+			auth := &fakeAuthenticator{principal: authapp.Principal{UserID: "student-1", Role: user.RoleStudent}}
+			handler := newTestHandler(t, service, auth)
+			mux := http.NewServeMux()
+			handler.Register(mux, "/api/v1/session")
+
+			recorder := httptest.NewRecorder()
+			request := httptest.NewRequest(http.MethodPost, "/api/v1/session/session-1/chat", strings.NewReader(`{"message":"你好"}`))
+			request.Header.Set("Authorization", "Bearer token")
+			mux.ServeHTTP(recorder, request)
+
+			if recorder.Code != http.StatusOK {
+				t.Fatalf("status = %d, body = %s", recorder.Code, recorder.Body.String())
+			}
+			if contentType := recorder.Header().Get("Content-Type"); !strings.Contains(contentType, "text/event-stream") {
+				t.Fatalf("content type = %q", contentType)
+			}
+			body := recorder.Body.String()
+			if !strings.Contains(body, `"code":"`+test.wantCode+`"`) || !strings.Contains(body, `"message":"`+test.wantMessage+`"`) {
+				t.Fatalf("body = %s", body)
+			}
+			if strings.Contains(body, "token=secret") {
+				t.Fatalf("body leaked internal error: %s", body)
+			}
+		})
 	}
 }
 

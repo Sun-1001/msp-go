@@ -13,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	airiskapp "mathstudy/backend-go/internal/application/airisk"
 	authapp "mathstudy/backend-go/internal/application/auth"
 	exerciseapp "mathstudy/backend-go/internal/application/exercise"
 	mathsolverapp "mathstudy/backend-go/internal/application/mathsolver"
@@ -105,6 +106,40 @@ func TestGenerateCreatesStudentAIExercise(t *testing.T) {
 	}
 	if !strings.Contains(recorder.Body.String(), `"source":"ai_generated"`) {
 		t.Fatalf("body = %s", recorder.Body.String())
+	}
+}
+
+func TestAIGuardBlocksExerciseOperationsAndReleasesAllowedLease(t *testing.T) {
+	service := &fakeExerciseService{generateResponse: &exerciseapp.ExerciseResponse{ID: "generated-1"}}
+	auth := &fakeAuthenticator{principal: authapp.Principal{UserID: "student-1", Role: user.RoleStudent}}
+	guard := &fakeAIGuard{err: airiskapp.Error{Kind: airiskapp.ErrAccessBlocked, Message: "AI 已封禁"}}
+	handler, err := NewHandler(nil, service, auth, WithAIRequestGuard(guard))
+	if err != nil {
+		t.Fatalf("NewHandler() error = %v", err)
+	}
+	mux := http.NewServeMux()
+	handler.Register(mux, "/api/v1/exercise")
+
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodPost, "/api/v1/exercise/generate", strings.NewReader(`{"concept_id":"limit","difficulty":0.5}`))
+	request.Header.Set("Authorization", "Bearer token")
+	mux.ServeHTTP(recorder, request)
+	if recorder.Code != http.StatusForbidden || service.generateCalled {
+		t.Fatalf("blocked status=%d service=%#v body=%s", recorder.Code, service, recorder.Body.String())
+	}
+
+	lease := &fakeAILease{}
+	guard.err = nil
+	guard.lease = lease
+	recorder = httptest.NewRecorder()
+	request = httptest.NewRequest(http.MethodPost, "/api/v1/exercise/submit", strings.NewReader(`{"exercise_id":"exercise-1","answer_text":"我的答案","answer_steps":["第一步"]}`))
+	request.Header.Set("Authorization", "Bearer token")
+	mux.ServeHTTP(recorder, request)
+	if recorder.Code != http.StatusOK || !service.submitCalled {
+		t.Fatalf("allowed status=%d service=%#v body=%s", recorder.Code, service, recorder.Body.String())
+	}
+	if guard.source != "exercise_submit" || !strings.Contains(guard.content, "我的答案") || guard.metered || lease.releases != 1 {
+		t.Fatalf("guard=%#v lease releases=%d", guard, lease.releases)
 	}
 }
 
@@ -508,6 +543,28 @@ func assertNoExerciseCredentialLeak(t *testing.T, value string) {
 
 type fakeAuthenticator struct {
 	principal authapp.Principal
+}
+
+type fakeAIGuard struct {
+	lease   airiskapp.Lease
+	err     error
+	source  string
+	content string
+	metered bool
+}
+
+type fakeAILease struct{ releases int }
+
+func (l *fakeAILease) Release(context.Context) error {
+	l.releases++
+	return nil
+}
+
+func (g *fakeAIGuard) Acquire(_ context.Context, _ string, source, content string, metered bool) (airiskapp.Lease, error) {
+	g.source = source
+	g.content = content
+	g.metered = metered
+	return g.lease, g.err
 }
 
 func (a *fakeAuthenticator) DecodeAccessToken(string) (authapp.Principal, bool) {

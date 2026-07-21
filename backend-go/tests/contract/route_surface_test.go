@@ -40,6 +40,7 @@ var routeModules = []routeModule{
 	{Name: "/admin/knowledge", GoHandlerFile: "backend-go/internal/adapter/http/knowledge/handler.go"},
 	{Name: "/admin/inbox", GoHandlerFile: "backend-go/internal/adapter/http/admininbox/handler.go"},
 	{Name: "/admin/ai-config", GoHandlerFile: "backend-go/internal/adapter/http/adminaiconfig/handler.go"},
+	{Name: "/admin/risk-control", GoHandlerFile: "backend-go/internal/adapter/http/adminairisk/handler.go"},
 }
 
 var (

@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"strings"
 
+	airiskapp "mathstudy/backend-go/internal/application/airisk"
 	authapp "mathstudy/backend-go/internal/application/auth"
 	sessionapp "mathstudy/backend-go/internal/application/session"
 	"mathstudy/backend-go/internal/platform/httpauth"
@@ -125,6 +126,9 @@ func (h *Handler) chat(w http.ResponseWriter, r *http.Request) {
 	}
 	result, err := h.service.ProcessChat(r.Context(), r.PathValue("session_id"), principal.UserID, request.Message, request.Attachments)
 	if err != nil {
+		if writeAIRiskSSEError(w, err) {
+			return
+		}
 		if errors.Is(err, sessionapp.ErrInvalidAttachment) {
 			writeSessionError(w, http.StatusUnprocessableEntity, "VALIDATION_ERROR", "附件必须是已上传的图片")
 			return
@@ -138,6 +142,24 @@ func (h *Handler) chat(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeSSEChatResult(w, result)
+}
+
+func writeAIRiskSSEError(w http.ResponseWriter, err error) bool {
+	switch {
+	case errors.Is(err, airiskapp.ErrAccessBlocked):
+		writeSessionSSEError(w, "AI_ACCESS_BLOCKED", err.Error())
+	case errors.Is(err, airiskapp.ErrContentBlocked):
+		writeSessionSSEError(w, "AI_CONTENT_BLOCKED", err.Error())
+	case errors.Is(err, airiskapp.ErrQuotaExceeded):
+		writeSessionSSEError(w, "AI_DAILY_QUOTA_EXCEEDED", err.Error())
+	case errors.Is(err, airiskapp.ErrConcurrencyExceeded):
+		writeSessionSSEError(w, "AI_CONCURRENCY_LIMIT", err.Error())
+	case errors.Is(err, airiskapp.ErrUnavailable):
+		writeSessionSSEError(w, "AI_GUARD_UNAVAILABLE", "AI 风控服务暂不可用，请稍后重试")
+	default:
+		return false
+	}
+	return true
 }
 
 func (h *Handler) history(w http.ResponseWriter, r *http.Request) {

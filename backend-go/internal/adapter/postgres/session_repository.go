@@ -95,6 +95,46 @@ func (r SessionRepository) InsertMessage(ctx context.Context, message sessionapp
 	return err
 }
 
+// InsertMeteredAssistantMessage atomically stores a successful reply and its quota ledger row.
+func (r SessionRepository) InsertMeteredAssistantMessage(ctx context.Context, studentID string, message sessionapp.Message, usageDate string) error {
+	attachmentsRaw, err := json.Marshal(message.Attachments)
+	if err != nil {
+		return err
+	}
+	_, err = r.DB().Exec(ctx, `
+		WITH inserted_message AS (
+			INSERT INTO public.session_messages (
+				id,
+				session_id,
+				role,
+				content,
+				agent_type,
+				attachments,
+				related_concept_ids,
+				related_content_id,
+				created_at
+			)
+			VALUES ($1, $2, $3::public.messagerole, $4, $5::public.agenttype, $6::json, '[]'::json, NULL, $7)
+			RETURNING id
+		)
+		INSERT INTO public.student_ai_reply_usage (
+			id, student_id, session_id, message_id, usage_date, created_at
+		)
+		SELECT id, $8, $2, id, $9::date, $7
+		FROM inserted_message`,
+		message.ID,
+		message.SessionID,
+		roleToDB(message.Role),
+		message.Content,
+		agentToDB(message.Agent),
+		string(attachmentsRaw),
+		message.CreatedAt,
+		studentID,
+		usageDate,
+	)
+	return err
+}
+
 // ListMessages returns session messages in ascending chronological order.
 func (r SessionRepository) ListMessages(ctx context.Context, sessionID string, limit int, offset int) ([]sessionapp.Message, int, error) {
 	var total int

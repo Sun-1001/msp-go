@@ -10,6 +10,7 @@ import (
 
 	goredis "github.com/redis/go-redis/v9"
 
+	airiskapp "mathstudy/backend-go/internal/application/airisk"
 	authapp "mathstudy/backend-go/internal/application/auth"
 	exerciseapp "mathstudy/backend-go/internal/application/exercise"
 	"mathstudy/backend-go/internal/platform/httpauth"
@@ -34,6 +35,11 @@ type Authenticator interface {
 	DecodeAccessToken(string) (authapp.Principal, bool)
 }
 
+// AIRequestGuard applies AI-only access, content, and concurrency controls.
+type AIRequestGuard interface {
+	Acquire(context.Context, string, string, string, bool) (airiskapp.Lease, error)
+}
+
 // Handler serves /exercise endpoints.
 type Handler struct {
 	service    Service
@@ -41,6 +47,7 @@ type Handler struct {
 	logger     *slog.Logger
 	limiter    *ratelimit.Limiter
 	ocrLimiter *ratelimit.Limiter
+	guard      AIRequestGuard
 }
 
 const (
@@ -81,6 +88,14 @@ func WithRedisRateLimit(client *goredis.Client, maxLocalKeys int) Option {
 			return err
 		}
 		handler.ocrLimiter = ocrLimiter
+		return nil
+	}
+}
+
+// WithAIRequestGuard enables student AI controls for AI-backed exercise operations.
+func WithAIRequestGuard(guard AIRequestGuard) Option {
+	return func(handler *Handler) error {
+		handler.guard = guard
 		return nil
 	}
 }
@@ -171,6 +186,11 @@ func (h *Handler) generate(w http.ResponseWriter, r *http.Request) {
 		writeExerciseError(w, http.StatusUnprocessableEntity, "VALIDATION_ERROR", "difficulty 必须在 0 到 1 之间")
 		return
 	}
+	lease, ok := h.acquireAILease(w, r, principal.UserID, "exercise_generate", "")
+	if !ok {
+		return
+	}
+	defer releaseAILease(lease)
 	if h.limiter != nil && !h.limiter.Allow(r.Context(), principal.UserID) {
 		writeExerciseError(w, http.StatusTooManyRequests, "RATE_LIMITED", "AI 出题过于频繁，请稍后重试")
 		return
@@ -208,6 +228,12 @@ func (h *Handler) submit(w http.ResponseWriter, r *http.Request) {
 		writeExerciseError(w, http.StatusBadRequest, "BAD_REQUEST", "请提供文本答案或答案图片")
 		return
 	}
+	content := strings.TrimSpace(answerText + "\n" + strings.Join(request.AnswerSteps, "\n"))
+	lease, ok := h.acquireAILease(w, r, principal.UserID, "exercise_submit", content)
+	if !ok {
+		return
+	}
+	defer releaseAILease(lease)
 	if strings.TrimSpace(answerText) == "" && h.ocrLimiter != nil && !h.ocrLimiter.Allow(r.Context(), principal.UserID) {
 		writeExerciseError(w, http.StatusTooManyRequests, "OCR_RATE_LIMITED", "图片答案识别请求过于频繁，请稍后重试")
 		return
@@ -252,6 +278,11 @@ func (h *Handler) solution(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	lease, ok := h.acquireAILease(w, r, principal.UserID, "exercise_solution", "")
+	if !ok {
+		return
+	}
+	defer releaseAILease(lease)
 	response, err := h.service.GetSolution(r.Context(), principal.UserID, r.PathValue("exercise_id"))
 	if err != nil {
 		if errors.Is(err, exerciseapp.ErrNotFound) {
@@ -262,6 +293,18 @@ func (h *Handler) solution(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	httpjson.Write(w, http.StatusOK, response)
+}
+
+func (h *Handler) acquireAILease(w http.ResponseWriter, r *http.Request, studentID, source, content string) (airiskapp.Lease, bool) {
+	if h.guard == nil {
+		return nil, true
+	}
+	lease, err := h.guard.Acquire(r.Context(), studentID, source, content, false)
+	if err != nil {
+		h.writeExerciseError(w, err, "AI 请求暂不可用")
+		return nil, false
+	}
+	return lease, true
 }
 
 func (h *Handler) requirePrincipal(w http.ResponseWriter, r *http.Request) (authapp.Principal, bool) {
@@ -276,6 +319,9 @@ func (h *Handler) requireStudent(w http.ResponseWriter, r *http.Request) (authap
 }
 
 func (h *Handler) writeExerciseError(w http.ResponseWriter, err error, fallback string) {
+	if writeAIRiskError(w, err) {
+		return
+	}
 	if errors.Is(err, exerciseapp.ErrAIGenerationUnavailable) {
 		writeExerciseError(w, http.StatusServiceUnavailable, "AI_GENERATION_UNAVAILABLE", "AI 出题服务暂不可用，请稍后重试")
 		return
@@ -326,6 +372,33 @@ func (h *Handler) writeExerciseError(w http.ResponseWriter, err error, fallback 
 	}
 	h.logger.Error("exercise request failed", "error", redact.String(err.Error()))
 	writeExerciseError(w, http.StatusInternalServerError, "INTERNAL_ERROR", fallback)
+}
+
+func writeAIRiskError(w http.ResponseWriter, err error) bool {
+	switch {
+	case errors.Is(err, airiskapp.ErrAccessBlocked):
+		writeExerciseError(w, http.StatusForbidden, "AI_ACCESS_BLOCKED", err.Error())
+	case errors.Is(err, airiskapp.ErrContentBlocked):
+		writeExerciseError(w, http.StatusUnprocessableEntity, "AI_CONTENT_BLOCKED", err.Error())
+	case errors.Is(err, airiskapp.ErrQuotaExceeded):
+		writeExerciseError(w, http.StatusTooManyRequests, "AI_DAILY_QUOTA_EXCEEDED", err.Error())
+	case errors.Is(err, airiskapp.ErrConcurrencyExceeded):
+		writeExerciseError(w, http.StatusTooManyRequests, "AI_CONCURRENCY_LIMIT", err.Error())
+	case errors.Is(err, airiskapp.ErrUnavailable):
+		writeExerciseError(w, http.StatusServiceUnavailable, "AI_GUARD_UNAVAILABLE", "AI 风控服务暂不可用，请稍后重试")
+	default:
+		return false
+	}
+	return true
+}
+
+func releaseAILease(lease airiskapp.Lease) {
+	if lease == nil {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	_ = lease.Release(ctx)
 }
 
 func parseNextQuery(w http.ResponseWriter, r *http.Request) (exerciseapp.NextQuery, bool) {
