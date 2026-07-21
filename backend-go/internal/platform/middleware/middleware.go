@@ -178,14 +178,30 @@ func parseEncodingQuality(item string) (string, float64) {
 	return name, quality
 }
 
-// RequestMetrics increments the process request counter.
+// RequestMetrics records request count, duration, route template, and status class.
 func RequestMetrics(store *metrics.Store) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			store.IncRequests()
-			next.ServeHTTP(w, r)
+			start := time.Now()
+			recorder := &statusRecorder{ResponseWriter: w, status: http.StatusOK}
+			next.ServeHTTP(recorder, r)
+			store.ObserveHTTPRequest(r.Method, metricRoute(r), recorder.status, time.Since(start))
 		})
 	}
+}
+
+func metricRoute(r *http.Request) string {
+	pattern := strings.TrimSpace(r.Pattern)
+	if pattern != "" {
+		if method, route, found := strings.Cut(pattern, " "); found && strings.EqualFold(method, r.Method) {
+			return strings.TrimSpace(route)
+		}
+		return pattern
+	}
+	if r.Method == http.MethodOptions {
+		return "<cors-preflight>"
+	}
+	return "<unmatched>"
 }
 
 // RequestLogger writes one structured log entry per request.

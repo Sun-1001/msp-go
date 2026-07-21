@@ -49,6 +49,33 @@ docker compose up -d backend frontend
 - TLS、HSTS、CSP 和其他安全响应头由边缘代理统一设置；
 - `/metrics` 和详细健康信息只对管理网络开放。
 
+## 监控指标
+
+`GET /metrics` 使用 Prometheus text exposition，并保留既有无标签总计 `msp_http_requests_total`。新增指标包括：
+
+- `msp_http_server_requests_total{method,route,status_class}`：按 HTTP 方法、ServeMux 路由模板和状态类别统计请求量。
+- `msp_http_server_request_duration_seconds`：使用相同低基数标签的请求时延直方图。
+- `msp_postgres_pool_*`：pgx 连接上限、当前 total/acquired/idle/constructing、获取次数、等待和取消。
+- `msp_redis_pool_*`：go-redis 当前连接、连接复用命中/未命中、等待、超时和不可用连接。
+
+`route` 只使用注册路由模板；未匹配请求和 CORS preflight 使用固定占位符。不要把原始 URL、用户 ID、request ID 或错误文本加入 label。常用查询示例：
+
+```promql
+# 各路由 5 分钟 P95
+histogram_quantile(
+  0.95,
+  sum by (le, method, route) (
+    rate(msp_http_server_request_duration_seconds_bucket[5m])
+  )
+)
+
+# PostgreSQL 连接池占用率
+msp_postgres_pool_connections{state="acquired"}
+  / msp_postgres_pool_max_connections
+```
+
+部署告警至少应覆盖 HTTP 5xx 比例、核心路由 P95/P99、PostgreSQL canceled/empty acquire 增长，以及 Redis pool timeout/wait 增长。
+
 ## 上线验证
 
 ```powershell

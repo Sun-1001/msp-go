@@ -208,6 +208,13 @@ func TestCORSPreflight(t *testing.T) {
 
 func TestMetricsRoute(t *testing.T) {
 	handler := testHandler(t)
+	healthRecorder := httptest.NewRecorder()
+	healthRequest := httptest.NewRequest(http.MethodGet, "/health", nil)
+	handler.ServeHTTP(healthRecorder, healthRequest)
+	if healthRecorder.Code != http.StatusOK {
+		t.Fatalf("health status = %d", healthRecorder.Code)
+	}
+
 	recorder := httptest.NewRecorder()
 	request := httptest.NewRequest(http.MethodGet, "/metrics", nil)
 	request.RemoteAddr = "127.0.0.1:1234"
@@ -219,6 +226,9 @@ func TestMetricsRoute(t *testing.T) {
 	}
 	if recorder.Header().Get("Content-Type") != metrics.ContentType {
 		t.Fatalf("Content-Type = %q", recorder.Header().Get("Content-Type"))
+	}
+	if want := `msp_http_server_requests_total{method="GET",route="/health",status_class="2xx"} 1`; !strings.Contains(recorder.Body.String(), want) {
+		t.Fatalf("metrics response missing %q in:\n%s", want, recorder.Body.String())
 	}
 }
 

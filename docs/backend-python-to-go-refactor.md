@@ -3,7 +3,7 @@
 > 文档定位：本文是仓库规则要求保留的迁移阶段跟踪与验证证据，不作为通用路线图。当前跨模块未完成事项统一维护在 [项目待办](TODO.md)；任何迁移阶段的开始、阻塞、恢复或完成仍必须同步更新本文。
 
 **Document status**: P4 in progress; P5 done; P6 AI/Agent in progress (Eino Tutor/Portrait/Diagnostician/Math Solver/Question Parser/Question Generator/OCR Agent and admin LLM/Agent config loop wired; OCR and general-math slice delivered, token streaming and live external-provider quality acceptance pending); P7 in progress; P8 static contract handoff done; P9 Python backend removed by user confirmation; repository-wide quality cleanup batch done 2026-07-12
-**Last updated**: 2026-07-15
+**Last updated**: 2026-07-17
 **适用范围**：原 `backend/` Python FastAPI 后端整体迁移到 Go 后端；`backend/` 已从当前工作区删除
 **重构原则**：接口兼容、数据连续、分阶段验收、每阶段完成必须更新本文档
 
@@ -1378,3 +1378,15 @@ pytest
 - 性能与浏览器结果：脚本预热后，挑战签发和成功校验各只发 1 条 Redis 客户端命令。当前代码的本机独立实例中，管理员页首次挑战请求耗时 15ms；故意错误校验耗时 1ms，替换挑战在校验响应后约 9ms 内完成且服务端耗时 3ms，不再叠加固定 900ms。管理员页初次渲染仍只签发 1 个挑战；1280x720 与 390x844 视口均显示完整验证码图片和滑轨且无横向溢出。控制台仅记录未登录启动 refresh 401 和本次故意错误校验 400 对应的既有日志。
 - 交付物：`backend-go/internal/application/auth/captcha.go` 及测试、`frontend/src/modules/auth/components/SliderCaptcha.tsx` 及测试、管理员登录页和认证 service 的恢复性测试，以及本迁移追踪记录。
 - 残余风险：Redis 重启或脚本缓存丢失后的首个 `EVALSHA` 会回退 `EVAL`，该冷请求可能包含 2 次往返，后续热路径为 1 次；当前部署使用单节点 `go-redis.Client`，多 key Lua 未面向 Redis Cluster 跨槽部署设计。PNG 生成和约 11-12KB 响应仍是剩余主要成本，本机热请求已降至 3ms，但生产跨主机网络与高并发需要继续用指标验证；预存 `backend/uploads/` 仍是唯一全仓契约失败，未在本批次擅自删除。
+
+### 2026-07-17
+
+- 性能可观测性优化批次（P4/P7 横切）启动状态：`IN_PROGRESS`；启动日期：2026-07-17；最终状态：`DONE`；完成日期：2026-07-17。
+- 本批次范围：在保留既有无标签 `msp_http_requests_total` 的前提下，新增按规范化路由模板、HTTP 方法和状态类别聚合的请求计数与时延直方图，并在 `/metrics` 抓取时输出 PostgreSQL、Redis 连接池快照；不修改业务 API、数据库 schema、部署入口或认证边界。
+- 启动基线：当前 Prometheus 输出只有进程级总请求数，请求耗时只进入结构化日志，无法直接计算核心路由 P50/P95/P99，也没有 pgx/go-redis 连接池等待、超时和占用指标。2026-07-17 审计已将该缺口记录为 `PERF-004` 和 P0 TODO。
+- 设计约束：指标 label 只允许 ServeMux 路由模板、方法和状态类别；未匹配路由与 CORS preflight 使用固定占位符，禁止原始 URL、用户 ID、request ID 或错误文本进入 label。连接池适配只放在 composition root，`metrics` 平台包不直接依赖 pgx/go-redis。
+- 已完成实现：保留既有 `msp_http_requests_total`，新增 `msp_http_server_requests_total{method,route,status_class}` 和同标签时延 histogram；middleware 在响应完成后读取 `http.Request.Pattern` 并剥离方法前缀，动态路径只暴露 ServeMux 模板，404/405 与 CORS preflight 使用固定 label。`/metrics` 抓取时通过中立 provider 读取 pgx total/acquired/idle/constructing、acquire 等待/取消，以及 go-redis 连接、复用、等待、超时和不可用连接统计；抓取不执行额外数据库或 Redis 网络请求。
+- 验证命令：`gofmt -w internal/platform/metrics/metrics.go internal/platform/metrics/metrics_test.go internal/platform/middleware/middleware.go internal/platform/middleware/middleware_test.go internal/platform/httpserver/server.go internal/platform/httpserver/server_test.go cmd/api/main.go`；`GOCACHE=E:\code\msp-go\.gocache go test ./internal/platform/metrics ./internal/platform/middleware ./internal/platform/httpserver ./cmd/api -count=1`；`GOCACHE=... go test ./cmd/... ./internal/... ./migrations -count=1`；`GOCACHE=... go test -race ./internal/platform/metrics ./internal/platform/middleware ./internal/platform/httpserver ./cmd/api -count=1`；`GOCACHE=... go test ./internal/platform/metrics -cover -count=1`；`GOCACHE=... go test ./internal/platform/metrics -run '^$' -bench BenchmarkStoreObserveHTTPRequest -benchmem -count=3`；定向 `staticcheck`；`go vet ./...`；`MSP_REPO_ROOT=E:\code\msp-go go test ./tests/contract -count=1`；`git diff --check`。
+- 验证结果（2026-07-17）：metrics、middleware、httpserver、cmd/api 定向测试和竞态检查通过；全部实现包与 migration 测试通过；`go vet ./...` 和本批次包 staticcheck 通过；metrics 语句覆盖率 98.3%。`BenchmarkStoreObserveHTTPRequest-32` 三次为 36.74-37.40 ns/op，并行版本为 68.02-74.92 ns/op，均为 0 B/op、0 allocs/op。契约测试仍且仅 `TestLegacyPythonBackendDirectoryIsAbsent` 因本批次前已存在的 `backend/uploads/` 失败。
+- 交付物：`backend-go/internal/platform/metrics/metrics.go` 及测试、`backend-go/internal/platform/middleware/middleware.go` 及测试、HTTP server 集成测试、`backend-go/cmd/api/main.go` 连接池适配、部署监控说明、TODO 和本迁移追踪记录。
+- 残余风险：微基准只覆盖 Store 观察核心，不包含 `time.Now`、ResponseWriter 包装和真实 Prometheus 抓取；直方图 bucket 需要结合生产分布再校准。指标为进程内状态，实例重启会归零；当前不含 response size、SQL 单查询耗时或 exemplars。预存 `backend/uploads/` 继续阻断唯一 Go-only 目录契约，本批次未在笼统优化授权下删除该既有目录。

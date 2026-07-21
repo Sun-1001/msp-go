@@ -9,6 +9,8 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+
+	"mathstudy/backend-go/internal/platform/metrics"
 )
 
 func TestCORSAllowsCredentialsOnlyForExplicitOrigins(t *testing.T) {
@@ -195,6 +197,55 @@ func TestStatusRecorderKeepsFirstStatusCode(t *testing.T) {
 	wrapped.WriteHeader(http.StatusInternalServerError)
 	if wrapped.status != http.StatusCreated || recorder.Code != http.StatusCreated {
 		t.Fatalf("status = %d, recorder = %d", wrapped.status, recorder.Code)
+	}
+}
+
+func TestRequestMetricsUsesServeMuxPatternAndStatusClass(t *testing.T) {
+	store := metrics.NewStore("test", "test")
+	mux := http.NewServeMux()
+	mux.HandleFunc("GET /api/v1/items/{id}", func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusCreated)
+	})
+	handler := RequestMetrics(store)(mux)
+	request := httptest.NewRequest(http.MethodGet, "/api/v1/items/item-42", nil)
+	recorder := httptest.NewRecorder()
+
+	handler.ServeHTTP(recorder, request)
+
+	rendered := store.Render()
+	want := `msp_http_server_requests_total{method="GET",route="/api/v1/items/{id}",status_class="2xx"} 1`
+	if !strings.Contains(rendered, want) {
+		t.Fatalf("metrics missing %q in:\n%s", want, rendered)
+	}
+	if strings.Contains(rendered, "item-42") {
+		t.Fatalf("metrics leaked raw path in:\n%s", rendered)
+	}
+}
+
+func TestRequestMetricsUsesFixedFallbackLabels(t *testing.T) {
+	store := metrics.NewStore("test", "test")
+	handler := RequestMetrics(store)(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	request := httptest.NewRequest(http.MethodGet, "/users/private-user-id", nil)
+	recorder := httptest.NewRecorder()
+
+	handler.ServeHTTP(recorder, request)
+
+	rendered := store.Render()
+	want := `msp_http_server_requests_total{method="GET",route="<unmatched>",status_class="4xx"} 1`
+	if !strings.Contains(rendered, want) {
+		t.Fatalf("metrics missing %q in:\n%s", want, rendered)
+	}
+	if strings.Contains(rendered, "private-user-id") {
+		t.Fatalf("metrics leaked raw path in:\n%s", rendered)
+	}
+}
+
+func TestMetricRouteClassifiesCORSPreflight(t *testing.T) {
+	request := httptest.NewRequest(http.MethodOptions, "/api/v1/session", nil)
+	if got := metricRoute(request); got != "<cors-preflight>" {
+		t.Fatalf("metricRoute() = %q", got)
 	}
 }
 

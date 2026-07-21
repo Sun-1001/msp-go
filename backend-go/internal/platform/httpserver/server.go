@@ -96,9 +96,9 @@ func NewHandler(cfg config.Config, logger *slog.Logger, checker health.Checker, 
 		middleware.RequestID,
 		middleware.SecurityHeaders,
 		middleware.Timeout(cfg.RequestTimeout),
+		middleware.RequestMetrics(store),
 		middleware.CORS(cfg.CORSOrigins, cfg.CORSAllowMethods, cfg.CORSAllowHeaders),
 		middleware.Gzip,
-		middleware.RequestMetrics(store),
 		middleware.RequestLogger(logger),
 	), nil
 }

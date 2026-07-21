@@ -545,6 +545,35 @@ func main() {
 	}
 
 	store := metrics.NewStore(cfg.AppVersion, cfg.Environment)
+	store.SetRuntimeStatsProvider(func() metrics.RuntimeStats {
+		postgresStats := dbPool.Stat()
+		redisStats := redisClient.PoolStats()
+		return metrics.RuntimeStats{
+			Postgres: metrics.PostgresPoolStats{
+				MaxConnections:          int64(postgresStats.MaxConns()),
+				TotalConnections:        int64(postgresStats.TotalConns()),
+				AcquiredConnections:     int64(postgresStats.AcquiredConns()),
+				IdleConnections:         int64(postgresStats.IdleConns()),
+				ConstructingConnections: int64(postgresStats.ConstructingConns()),
+				AcquireCount:            postgresStats.AcquireCount(),
+				EmptyAcquireCount:       postgresStats.EmptyAcquireCount(),
+				CanceledAcquireCount:    postgresStats.CanceledAcquireCount(),
+				AcquireDuration:         postgresStats.AcquireDuration(),
+				EmptyAcquireWaitTime:    postgresStats.EmptyAcquireWaitTime(),
+			},
+			Redis: metrics.RedisPoolStats{
+				TotalConnections: int64(redisStats.TotalConns),
+				IdleConnections:  int64(redisStats.IdleConns),
+				StaleConnections: int64(redisStats.StaleConns),
+				Hits:             uint64(redisStats.Hits),
+				Misses:           uint64(redisStats.Misses),
+				Timeouts:         uint64(redisStats.Timeouts),
+				WaitCount:        uint64(redisStats.WaitCount),
+				Unusable:         uint64(redisStats.Unusable),
+				WaitDuration:     time.Duration(redisStats.WaitDurationNs),
+			},
+		}
+	})
 	checker := health.NewChecker(cfg.AppVersion, dbPool, health.RedisPingerFunc(func(ctx context.Context) error {
 		return redisClient.Ping(ctx).Err()
 	}))
