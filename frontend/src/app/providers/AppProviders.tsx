@@ -10,6 +10,7 @@ import LoadingFallback from '@/components/LoadingFallback';
 import { ThemeProvider } from './ThemeProvider';
 import { AuthProvider } from './AuthProvider';
 import { useRateLimitToast } from '@/hooks/useRateLimitToast';
+import { SystemAnnouncementDialog } from '@/modules/announcement/SystemAnnouncementDialog';
 
 /** 全局事件监听桥接（需要在 ToastProvider 内部） */
 const GlobalEventListeners: React.FC<{ children: React.ReactNode }> = ({ children }) => {
@@ -37,6 +38,7 @@ export const AppProviders: React.FC<{ children: React.ReactNode }> = ({ children
               <GlobalEventListeners>
                 <AuthProvider>
                   <ScrollToTop />
+                  <SystemAnnouncementDialog />
                   <Suspense fallback={<LoadingFallback />}>
                     {children}
                   </Suspense>

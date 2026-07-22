@@ -19,6 +19,7 @@ import {
   Network,
   Inbox,
   ShieldAlert,
+  Megaphone,
 } from 'lucide-react';
 import { ThemeToggle } from '@/components/ui/ThemeToggle';
 import { passwordResetService } from '@/modules/password-reset/services/passwordResetService';
@@ -108,6 +109,11 @@ export const AdminLayout: React.FC<AdminLayoutProps> = ({ children, className = 
       icon: Network,
       label: '知识点管理',
       path: '/admin/knowledge',
+    },
+    {
+      icon: Megaphone,
+      label: '系统公告',
+      path: '/admin/announcements',
     },
     {
       icon: Settings,

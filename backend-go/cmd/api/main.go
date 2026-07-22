@@ -18,6 +18,7 @@ import (
 	adminsettingshttp "mathstudy/backend-go/internal/adapter/http/adminsettings"
 	adminstatshttp "mathstudy/backend-go/internal/adapter/http/adminstats"
 	adminuserhttp "mathstudy/backend-go/internal/adapter/http/adminuser"
+	announcementhttp "mathstudy/backend-go/internal/adapter/http/announcement"
 	authhttp "mathstudy/backend-go/internal/adapter/http/auth"
 	classroomhttp "mathstudy/backend-go/internal/adapter/http/classroom"
 	exercisehttp "mathstudy/backend-go/internal/adapter/http/exercise"
@@ -44,6 +45,7 @@ import (
 	adminstatsapp "mathstudy/backend-go/internal/application/adminstats"
 	adminuserapp "mathstudy/backend-go/internal/application/adminuser"
 	airiskapp "mathstudy/backend-go/internal/application/airisk"
+	announcementapp "mathstudy/backend-go/internal/application/announcement"
 	answerocrapp "mathstudy/backend-go/internal/application/answerocr"
 	authapp "mathstudy/backend-go/internal/application/auth"
 	classroomapp "mathstudy/backend-go/internal/application/classroom"
@@ -510,6 +512,21 @@ func main() {
 		logger.Error("configure admin inbox handler", "error", err)
 		os.Exit(1)
 	}
+	announcementRepo, err := adapterpostgres.NewAnnouncementRepository(dbPool)
+	if err != nil {
+		logger.Error("configure announcement repository", "error", err)
+		os.Exit(1)
+	}
+	announcementService, err := announcementapp.NewService(announcementRepo)
+	if err != nil {
+		logger.Error("configure announcement service", "error", err)
+		os.Exit(1)
+	}
+	announcementHandler, err := announcementhttp.NewHandler(logger, announcementService, authService)
+	if err != nil {
+		logger.Error("configure announcement handler", "error", err)
+		os.Exit(1)
+	}
 	adminStatsRepo, err := adapterpostgres.NewAdminStatsRepository(dbPool)
 	if err != nil {
 		logger.Error("configure admin stats repository", "error", err)
@@ -623,6 +640,7 @@ func main() {
 		store,
 		httpserver.WithRoutes(func(mux *http.ServeMux) {
 			authHandler.Register(mux, cfg.APIV1Prefix+"/auth")
+			announcementHandler.RegisterUser(mux, cfg.APIV1Prefix+"/announcements")
 			progressHandler.Register(mux, cfg.APIV1Prefix+"/progress")
 			portraitHandler.Register(mux, cfg.APIV1Prefix+"/portrait")
 			mistakeHandler.Register(mux, cfg.APIV1Prefix+"/mistakes")
@@ -637,6 +655,7 @@ func main() {
 			adminUserHandler.Register(mux, cfg.APIV1Prefix+"/admin/users")
 			aiRiskHandler.Register(mux, cfg.APIV1Prefix+"/admin/risk-control")
 			adminInboxHandler.Register(mux, cfg.APIV1Prefix+"/admin/inbox")
+			announcementHandler.RegisterAdmin(mux, cfg.APIV1Prefix+"/admin/announcements")
 			adminAIConfigHandler.Register(mux, cfg.APIV1Prefix+"/admin/ai-config")
 			adminStatsHandler.Register(mux, cfg.APIV1Prefix+"/admin/stats")
 			adminSettingsHandler.Register(mux, cfg.APIV1Prefix+"/admin/settings")
