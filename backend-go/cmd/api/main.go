@@ -34,6 +34,7 @@ import (
 	xidianhttp "mathstudy/backend-go/internal/adapter/http/xidian"
 	einoagent "mathstudy/backend-go/internal/adapter/llm/einoagent"
 	moderationadapter "mathstudy/backend-go/internal/adapter/llm/moderation"
+	openaicompatadapter "mathstudy/backend-go/internal/adapter/llm/openaicompat"
 	adapterpostgres "mathstudy/backend-go/internal/adapter/postgres"
 	adapterredis "mathstudy/backend-go/internal/adapter/redis"
 	storageadapter "mathstudy/backend-go/internal/adapter/storage"
@@ -63,6 +64,7 @@ import (
 	"mathstudy/backend-go/internal/platform/health"
 	"mathstudy/backend-go/internal/platform/httpserver"
 	"mathstudy/backend-go/internal/platform/metrics"
+	"mathstudy/backend-go/internal/platform/outbound"
 	platformpostgres "mathstudy/backend-go/internal/platform/postgres"
 	platformredis "mathstudy/backend-go/internal/platform/redis"
 	"mathstudy/backend-go/internal/platform/secret"
@@ -230,7 +232,8 @@ func main() {
 		logger.Error("configure admin AI config repository", "error", err)
 		os.Exit(1)
 	}
-	adminAIConfigService, err := adminaiconfigapp.NewService(adminAIConfigRepo, appCipher)
+	providerHTTPClient := openaicompatadapter.WrapClient(outbound.NewPublicHTTPSClient(20 * time.Second))
+	adminAIConfigService, err := adminaiconfigapp.NewService(adminAIConfigRepo, appCipher, providerHTTPClient)
 	if err != nil {
 		logger.Error("configure admin AI config service", "error", err)
 		os.Exit(1)

@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"net"
 	"net/http"
 	"sort"
 	"strings"
@@ -15,6 +16,7 @@ import (
 	"github.com/cloudwego/eino/adk"
 	"github.com/cloudwego/eino/schema"
 
+	"mathstudy/backend-go/internal/adapter/llm/openaicompat"
 	adminaiconfigapp "mathstudy/backend-go/internal/application/adminaiconfig"
 	exerciseapp "mathstudy/backend-go/internal/application/exercise"
 	mathsolverapp "mathstudy/backend-go/internal/application/mathsolver"
@@ -109,7 +111,7 @@ type Agent struct {
 
 // RuntimeConfigProvider loads persisted agent runtime configuration.
 type RuntimeConfigProvider interface {
-	RuntimeConfig(context.Context, string) (adminaiconfigapp.RuntimeConfig, bool, error)
+	RuntimeConfigs(context.Context, string) ([]adminaiconfigapp.RuntimeConfig, bool, error)
 }
 
 // ConfigurableAgent resolves the Tutor Agent runtime from persisted admin AI config,
@@ -371,37 +373,19 @@ func (a *ConfigurableAgent) Generate(ctx context.Context, input sessionapp.ChatA
 	if a == nil {
 		return sessionapp.ChatAgentOutput{}, errors.New("configurable Eino agent is nil")
 	}
-	cfg := a.fallback
-	if a.provider != nil {
-		runtime, ok, err := a.provider.RuntimeConfig(ctx, "tutor")
-		if err != nil {
-			return sessionapp.ChatAgentOutput{}, fmt.Errorf("load tutor runtime config: %w", err)
-		}
-		if ok {
-			cfg = Config{
-				Enabled:       true,
-				BaseURL:       runtime.BaseURL,
-				APIKey:        runtime.APIKey,
-				Model:         runtime.Model,
-				Timeout:       runtime.Timeout,
-				Temperature:   runtime.Temperature,
-				MaxTokens:     runtime.MaxTokens,
-				TopP:          runtime.TopP,
-				MaxIterations: runtime.MaxIterations,
-			}
-		}
-	}
 	newAgent := a.newAgent
 	if newAgent == nil {
 		newAgent = func(ctx context.Context, cfg Config) (sessionapp.ChatAgent, error) {
 			return NewTutorAgent(ctx, cfg)
 		}
 	}
-	agent, err := newAgent(ctx, cfg)
-	if err != nil {
-		return sessionapp.ChatAgentOutput{}, err
-	}
-	return agent.Generate(ctx, input)
+	return runWithRuntimeCandidates(ctx, a.provider, "tutor", a.fallback, func(ctx context.Context, cfg Config) (sessionapp.ChatAgentOutput, error) {
+		agent, err := newAgent(ctx, cfg)
+		if err != nil {
+			return sessionapp.ChatAgentOutput{}, candidateSetupError{cause: err}
+		}
+		return agent.Generate(ctx, input)
+	})
 }
 
 // GeneratePortrait resolves a Portrait Agent configuration and generates portrait content.
@@ -409,27 +393,19 @@ func (g *ConfigurablePortraitGenerator) GeneratePortrait(ctx context.Context, in
 	if g == nil {
 		return "", errors.New("configurable Eino portrait generator is nil")
 	}
-	cfg := g.fallback
-	if g.provider != nil {
-		runtime, ok, err := g.provider.RuntimeConfig(ctx, "portrait")
-		if err != nil {
-			return "", fmt.Errorf("load portrait runtime config: %w", err)
-		}
-		if ok {
-			cfg = configFromRuntime(runtime)
-		}
-	}
 	newGenerator := g.newGenerator
 	if newGenerator == nil {
 		newGenerator = func(ctx context.Context, cfg Config) (portraitapp.Generator, error) {
 			return NewPortraitGenerator(ctx, cfg)
 		}
 	}
-	generator, err := newGenerator(ctx, cfg)
-	if err != nil {
-		return "", err
-	}
-	return generator.GeneratePortrait(ctx, input)
+	return runWithRuntimeCandidates(ctx, g.provider, "portrait", g.fallback, func(ctx context.Context, cfg Config) (string, error) {
+		generator, err := newGenerator(ctx, cfg)
+		if err != nil {
+			return "", candidateSetupError{cause: err}
+		}
+		return generator.GeneratePortrait(ctx, input)
+	})
 }
 
 // Diagnose resolves a Diagnostician Agent configuration and generates structured diagnosis.
@@ -437,89 +413,79 @@ func (d *ConfigurableDiagnostician) Diagnose(ctx context.Context, input exercise
 	if d == nil {
 		return exerciseapp.DiagnosisDetail{}, errors.New("configurable Eino diagnostician is nil")
 	}
-	cfg := d.fallback
-	if d.provider != nil {
-		runtime, ok, err := d.provider.RuntimeConfig(ctx, "diagnostician")
-		if err != nil {
-			return exerciseapp.DiagnosisDetail{}, fmt.Errorf("load diagnostician runtime config: %w", err)
-		}
-		if ok {
-			cfg = configFromRuntime(runtime)
-		}
-	}
 	newDiagnostician := d.newDiagnostician
 	if newDiagnostician == nil {
 		newDiagnostician = func(ctx context.Context, cfg Config) (exerciseapp.Diagnostician, error) {
 			return NewDiagnostician(ctx, cfg)
 		}
 	}
-	diagnostician, err := newDiagnostician(ctx, cfg)
-	if err != nil {
-		return exerciseapp.DiagnosisDetail{}, err
-	}
-	return diagnostician.Diagnose(ctx, input)
+	return runWithRuntimeCandidates(ctx, d.provider, "diagnostician", d.fallback, func(ctx context.Context, cfg Config) (exerciseapp.DiagnosisDetail, error) {
+		diagnostician, err := newDiagnostician(ctx, cfg)
+		if err != nil {
+			return exerciseapp.DiagnosisDetail{}, candidateSetupError{cause: err}
+		}
+		return diagnostician.Diagnose(ctx, input)
+	})
 }
 
 // CheckAnswer resolves a Math Solver Agent configuration and compares answers.
 func (s *ConfigurableMathSolver) CheckAnswer(ctx context.Context, input exerciseapp.AnswerCheckInput) (exerciseapp.AnswerCheckResult, error) {
-	solver, err := s.resolveSolver(ctx)
-	if err != nil {
-		return exerciseapp.AnswerCheckResult{}, err
+	if s == nil {
+		return exerciseapp.AnswerCheckResult{}, errors.New("configurable Eino math solver is nil")
 	}
-	return solver.CheckAnswer(ctx, input)
+	return runWithRuntimeCandidates(ctx, s.provider, "math_solver", s.fallback, func(ctx context.Context, cfg Config) (exerciseapp.AnswerCheckResult, error) {
+		solver, err := s.configuredSolver(ctx, cfg)
+		if err != nil {
+			return exerciseapp.AnswerCheckResult{}, candidateSetupError{cause: err}
+		}
+		return solver.CheckAnswer(ctx, input)
+	})
 }
 
 // Solve resolves the same Math Solver runtime and independently solves one exercise.
 func (s *ConfigurableMathSolver) Solve(ctx context.Context, input exerciseapp.SolutionInput) (exerciseapp.SolutionResult, error) {
-	solver, err := s.resolveSolver(ctx)
-	if err != nil {
-		return exerciseapp.SolutionResult{}, err
+	if s == nil {
+		return exerciseapp.SolutionResult{}, errors.New("configurable Eino math solver is nil")
 	}
-	solutionSolver, ok := solver.(exerciseapp.SolutionSolver)
-	if !ok {
-		return exerciseapp.SolutionResult{}, errors.New("configured math solver does not support solution generation")
-	}
-	return solutionSolver.Solve(ctx, input)
+	return runWithRuntimeCandidates(ctx, s.provider, "math_solver", s.fallback, func(ctx context.Context, cfg Config) (exerciseapp.SolutionResult, error) {
+		solver, err := s.configuredSolver(ctx, cfg)
+		if err != nil {
+			return exerciseapp.SolutionResult{}, candidateSetupError{cause: err}
+		}
+		solutionSolver, ok := solver.(exerciseapp.SolutionSolver)
+		if !ok {
+			return exerciseapp.SolutionResult{}, candidateSetupError{cause: errors.New("configured math solver does not support solution generation")}
+		}
+		return solutionSolver.Solve(ctx, input)
+	})
 }
 
 // VerifySolution resolves a fresh Math Solver runtime for an independent solution check.
 func (s *ConfigurableMathSolver) VerifySolution(ctx context.Context, input exerciseapp.SolutionVerificationInput) (exerciseapp.AnswerCheckResult, error) {
-	solver, err := s.resolveSolver(ctx)
-	if err != nil {
-		return exerciseapp.AnswerCheckResult{}, err
+	if s == nil {
+		return exerciseapp.AnswerCheckResult{}, errors.New("configurable Eino math solver is nil")
 	}
-	verifier, ok := solver.(exerciseapp.SolutionVerifier)
-	if !ok {
-		return exerciseapp.AnswerCheckResult{}, errors.New("configured math solver does not support solution verification")
-	}
-	return verifier.VerifySolution(ctx, input)
+	return runWithRuntimeCandidates(ctx, s.provider, "math_solver", s.fallback, func(ctx context.Context, cfg Config) (exerciseapp.AnswerCheckResult, error) {
+		solver, err := s.configuredSolver(ctx, cfg)
+		if err != nil {
+			return exerciseapp.AnswerCheckResult{}, candidateSetupError{cause: err}
+		}
+		verifier, ok := solver.(exerciseapp.SolutionVerifier)
+		if !ok {
+			return exerciseapp.AnswerCheckResult{}, candidateSetupError{cause: errors.New("configured math solver does not support solution verification")}
+		}
+		return verifier.VerifySolution(ctx, input)
+	})
 }
 
-func (s *ConfigurableMathSolver) resolveSolver(ctx context.Context) (exerciseapp.MathSolver, error) {
-	if s == nil {
-		return nil, errors.New("configurable Eino math solver is nil")
-	}
-	cfg := s.fallback
-	if s.provider != nil {
-		runtime, ok, err := s.provider.RuntimeConfig(ctx, "math_solver")
-		if err != nil {
-			return nil, fmt.Errorf("load math_solver runtime config: %w", err)
-		}
-		if ok {
-			cfg = configFromRuntime(runtime)
-		}
-	}
+func (s *ConfigurableMathSolver) configuredSolver(ctx context.Context, cfg Config) (exerciseapp.MathSolver, error) {
 	newSolver := s.newSolver
 	if newSolver == nil {
 		newSolver = func(ctx context.Context, cfg Config) (exerciseapp.MathSolver, error) {
 			return NewMathSolver(ctx, cfg)
 		}
 	}
-	solver, err := newSolver(ctx, cfg)
-	if err != nil {
-		return nil, err
-	}
-	return solver, nil
+	return newSolver(ctx, cfg)
 }
 
 // ParseQuestions resolves a Question Parser Agent configuration and extracts questions.
@@ -527,27 +493,19 @@ func (p *ConfigurableQuestionParser) ParseQuestions(ctx context.Context, input q
 	if p == nil {
 		return questionapp.AIParseResponse{}, errors.New("configurable Eino question parser is nil")
 	}
-	cfg := p.fallback
-	if p.provider != nil {
-		runtime, ok, err := p.provider.RuntimeConfig(ctx, "question_parser")
-		if err != nil {
-			return questionapp.AIParseResponse{}, fmt.Errorf("load question_parser runtime config: %w", err)
-		}
-		if ok {
-			cfg = configFromRuntime(runtime)
-		}
-	}
 	newParser := p.newParser
 	if newParser == nil {
 		newParser = func(ctx context.Context, cfg Config) (questionapp.Parser, error) {
 			return NewQuestionParser(ctx, cfg)
 		}
 	}
-	parser, err := newParser(ctx, cfg)
-	if err != nil {
-		return questionapp.AIParseResponse{}, err
-	}
-	return parser.ParseQuestions(ctx, input)
+	return runWithRuntimeCandidates(ctx, p.provider, "question_parser", p.fallback, func(ctx context.Context, cfg Config) (questionapp.AIParseResponse, error) {
+		parser, err := newParser(ctx, cfg)
+		if err != nil {
+			return questionapp.AIParseResponse{}, candidateSetupError{cause: err}
+		}
+		return parser.ParseQuestions(ctx, input)
+	})
 }
 
 // GenerateQuestion resolves a Question Generator Agent configuration and creates one exercise.
@@ -555,27 +513,19 @@ func (g *ConfigurableQuestionGenerator) GenerateQuestion(ctx context.Context, in
 	if g == nil {
 		return exerciseapp.GeneratedQuestion{}, errors.New("configurable Eino question generator is nil")
 	}
-	cfg := g.fallback
-	if g.provider != nil {
-		runtime, ok, err := g.provider.RuntimeConfig(ctx, "question_generator")
-		if err != nil {
-			return exerciseapp.GeneratedQuestion{}, fmt.Errorf("load question_generator runtime config: %w", err)
-		}
-		if ok {
-			cfg = configFromRuntime(runtime)
-		}
-	}
 	newGenerator := g.newGenerator
 	if newGenerator == nil {
 		newGenerator = func(ctx context.Context, cfg Config) (exerciseapp.QuestionGenerator, error) {
 			return NewQuestionGenerator(ctx, cfg)
 		}
 	}
-	generator, err := newGenerator(ctx, cfg)
-	if err != nil {
-		return exerciseapp.GeneratedQuestion{}, err
-	}
-	return generator.GenerateQuestion(ctx, input)
+	return runWithRuntimeCandidates(ctx, g.provider, "question_generator", g.fallback, func(ctx context.Context, cfg Config) (exerciseapp.GeneratedQuestion, error) {
+		generator, err := newGenerator(ctx, cfg)
+		if err != nil {
+			return exerciseapp.GeneratedQuestion{}, candidateSetupError{cause: err}
+		}
+		return generator.GenerateQuestion(ctx, input)
+	})
 }
 
 // Generate runs the tutor agent and collects the final assistant message.
@@ -764,11 +714,88 @@ func configFromRuntime(runtime adminaiconfigapp.RuntimeConfig) Config {
 	}
 }
 
-func modelHTTPClient(cfg Config) *http.Client {
-	if cfg.HTTPClient != nil {
-		return cfg.HTTPClient
+func runWithRuntimeCandidates[T any](
+	ctx context.Context,
+	provider RuntimeConfigProvider,
+	agentType string,
+	fallback Config,
+	run func(context.Context, Config) (T, error),
+) (T, error) {
+	var zero T
+	configs, err := loadRuntimeConfigs(ctx, provider, agentType, fallback)
+	if err != nil {
+		return zero, fmt.Errorf("load %s runtime config: %w", agentType, err)
 	}
-	return outbound.NewPublicHTTPSClient(cfg.Timeout)
+	var lastErr error
+	for index, cfg := range configs {
+		if err := ctx.Err(); err != nil {
+			return zero, err
+		}
+		result, err := run(ctx, cfg)
+		if err == nil {
+			return result, nil
+		}
+		lastErr = err
+		if index == len(configs)-1 || !shouldTryNextChannel(err) {
+			break
+		}
+	}
+	if lastErr == nil {
+		return zero, fmt.Errorf("%s has no runtime candidates", agentType)
+	}
+	return zero, fmt.Errorf("%s request failed: %w", agentType, lastErr)
+}
+
+func loadRuntimeConfigs(ctx context.Context, provider RuntimeConfigProvider, agentType string, fallback Config) ([]Config, error) {
+	if provider == nil {
+		return []Config{fallback}, nil
+	}
+	runtimes, ok, err := provider.RuntimeConfigs(ctx, agentType)
+	if err != nil {
+		return nil, err
+	}
+	if !ok || len(runtimes) == 0 {
+		return []Config{fallback}, nil
+	}
+	configs := make([]Config, 0, len(runtimes))
+	for _, runtime := range runtimes {
+		configs = append(configs, configFromRuntime(runtime))
+	}
+	return configs, nil
+}
+
+type candidateSetupError struct {
+	cause error
+}
+
+func (e candidateSetupError) Error() string { return e.cause.Error() }
+func (e candidateSetupError) Unwrap() error { return e.cause }
+
+func shouldTryNextChannel(err error) bool {
+	if err == nil || errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		return false
+	}
+	var setupErr candidateSetupError
+	if errors.As(err, &setupErr) || openaicompat.IsProtocolError(err) {
+		return true
+	}
+	var apiErr *einoopenai.APIError
+	if errors.As(err, &apiErr) {
+		status := apiErr.HTTPStatusCode
+		return status == http.StatusUnauthorized || status == http.StatusForbidden || status == http.StatusNotFound || status == http.StatusRequestTimeout || status == http.StatusConflict || status == http.StatusTooManyRequests || status >= http.StatusInternalServerError
+	}
+	var networkErr net.Error
+	return errors.As(err, &networkErr)
+}
+
+func modelHTTPClient(cfg Config) *http.Client {
+	var client *http.Client
+	if cfg.HTTPClient != nil {
+		client = cfg.HTTPClient
+	} else {
+		client = outbound.NewPublicHTTPSClient(cfg.Timeout)
+	}
+	return openaicompat.WrapClient(client)
 }
 
 func validateConfig(cfg Config) error {

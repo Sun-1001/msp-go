@@ -12,22 +12,22 @@ import type { ProviderPreset } from '@/modules/ai-config/types/aiConfig';
 export const PROVIDER_PRESETS: ProviderPreset[] = [
   {
     code: 'openai',
-    name: 'OpenAI (Completion)',
+    name: 'OpenAI',
     defaultBaseUrl: 'https://api.openai.com',
     models: [
+	  'gpt-4.1',
+	  'gpt-4.1-mini',
+	  'gpt-4.1-nano',
       'gpt-4o',
       'gpt-4o-mini',
       'gpt-4-turbo',
       'gpt-4',
       'gpt-3.5-turbo',
       'gpt-3.5-turbo-16k',
+	  'o3',
+	  'o4-mini',
+	  'o1-pro',
     ],
-  },
-  {
-    code: 'openai-responses',
-    name: 'OpenAI (Responses)',
-    defaultBaseUrl: 'https://api.openai.com',
-    models: ['gpt-4.1', 'gpt-4.1-mini', 'gpt-4.1-nano', 'o3', 'o4-mini', 'o1-pro'],
   },
   {
     code: 'gemini',
@@ -115,7 +115,11 @@ export const PROVIDER_PRESETS: ProviderPreset[] = [
  * 根据代码获取提供商预设
  */
 export function getProviderPreset(code: string): ProviderPreset | undefined {
-  return PROVIDER_PRESETS.find((p) => p.code === code);
+  return PROVIDER_PRESETS.find((p) => p.code === normalizeProviderPresetCode(code));
+}
+
+export function normalizeProviderPresetCode(code: string): string {
+  return code === 'openai-responses' ? 'openai' : code;
 }
 
 /**

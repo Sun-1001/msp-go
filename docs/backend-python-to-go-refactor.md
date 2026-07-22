@@ -2,7 +2,7 @@
 
 > 文档定位：本文是仓库规则要求保留的迁移阶段跟踪与验证证据，不作为通用路线图。当前跨模块未完成事项统一维护在 [项目待办](TODO.md)；任何迁移阶段的开始、阻塞、恢复或完成仍必须同步更新本文。
 
-**Document status**: P4 in progress; P5 done; P6 AI/Agent in progress (Eino Tutor/Portrait/Diagnostician/Math Solver/Question Parser/Question Generator/OCR/Content Moderator Agents, admin LLM/Agent config loop, and uniform student AI risk center wired; OCR, general-math, student AI risk-control, model-moderation, and multi-key channel-management slices delivered, token streaming and live external-provider quality acceptance pending); P7 in progress; P8 static contract handoff done; P9 Python backend removed by user confirmation; repository-wide quality cleanup batch done 2026-07-12
+**Document status**: P4 in progress; P5 done; P6 AI/Agent in progress (Eino Tutor/Portrait/Diagnostician/Math Solver/Question Parser/Question Generator/OCR/Content Moderator Agents, admin LLM/Agent config loop, and uniform student AI risk center wired; unified channel scheduling/model catalog slice in progress; OCR, general-math, student AI risk-control, model-moderation, and multi-key channel-management slices delivered, token streaming and live external-provider quality acceptance pending); P7 in progress; P8 static contract handoff done; P9 Python backend removed by user confirmation; repository-wide quality cleanup batch done 2026-07-12
 **Last updated**: 2026-07-22
 **适用范围**：原 `backend/` Python FastAPI 后端整体迁移到 Go 后端；`backend/` 已从当前工作区删除
 **重构原则**：接口兼容、数据连续、分阶段验收、每阶段完成必须更新本文档
@@ -1445,6 +1445,10 @@ git ls-files "*_test.go" "*.test.ts" "*.test.tsx" "*.spec.ts" "*.spec.tsx" "test
 - 残余风险：永久测试和静态契约守卫删除后，仓库不再提供可直接重复运行的回归套件，验证质量依赖每次变更重新编写足够的临时测试并准确记录结果；默认 `npm test` 在零用例时会非零退出，需要清洁工作区验证测试运行器时显式传入 `--passWithNoTests`。`.gitignore` 只能阻止未跟踪测试源码被默认加入，强制添加仍可绕过，因此提交前仍必须检查 staged 文件；Go/Vitest 配置与依赖保留，不属于测试用例交付物。
 
 ### 2026-07-22
+
+- 智能体统一渠道调度与模型目录切片（P6 横切）启动状态：`IN_PROGRESS`；启动日期：2026-07-22。P6 总体保持 `IN_PROGRESS`。
+- 本切片参考来源：[QuantumNous/new-api](https://github.com/QuantumNous/new-api)。参考范围限定为其 `ability` 模型到渠道能力映射、渠道优先级/权重选择、失败重试换渠、统一 relay 边界和渠道模型映射维护思路；结合本项目 Eino Agent、加密密钥环、SSRF 防护和现有 PostgreSQL 契约重新实现，不引入 new-api 的计费、用户分组、复杂供应商 adaptor 矩阵或跨组亲和缓存。
+- 计划范围：为渠道补充优先级和权重；为 Agent 持久化与渠道无关的逻辑模型键并兼容既有模型 UUID；运行时按逻辑模型自动汇总、排序和重试可用渠道；OpenAI-compatible 同步 Agent 调用自动兼容 Chat Completions 与 Responses 上游，不要求管理员选择端点类型；模型映射继续维护“逻辑模型名 -> 上游模型 ID”，前端 Agent 配置改为选择逻辑模型并展示可用渠道数。该切片会修改数据库 schema、管理员 AI 配置 API 和运行时调度语义，完成后必须补充迁移幂等、临时测试、构建结果、交付物与残余风险。
 
 - 管理员运维控制台切片（P4/P7 横切）启动状态：`IN_PROGRESS`；启动日期：2026-07-22；最终状态：`DONE`；完成日期：2026-07-22。P4、P7 既有阶段状态不变，本切片只扩展管理员可观测性与展示，不修改数据库 schema、认证边界或部署入口。
 - 本切片范围与口径：将 `GET /api/v1/admin/stats/system-status` 从基础依赖探测扩展为项目内可执行的单进程运维快照，同时保留原 `status`、`checked_at`、`services`、`alerts` 字段兼容。CPU 为 Go API 进程利用率，内存为 Go 堆使用量，Redis 复用率为连接池复用而非业务缓存命中率；在线学习人数按未结束且 `is_active=true` 的学习会话去重学生，活跃会话按同一口径计数。

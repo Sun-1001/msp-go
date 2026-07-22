@@ -24,6 +24,8 @@ export interface LLMProvider {
   name: string;
   code: string;
   base_url: string;
+  priority: number;
+  weight: number;
   is_active: boolean;
   description: string | null;
   created_at: string;
@@ -42,6 +44,8 @@ export interface CreateProviderRequest {
   api_key: string;
   api_keys?: string[];
   key_strategy?: ProviderKeyStrategy;
+  priority?: number;
+  weight?: number;
   is_active?: boolean;
   description?: string;
 }
@@ -64,6 +68,8 @@ export interface CreateProviderWithModelsRequest {
   api_key: string;
   api_keys?: string[];
   key_strategy?: ProviderKeyStrategy;
+  priority?: number;
+  weight?: number;
   is_active?: boolean;
   description?: string;
   models: ModelCreateSimple[];
@@ -87,6 +93,8 @@ export interface UpdateProviderRequest {
   api_key?: string;
   api_keys?: string[];
   key_strategy?: ProviderKeyStrategy;
+  priority?: number;
+  weight?: number;
   is_active?: boolean;
   description?: string;
 }
@@ -194,6 +202,7 @@ export interface AgentModelConfig {
   id: string;
   agent_type: string;
   model_id: string | null;
+  model_key: string | null;
   temperature_override: number | null;
   max_tokens_override: number | null;
   top_p_override: number | null;
@@ -213,7 +222,8 @@ export interface AgentModelConfig {
  * 更新智能体配置请求
  */
 export interface UpdateAgentConfigRequest {
-  model_id: string;
+  model_key: string;
+  model_id?: string;
   temperature_override?: number | null;
   max_tokens_override?: number | null;
   top_p_override?: number | null;

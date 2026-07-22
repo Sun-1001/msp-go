@@ -14,6 +14,7 @@ import {
   getAllPresetModels,
   getProviderPreset,
   getRelatedModels,
+  normalizeProviderPresetCode,
   PROVIDER_PRESETS,
 } from '../constants/providerPresets';
 import { aiConfigService } from '@/modules/ai-config/services/aiConfigService';
@@ -36,9 +37,11 @@ import {
   type ChannelEditorSectionStatus,
 } from './ChannelEditorSidebar';
 import { ChannelFormActions } from './ChannelFormActions';
+import { ChannelModelFetchDialog } from './ChannelModelFetchDialog';
 import { ChannelModelSelector } from './ChannelModelSelector';
 import { ChannelProviderIcon } from './ChannelProviderIcon';
 import { ChannelSectionHeader } from './ChannelSectionHeader';
+import type { ResolvedChannelModelSelection } from './channelModelCatalog';
 import {
   buildBatchChannelName,
   buildModelRequests,
@@ -60,6 +63,11 @@ interface ChannelFormModalProps {
   onUpdateModels?: (providerId: string, models: ModelCreateSimple[]) => Promise<ModelsUpdateResponse>;
 }
 
+interface ModelFetchSession {
+  id: number;
+  models: string[];
+}
+
 const sectionElementIds: Record<ChannelEditorSectionId, string> = {
   basic: 'channel-editor-basic',
   credentials: 'channel-editor-credentials',
@@ -68,10 +76,23 @@ const sectionElementIds: Record<ChannelEditorSectionId, string> = {
 };
 
 const requiredSections: ChannelEditorSectionId[] = ['basic', 'credentials', 'models'];
+const defaultChannelPriority = 0;
+const defaultChannelWeight = 100;
+const emptyExistingModels: LLMModel[] = [];
+const modelDialogQaFixture = [
+  'gpt-5.4-mini',
+  'gpt-4o',
+  'claude-3-7-sonnet',
+  'gemini-2.5-pro',
+  'qwen-max',
+  'deepseek-chat',
+  'glm-4-plus',
+  'custom-math-model',
+];
 
 export const ChannelFormModal: React.FC<ChannelFormModalProps> = ({
   editingProvider,
-  existingModels = [],
+  existingModels = emptyExistingModels,
   isOpen,
   onClose,
   onFetchModels,
@@ -81,18 +102,22 @@ export const ChannelFormModal: React.FC<ChannelFormModalProps> = ({
 }) => {
   const dialogRef = useRef<HTMLDivElement>(null);
   const scrollContainerRef = useRef<HTMLDivElement>(null);
+  const modelFetchSessionIdRef = useRef(0);
   const [providerType, setProviderType] = useState('openai');
   const [name, setName] = useState('');
   const [isActive, setIsActive] = useState(true);
   const [apiKey, setApiKey] = useState('');
   const [baseUrl, setBaseUrl] = useState('');
   const [description, setDescription] = useState('');
+  const [priority, setPriority] = useState(defaultChannelPriority);
+  const [weight, setWeight] = useState(defaultChannelWeight);
   const [credentialMode, setCredentialMode] = useState<CredentialMode>('single');
   const [keyStrategy, setKeyStrategy] = useState<KeyStrategy>('round_robin');
   const [selectedModels, setSelectedModels] = useState<string[]>([]);
   const [modelMapping, setModelMapping] = useState<Record<string, string>>({});
   const [customModel, setCustomModel] = useState('');
   const [availableModels, setAvailableModels] = useState<string[]>([]);
+  const [modelFetchSession, setModelFetchSession] = useState<ModelFetchSession | null>(null);
   const [activeSection, setActiveSection] = useState<ChannelEditorSectionId>('basic');
   const [errorSection, setErrorSection] = useState<ChannelEditorSectionId | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -109,11 +134,13 @@ export const ChannelFormModal: React.FC<ChannelFormModalProps> = ({
   useEffect(() => {
     if (!isOpen) return;
     if (editingProvider) {
-      setProviderType(editingProvider.code);
+      setProviderType(normalizeProviderPresetCode(editingProvider.code));
       setName(editingProvider.name);
       setIsActive(editingProvider.is_active);
       setBaseUrl(editingProvider.base_url);
       setDescription(editingProvider.description ?? '');
+      setPriority(editingProvider.priority ?? defaultChannelPriority);
+      setWeight(editingProvider.weight ?? defaultChannelWeight);
       setSelectedModels(existingModels.map((model) => model.name || model.model_id));
       setModelMapping(
         Object.fromEntries(
@@ -128,6 +155,8 @@ export const ChannelFormModal: React.FC<ChannelFormModalProps> = ({
       setIsActive(true);
       setBaseUrl('');
       setDescription('');
+      setPriority(defaultChannelPriority);
+      setWeight(defaultChannelWeight);
       setSelectedModels([]);
       setModelMapping({});
     }
@@ -136,6 +165,7 @@ export const ChannelFormModal: React.FC<ChannelFormModalProps> = ({
     setKeyStrategy('round_robin');
     setCustomModel('');
     setAvailableModels([]);
+    setModelFetchSession(null);
     setActiveSection('basic');
     setErrorSection(null);
     setError(null);
@@ -148,14 +178,14 @@ export const ChannelFormModal: React.FC<ChannelFormModalProps> = ({
     const previousOverflow = document.body.style.overflow;
     document.body.style.overflow = 'hidden';
     const handleKeyDown = (event: KeyboardEvent) => {
-      if (event.key === 'Escape' && !isSubmitting) onClose();
+      if (event.key === 'Escape' && !isSubmitting && !modelFetchSession) onClose();
     };
     window.addEventListener('keydown', handleKeyDown);
     return () => {
       window.removeEventListener('keydown', handleKeyDown);
       document.body.style.overflow = previousOverflow;
     };
-  }, [isOpen, isSubmitting, onClose]);
+  }, [isOpen, isSubmitting, modelFetchSession, onClose]);
 
   useEffect(() => {
     if (!isOpen) return;
@@ -175,7 +205,10 @@ export const ChannelFormModal: React.FC<ChannelFormModalProps> = ({
     basic: name.trim() ? 'complete' : 'idle',
     credentials: credentialComplete ? 'complete' : 'idle',
     models: selectedModels.length ? 'complete' : 'idle',
-    advanced: description.trim() ? 'configured' : 'idle',
+    advanced:
+      description.trim() || priority !== defaultChannelPriority || weight !== defaultChannelWeight
+        ? 'configured'
+        : 'idle',
   };
   if (errorSection) statuses[errorSection] = 'error';
   const completedRequiredSections = requiredSections.filter((section) => statuses[section] === 'complete').length;
@@ -208,6 +241,7 @@ export const ChannelFormModal: React.FC<ChannelFormModalProps> = ({
     setProviderType(value);
     setBaseUrl('');
     setAvailableModels([]);
+    setModelFetchSession(null);
     setError(null);
     setErrorSection(null);
   };
@@ -230,11 +264,15 @@ export const ChannelFormModal: React.FC<ChannelFormModalProps> = ({
     setError(null);
     setErrorSection(null);
     try {
-      const result = isEditMode && editingProvider && onFetchModels
-        ? await onFetchModels(editingProvider.id)
-        : await aiConfigService.fetchModelsByCredentials(effectiveBaseUrl, credentialKeys[0]);
-      if (result.success && result.models.length) {
-        setAvailableModels(result.models);
+      const result = import.meta.env.DEV && effectiveBaseUrl === 'https://model-dialog-qa.example'
+        ? { success: true, models: modelDialogQaFixture, message: 'QA fixture' }
+        : isEditMode && editingProvider && onFetchModels
+          ? await onFetchModels(editingProvider.id)
+          : await aiConfigService.fetchModelsByCredentials(effectiveBaseUrl, credentialKeys[0]);
+      const fetchedModels = uniqueTrimmed(result.models ?? []);
+      if (result.success && (fetchedModels.length || selectedModels.length)) {
+        modelFetchSessionIdRef.current += 1;
+        setModelFetchSession({ id: modelFetchSessionIdRef.current, models: fetchedModels });
       } else {
         showSectionError(result.message || '未从上游获取到模型', 'models');
       }
@@ -243,6 +281,15 @@ export const ChannelFormModal: React.FC<ChannelFormModalProps> = ({
     } finally {
       setIsFetchingModels(false);
     }
+  };
+
+  const handleSaveFetchedModels = (selection: ResolvedChannelModelSelection) => {
+    setSelectedModels(selection.models);
+    setModelMapping(selection.mapping);
+    setAvailableModels(modelFetchSession?.models ?? []);
+    setModelFetchSession(null);
+    setError(null);
+    setErrorSection(null);
   };
 
   const addModels = (models: string[]) => {
@@ -281,8 +328,9 @@ export const ChannelFormModal: React.FC<ChannelFormModalProps> = ({
         showSectionError('剪贴板中未检测到有效的连接信息', 'credentials');
         return;
       }
-      if (parsed.code && PROVIDER_PRESETS.some((preset) => preset.code === parsed.code)) {
-        setProviderType(parsed.code);
+      const parsedProviderCode = normalizeProviderPresetCode(parsed.code ?? '');
+      if (parsedProviderCode && PROVIDER_PRESETS.some((preset) => preset.code === parsedProviderCode)) {
+        setProviderType(parsedProviderCode);
       }
       if (parsed.baseUrl) setBaseUrl(parsed.baseUrl);
       if (parsed.name) setName(parsed.name);
@@ -328,6 +376,14 @@ export const ChannelFormModal: React.FC<ChannelFormModalProps> = ({
       showSectionError('请至少选择一个模型', 'models');
       return null;
     }
+    if (!Number.isInteger(priority) || priority < 0 || priority > 1000) {
+      showSectionError('优先级必须是 0 到 1000 之间的整数', 'advanced');
+      return null;
+    }
+    if (!Number.isInteger(weight) || weight < 1 || weight > 1000) {
+      showSectionError('权重必须是 1 到 1000 之间的整数', 'advanced');
+      return null;
+    }
     try {
       return buildModelRequests(selectedModels, modelMapping);
     } catch (validationError) {
@@ -352,6 +408,8 @@ export const ChannelFormModal: React.FC<ChannelFormModalProps> = ({
         const update: UpdateProviderRequest = {
           name: name.trim(),
           base_url: effectiveBaseUrl,
+          priority,
+          weight,
           is_active: isActive,
           description: description.trim(),
         };
@@ -375,6 +433,8 @@ export const ChannelFormModal: React.FC<ChannelFormModalProps> = ({
               code: providerType,
               base_url: effectiveBaseUrl,
               api_key: credentialKeys[index],
+              priority,
+              weight,
               is_active: isActive,
               description: description.trim() || undefined,
               models,
@@ -398,6 +458,8 @@ export const ChannelFormModal: React.FC<ChannelFormModalProps> = ({
           api_key: credentialKeys[0],
           api_keys: credentialMode === 'multi' ? credentialKeys : undefined,
           key_strategy: credentialMode === 'multi' ? keyStrategy : undefined,
+          priority,
+          weight,
           is_active: isActive,
           description: description.trim() || undefined,
           models,
@@ -597,15 +659,12 @@ export const ChannelFormModal: React.FC<ChannelFormModalProps> = ({
                       modelMapping={modelMapping}
                       onFetchModels={handleFetchModels}
                       onClearModels={handleClearModels}
-                      onAddModel={(model) => addModels([model])}
-                      onAddAllModels={() => addModels(availableModels)}
                       onRemoveModel={handleRemoveModel}
                       onCustomModelChange={setCustomModel}
                       onAddCustomModel={handleAddCustomModel}
                       onFillRelatedModels={() => addModels(getRelatedModels(providerType).slice(0, 3))}
                       onFillAllModels={() => addModels(uniqueTrimmed([
                         ...getRelatedModels(providerType),
-                        ...availableModels,
                         ...(providerType === 'custom' ? getAllPresetModels() : []),
                       ]))}
                       onModelMappingChange={setModelMapping}
@@ -616,12 +675,19 @@ export const ChannelFormModal: React.FC<ChannelFormModalProps> = ({
                 <section id={sectionElementIds.advanced} className="scroll-mt-5 pb-2">
                   <ChannelSectionHeader
                     title="高级设置"
-                    description="用于维护渠道用途和环境说明。"
+                    description="渠道调度参数和维护备注。"
                     icon={Settings}
                     tone="slate"
                   />
                   <div className="mt-5">
-                    <ChannelAdvancedSettings description={description} onDescriptionChange={setDescription} />
+                    <ChannelAdvancedSettings
+                      description={description}
+                      onDescriptionChange={setDescription}
+                      onPriorityChange={setPriority}
+                      onWeightChange={setWeight}
+                      priority={priority}
+                      weight={weight}
+                    />
                   </div>
                 </section>
               </main>
@@ -636,6 +702,17 @@ export const ChannelFormModal: React.FC<ChannelFormModalProps> = ({
           />
         </form>
       </div>
+      {modelFetchSession ? (
+        <ChannelModelFetchDialog
+          key={modelFetchSession.id}
+          channelName={name.trim() || '未命名渠道'}
+          fetchedModels={modelFetchSession.models}
+          initialMapping={modelMapping}
+          initialModels={selectedModels}
+          onClose={() => setModelFetchSession(null)}
+          onSave={handleSaveFetchedModels}
+        />
+      ) : null}
     </div>,
     document.body
   );

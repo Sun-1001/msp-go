@@ -36,7 +36,7 @@ func (r AdminAIConfigRepository) ListProviders(ctx context.Context, includeInact
 		where = "WHERE is_active"
 	}
 	rows, err := r.DB().Query(ctx, `
-		SELECT id, name, code, base_url, is_active, description, created_at, updated_at
+		SELECT id, name, code, base_url, priority, weight, is_active, description, created_at, updated_at
 		FROM public.llm_providers
 		`+where+`
 		ORDER BY created_at DESC, id DESC`)
@@ -59,7 +59,7 @@ func (r AdminAIConfigRepository) ListProviders(ctx context.Context, includeInact
 // GetProvider returns one provider including its encrypted API key.
 func (r AdminAIConfigRepository) GetProvider(ctx context.Context, providerID string) (adminaiconfigapp.StoredProvider, bool, error) {
 	row := r.DB().QueryRow(ctx, `
-		SELECT id, name, code, base_url, encrypted_api_key, is_active, description, created_at, updated_at
+		SELECT id, name, code, base_url, encrypted_api_key, priority, weight, is_active, description, created_at, updated_at
 		FROM public.llm_providers
 		WHERE id = $1`,
 		providerID,
@@ -78,15 +78,17 @@ func (r AdminAIConfigRepository) GetProvider(ctx context.Context, providerID str
 func (r AdminAIConfigRepository) CreateProvider(ctx context.Context, input adminaiconfigapp.ProviderInput, now time.Time) (adminaiconfigapp.LLMProvider, error) {
 	row := r.DB().QueryRow(ctx, `
 		INSERT INTO public.llm_providers (
-			id, name, code, base_url, encrypted_api_key, is_active, description, created_at, updated_at
+			id, name, code, base_url, encrypted_api_key, priority, weight, is_active, description, created_at, updated_at
 		)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $8)
-		RETURNING id, name, code, base_url, is_active, description, created_at, updated_at`,
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $10)
+		RETURNING id, name, code, base_url, priority, weight, is_active, description, created_at, updated_at`,
 		input.ID,
 		input.Name,
 		input.Code,
 		input.BaseURL,
 		input.EncryptedAPIKey,
+		input.Priority,
+		input.Weight,
 		input.IsActive,
 		input.Description,
 		now,
@@ -107,6 +109,8 @@ func (r AdminAIConfigRepository) UpdateProvider(ctx context.Context, providerID 
 	name := current.Name
 	baseURL := current.BaseURL
 	encryptedAPIKey := current.EncryptedAPIKey
+	priority := current.Priority
+	weight := current.Weight
 	isActive := current.IsActive
 	description := current.Description
 	if update.Name != nil {
@@ -117,6 +121,12 @@ func (r AdminAIConfigRepository) UpdateProvider(ctx context.Context, providerID 
 	}
 	if update.EncryptedAPIKey != nil {
 		encryptedAPIKey = *update.EncryptedAPIKey
+	}
+	if update.Priority != nil {
+		priority = *update.Priority
+	}
+	if update.Weight != nil {
+		weight = *update.Weight
 	}
 	if update.IsActive != nil {
 		isActive = *update.IsActive
@@ -129,15 +139,19 @@ func (r AdminAIConfigRepository) UpdateProvider(ctx context.Context, providerID 
 		SET name = $2,
 			base_url = $3,
 			encrypted_api_key = $4,
-			is_active = $5,
-			description = $6,
-			updated_at = $7
+			priority = $5,
+			weight = $6,
+			is_active = $7,
+			description = $8,
+			updated_at = $9
 		WHERE id = $1
-		RETURNING id, name, code, base_url, is_active, description, created_at, updated_at`,
+		RETURNING id, name, code, base_url, priority, weight, is_active, description, created_at, updated_at`,
 		providerID,
 		name,
 		baseURL,
 		encryptedAPIKey,
+		priority,
+		weight,
 		isActive,
 		description,
 		now,
@@ -211,6 +225,32 @@ func (r AdminAIConfigRepository) GetModel(ctx context.Context, modelID string) (
 		return adminaiconfigapp.LLMModel{}, false, err
 	}
 	return model, true, nil
+}
+
+// ListRuntimeCandidates returns active channel implementations for one logical model name.
+func (r AdminAIConfigRepository) ListRuntimeCandidates(ctx context.Context, modelKey string) ([]adminaiconfigapp.RuntimeCandidate, error) {
+	rows, err := r.DB().Query(ctx, `
+		SELECT `+runtimeCandidateSelectColumns+`
+		FROM public.llm_models m
+		JOIN public.llm_providers p ON p.id = m.provider_id
+		WHERE m.name = $1 AND m.is_active AND p.is_active
+		ORDER BY p.priority DESC, p.id ASC, m.is_default DESC, m.updated_at DESC, m.id ASC`,
+		strings.TrimSpace(modelKey),
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	candidates := []adminaiconfigapp.RuntimeCandidate{}
+	for rows.Next() {
+		candidate, err := scanRuntimeCandidate(rows)
+		if err != nil {
+			return nil, err
+		}
+		candidates = append(candidates, candidate)
+	}
+	return candidates, rows.Err()
 }
 
 // CreateModel inserts one model.
@@ -551,13 +591,14 @@ func (r AdminAIConfigRepository) GetAgentConfig(ctx context.Context, agentType s
 func (r AdminAIConfigRepository) UpsertAgentConfig(ctx context.Context, input adminaiconfigapp.AgentConfigInput, now time.Time) (adminaiconfigapp.AgentModelConfig, error) {
 	_, err := r.DB().Exec(ctx, `
 		INSERT INTO public.agent_model_configs (
-			id, agent_type, model_id, temperature_override, max_tokens_override,
+			id, agent_type, model_id, model_key, temperature_override, max_tokens_override,
 			top_p_override, timeout_override, max_retries_override, extra_config,
 			is_active, created_at, updated_at
 		)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9::json, $10, $11, $11)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10::json, $11, $12, $12)
 		ON CONFLICT (agent_type) DO UPDATE
 		SET model_id = EXCLUDED.model_id,
+			model_key = EXCLUDED.model_key,
 			temperature_override = EXCLUDED.temperature_override,
 			max_tokens_override = EXCLUDED.max_tokens_override,
 			top_p_override = EXCLUDED.top_p_override,
@@ -569,6 +610,7 @@ func (r AdminAIConfigRepository) UpsertAgentConfig(ctx context.Context, input ad
 		input.ID,
 		input.AgentType,
 		input.ModelID,
+		input.ModelKey,
 		input.TemperatureOverride,
 		input.MaxTokensOverride,
 		input.TopPOverride,
@@ -654,6 +696,7 @@ const agentConfigSelectColumns = `
 	a.id,
 	a.agent_type,
 	a.model_id,
+	a.model_key,
 	a.temperature_override,
 	a.max_tokens_override,
 	a.top_p_override,
@@ -667,6 +710,34 @@ const agentConfigSelectColumns = `
 	m.model_id AS model_model_id,
 	p.name AS provider_name`
 
+const runtimeCandidateSelectColumns = `
+	p.id,
+	p.name,
+	p.code,
+	p.base_url,
+	p.encrypted_api_key,
+	p.priority,
+	p.weight,
+	p.is_active,
+	p.description,
+	p.created_at,
+	p.updated_at,
+	m.id,
+	m.provider_id,
+	m.name,
+	m.model_id,
+	m.default_temperature,
+	m.default_max_tokens,
+	m.default_top_p,
+	m.default_timeout,
+	m.default_max_retries,
+	m.is_active,
+	m.is_default,
+	m.capabilities,
+	m.description,
+	m.created_at,
+	m.updated_at`
+
 func scanLLMProvider(scanner rowScanner) (adminaiconfigapp.LLMProvider, error) {
 	var provider adminaiconfigapp.LLMProvider
 	var description pgtype.Text
@@ -675,6 +746,8 @@ func scanLLMProvider(scanner rowScanner) (adminaiconfigapp.LLMProvider, error) {
 		&provider.Name,
 		&provider.Code,
 		&provider.BaseURL,
+		&provider.Priority,
+		&provider.Weight,
 		&provider.IsActive,
 		&description,
 		&provider.CreatedAt,
@@ -695,6 +768,8 @@ func scanStoredProvider(scanner rowScanner) (adminaiconfigapp.StoredProvider, er
 		&provider.Code,
 		&provider.BaseURL,
 		&provider.EncryptedAPIKey,
+		&provider.Priority,
+		&provider.Weight,
 		&provider.IsActive,
 		&description,
 		&provider.CreatedAt,
@@ -751,6 +826,7 @@ func scanLLMModel(scanner rowScanner) (adminaiconfigapp.LLMModel, error) {
 func scanAgentModelConfig(scanner rowScanner) (adminaiconfigapp.AgentModelConfig, error) {
 	var config adminaiconfigapp.AgentModelConfig
 	var modelID pgtype.Text
+	var modelKey pgtype.Text
 	var temperature pgtype.Float8
 	var maxTokens pgtype.Int4
 	var topP pgtype.Float8
@@ -764,6 +840,7 @@ func scanAgentModelConfig(scanner rowScanner) (adminaiconfigapp.AgentModelConfig
 		&config.ID,
 		&config.AgentType,
 		&modelID,
+		&modelKey,
 		&temperature,
 		&maxTokens,
 		&topP,
@@ -784,6 +861,7 @@ func scanAgentModelConfig(scanner rowScanner) (adminaiconfigapp.AgentModelConfig
 		return adminaiconfigapp.AgentModelConfig{}, fmt.Errorf("decode agent extra config: %w", err)
 	}
 	config.ModelID = textPtr(modelID)
+	config.ModelKey = textPtr(modelKey)
 	config.TemperatureOverride = floatPtr(temperature)
 	config.MaxTokensOverride = intPtr(maxTokens)
 	config.TopPOverride = floatPtr(topP)
@@ -794,6 +872,57 @@ func scanAgentModelConfig(scanner rowScanner) (adminaiconfigapp.AgentModelConfig
 	config.ModelModelID = textPtr(modelModelID)
 	config.ProviderName = textPtr(providerName)
 	return config, nil
+}
+
+func scanRuntimeCandidate(scanner rowScanner) (adminaiconfigapp.RuntimeCandidate, error) {
+	var candidate adminaiconfigapp.RuntimeCandidate
+	var providerDescription pgtype.Text
+	var maxTokens pgtype.Int4
+	var topP pgtype.Float8
+	var capabilitiesRaw []byte
+	var modelDescription pgtype.Text
+	if err := scanner.Scan(
+		&candidate.Provider.ID,
+		&candidate.Provider.Name,
+		&candidate.Provider.Code,
+		&candidate.Provider.BaseURL,
+		&candidate.Provider.EncryptedAPIKey,
+		&candidate.Provider.Priority,
+		&candidate.Provider.Weight,
+		&candidate.Provider.IsActive,
+		&providerDescription,
+		&candidate.Provider.CreatedAt,
+		&candidate.Provider.UpdatedAt,
+		&candidate.Model.ID,
+		&candidate.Model.ProviderID,
+		&candidate.Model.Name,
+		&candidate.Model.ModelID,
+		&candidate.Model.DefaultTemperature,
+		&maxTokens,
+		&topP,
+		&candidate.Model.DefaultTimeout,
+		&candidate.Model.DefaultMaxRetries,
+		&candidate.Model.IsActive,
+		&candidate.Model.IsDefault,
+		&capabilitiesRaw,
+		&modelDescription,
+		&candidate.Model.CreatedAt,
+		&candidate.Model.UpdatedAt,
+	); err != nil {
+		return adminaiconfigapp.RuntimeCandidate{}, err
+	}
+	capabilities, err := decodeObjectMap(capabilitiesRaw)
+	if err != nil {
+		return adminaiconfigapp.RuntimeCandidate{}, fmt.Errorf("decode runtime model capabilities: %w", err)
+	}
+	candidate.Provider.Description = textPtr(providerDescription)
+	candidate.Model.DefaultMaxTokens = intPtr(maxTokens)
+	candidate.Model.DefaultTopP = floatPtr(topP)
+	candidate.Model.Capabilities = capabilities
+	candidate.Model.Description = textPtr(modelDescription)
+	candidate.Model.ProviderName = &candidate.Provider.Name
+	candidate.Model.ProviderCode = &candidate.Provider.Code
+	return candidate, nil
 }
 
 func findModelByProviderModelID(models []adminaiconfigapp.LLMModel, providerModelID string) (adminaiconfigapp.LLMModel, bool) {

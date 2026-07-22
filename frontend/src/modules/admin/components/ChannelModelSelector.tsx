@@ -21,9 +21,7 @@ interface ChannelModelSelectorProps {
   customModel: string;
   isFetchingModels: boolean;
   modelMapping: Record<string, string>;
-  onAddAllModels: () => void;
   onAddCustomModel: () => void;
-  onAddModel: (model: string) => void;
   onClearModels: () => void;
   onCustomModelChange: (value: string) => void;
   onFetchModels: () => void;
@@ -40,9 +38,7 @@ export const ChannelModelSelector: React.FC<ChannelModelSelectorProps> = ({
   customModel,
   isFetchingModels,
   modelMapping,
-  onAddAllModels,
   onAddCustomModel,
-  onAddModel,
   onClearModels,
   onCustomModelChange,
   onFetchModels,
@@ -69,11 +65,11 @@ export const ChannelModelSelector: React.FC<ChannelModelSelectorProps> = ({
     const source = mappingSource.trim();
     const target = mappingTarget.trim();
     if (!source || !target) {
-      setMappingError('请同时填写请求模型和上游模型');
+      setMappingError('请同时填写逻辑模型和上游模型');
       return;
     }
     if (!selectedModels.includes(source)) {
-      setMappingError('请求模型必须先加入模型列表');
+      setMappingError('逻辑模型必须先加入模型列表');
       return;
     }
     onModelMappingChange({ ...modelMapping, [source]: target });
@@ -126,10 +122,10 @@ export const ChannelModelSelector: React.FC<ChannelModelSelectorProps> = ({
         <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
           <div>
             <label className="text-sm font-medium text-surface-900 dark:text-surface-100">
-              模型 <span className="text-red-500">*</span>
+              逻辑模型 <span className="text-red-500">*</span>
             </label>
             <p className="mt-1 text-xs leading-5 text-surface-500 dark:text-surface-400">
-              此渠道支持的模型列表；可选择预设或输入自定义模型。
+              此渠道提供的统一模型名称。
             </p>
           </div>
           <span className="w-fit rounded-full border border-surface-200 bg-white px-2.5 py-1 text-xs text-surface-600 dark:border-surface-700 dark:bg-surface-800 dark:text-surface-300">
@@ -178,47 +174,12 @@ export const ChannelModelSelector: React.FC<ChannelModelSelectorProps> = ({
           </button>
         </div>
 
-        {availableModels.length > 0 && (
-          <div className="mt-3 rounded-md border border-surface-200 bg-white p-3 dark:border-surface-700 dark:bg-surface-800">
-            <div className="mb-2 flex items-center justify-between gap-3">
-              <span className="text-xs font-medium text-surface-600 dark:text-surface-300">
-                上游模型（{availableModels.length}）
-              </span>
-              <Button type="button" variant="ghost" size="sm" onClick={onAddAllModels}>
-                全部添加
-              </Button>
-            </div>
-            <div className="flex max-h-36 flex-wrap gap-2 overflow-y-auto">
-              {availableModels.map((model) => {
-                const selected = selectedModels.includes(model);
-                return (
-                  <button
-                    key={model}
-                    type="button"
-                    disabled={selected}
-                    onClick={() => onAddModel(model)}
-                    className={cn(
-                      'rounded-md border px-2 py-1 text-xs transition-colors',
-                      selected
-                        ? 'border-primary-200 bg-primary-50 text-primary-600 dark:border-primary-800 dark:bg-primary-950/50 dark:text-primary-300'
-                        : 'border-surface-200 bg-white text-surface-600 hover:border-primary-300 hover:text-primary-600 dark:border-surface-700 dark:bg-surface-800 dark:text-surface-300'
-                    )}
-                  >
-                    {selected && <Check className="mr-1 inline h-3 w-3" aria-hidden="true" />}
-                    {model}
-                  </button>
-                );
-              })}
-            </div>
-          </div>
-        )}
-
         <div className="my-5 border-t border-surface-200 dark:border-surface-700" />
 
         <div>
           <div className="text-sm font-medium text-surface-900 dark:text-surface-100">快捷操作</div>
           <p className="mt-1 text-xs text-surface-500 dark:text-surface-400">
-            使用预设或上游发现快速填充模型列表。
+            使用预设快速填充，或从上游获取后按分类选择模型。
           </p>
           <div className="mt-3 flex flex-wrap gap-2">
             <Button type="button" variant="outline" size="sm" onClick={onFillRelatedModels}>
@@ -227,7 +188,7 @@ export const ChannelModelSelector: React.FC<ChannelModelSelectorProps> = ({
             </Button>
             <Button type="button" variant="outline" size="sm" onClick={onFillAllModels}>
               <Plus className="mr-1.5 h-4 w-4" aria-hidden="true" />
-              填充所有模型
+              填入全部预设
             </Button>
             <Button
               type="button"
@@ -242,7 +203,7 @@ export const ChannelModelSelector: React.FC<ChannelModelSelectorProps> = ({
               ) : (
                 <Download className="mr-1.5 h-4 w-4" aria-hidden="true" />
               )}
-              从上游获取
+              获取模型
             </Button>
             <Button type="button" variant="outline" size="sm" onClick={copyModels} disabled={!selectedModels.length}>
               {copied ? <Check className="mr-1.5 h-4 w-4" /> : <ClipboardCopy className="mr-1.5 h-4 w-4" />}
@@ -261,7 +222,7 @@ export const ChannelModelSelector: React.FC<ChannelModelSelectorProps> = ({
           <div>
             <div className="text-sm font-medium text-surface-900 dark:text-surface-100">模型映射</div>
             <p className="mt-1 text-xs leading-5 text-surface-500 dark:text-surface-400">
-              将界面中的模型名称映射到实际提供商模型名称。
+              将逻辑模型名称映射到此渠道的上游模型 ID。
             </p>
           </div>
           <div className="inline-flex w-fit rounded-md bg-surface-100 p-1 dark:bg-surface-800" role="tablist" aria-label="模型映射编辑模式">
@@ -327,7 +288,7 @@ export const ChannelModelSelector: React.FC<ChannelModelSelectorProps> = ({
               <input
                 value={mappingSource}
                 onChange={(event) => setMappingSource(event.target.value)}
-                placeholder="请求模型名称"
+                placeholder="逻辑模型名称"
                 list="channel-selected-models"
                 className="h-10 min-w-0 rounded-md border border-surface-200 bg-white px-3 text-sm outline-none focus:border-primary-400 focus:ring-2 focus:ring-primary-500/20 dark:border-surface-700 dark:bg-surface-800"
               />
@@ -335,7 +296,7 @@ export const ChannelModelSelector: React.FC<ChannelModelSelectorProps> = ({
               <input
                 value={mappingTarget}
                 onChange={(event) => setMappingTarget(event.target.value)}
-                placeholder="上游模型名称"
+                placeholder="上游模型 ID"
                 list="channel-available-models"
                 className="h-10 min-w-0 rounded-md border border-surface-200 bg-white px-3 text-sm outline-none focus:border-primary-400 focus:ring-2 focus:ring-primary-500/20 dark:border-surface-700 dark:bg-surface-800"
               />

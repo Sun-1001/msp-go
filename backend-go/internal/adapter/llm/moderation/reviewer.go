@@ -21,7 +21,6 @@ const (
 	contentModeratorAgentType = "content_moderator"
 	maxModerationInputRunes   = 12_000
 	maxModerationResponseSize = 1 << 20
-	maxModerationAttempts     = 3
 )
 
 // HTTPDoer is the HTTP boundary used by the moderation adapter.
@@ -31,7 +30,7 @@ type HTTPDoer interface {
 
 // RuntimeConfigProvider loads the encrypted-at-rest provider configuration.
 type RuntimeConfigProvider interface {
-	RuntimeConfig(context.Context, string) (adminaiconfigapp.RuntimeConfig, bool, error)
+	RuntimeConfigs(context.Context, string) ([]adminaiconfigapp.RuntimeConfig, bool, error)
 }
 
 // Reviewer calls an OpenAI-compatible moderations endpoint.
@@ -65,31 +64,42 @@ func (r *Reviewer) Review(ctx context.Context, content string) (airiskapp.ModelR
 	if r == nil || r.provider == nil {
 		return airiskapp.ModelReviewResult{}, errors.New("moderation reviewer is unavailable")
 	}
+	if err := ctx.Err(); err != nil {
+		return airiskapp.ModelReviewResult{}, err
+	}
 	content = trimModerationInput(content)
 	if content == "" {
 		return airiskapp.ModelReviewResult{}, errors.New("moderation input is empty")
 	}
-	runtime, ok, err := r.provider.RuntimeConfig(ctx, contentModeratorAgentType)
+	runtimes, ok, err := r.provider.RuntimeConfigs(ctx, contentModeratorAgentType)
 	if err != nil {
 		return airiskapp.ModelReviewResult{}, fmt.Errorf("load moderation runtime config: %w", err)
 	}
-	if !ok {
+	if !ok || len(runtimes) == 0 {
 		return airiskapp.ModelReviewResult{}, errors.New("content moderator agent is not configured")
 	}
-	baseURL, err := validateRuntimeConfig(runtime)
-	if err != nil {
-		return airiskapp.ModelReviewResult{}, err
-	}
-
-	attempts := min(max(runtime.MaxRetries+1, 1), maxModerationAttempts)
 	var lastErr error
-	for attempt := 0; attempt < attempts; attempt++ {
+	for attempt, runtime := range runtimes {
+		if err := ctx.Err(); err != nil {
+			return airiskapp.ModelReviewResult{}, err
+		}
+		baseURL, err := validateRuntimeConfig(runtime)
+		if err != nil {
+			lastErr = err
+			if attempt == len(runtimes)-1 {
+				break
+			}
+			continue
+		}
 		result, err := r.reviewOnce(ctx, runtime, baseURL, content)
 		if err == nil {
 			return result, nil
 		}
 		lastErr = err
-		if ctx.Err() != nil || !isRetryable(err) || attempt == attempts-1 {
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return airiskapp.ModelReviewResult{}, ctxErr
+		}
+		if !isRetryable(err) || attempt == len(runtimes)-1 {
 			break
 		}
 		if err := waitForRetry(ctx, r.retryDelay(attempt)); err != nil {
@@ -233,11 +243,15 @@ func (e requestError) Error() string {
 func (e requestError) Unwrap() error { return e.cause }
 
 func isRetryable(err error) bool {
+	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		return false
+	}
 	var requestErr requestError
 	if !errors.As(err, &requestErr) {
 		return false
 	}
-	return requestErr.status == 0 || requestErr.status == http.StatusTooManyRequests || requestErr.status >= http.StatusInternalServerError
+	status := requestErr.status
+	return status == 0 || status == http.StatusUnauthorized || status == http.StatusForbidden || status == http.StatusNotFound || status == http.StatusRequestTimeout || status == http.StatusConflict || status == http.StatusTooManyRequests || status >= http.StatusInternalServerError
 }
 
 func waitForRetry(ctx context.Context, delay time.Duration) error {

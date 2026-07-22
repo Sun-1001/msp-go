@@ -18,6 +18,8 @@ import {
   Loader2,
   CheckCircle,
   XCircle,
+  Gauge,
+  Scale,
 } from 'lucide-react';
 import { Button } from '@/components/ui/Button';
 import { Badge } from '@/components/ui/Badge';
@@ -47,6 +49,7 @@ export const ChannelCard: React.FC<ChannelCardProps> = ({
   const [isTesting, setIsTesting] = useState(false);
   const [testResult, setTestResult] = useState<ProviderTestResult | null>(null);
   const [testingModelId, setTestingModelId] = useState<string | null>(null);
+  const providerCode = provider.code === 'openai-responses' ? 'openai' : provider.code;
 
   // 测试连接
   const handleTestConnection = async (modelId?: string) => {
@@ -86,7 +89,7 @@ export const ChannelCard: React.FC<ChannelCardProps> = ({
       zhipu: 'text-red-600 dark:text-red-400',
       moonshot: 'text-yellow-600 dark:text-yellow-400',
     };
-    return colors[provider.code] || 'text-primary-600 dark:text-primary-400';
+    return colors[providerCode] || 'text-primary-600 dark:text-primary-400';
   };
 
   return (
@@ -109,7 +112,7 @@ export const ChannelCard: React.FC<ChannelCardProps> = ({
                   </h3>
                   {getStatusBadge()}
                   <Badge variant="default" className="text-xs">
-                    {provider.code}
+                    {providerCode}
                   </Badge>
                 </div>
 
@@ -117,7 +120,7 @@ export const ChannelCard: React.FC<ChannelCardProps> = ({
                   {provider.description || '暂无描述'}
                 </div>
 
-                <div className="flex items-center gap-4 text-sm">
+                <div className="flex flex-wrap items-center gap-x-4 gap-y-2 text-sm">
                   <div className="flex items-center gap-1 text-surface-500 dark:text-surface-400">
                     <ExternalLink className="w-4 h-4" />
                     <span className="font-mono text-xs truncate max-w-[200px]">
@@ -128,6 +131,20 @@ export const ChannelCard: React.FC<ChannelCardProps> = ({
                     <Brain className="w-4 h-4" />
                     <span>{models.length} 个模型</span>
                   </div>
+				  <div
+					className="flex items-center gap-1 text-surface-500 dark:text-surface-400"
+					title="数值越大越先参与调度"
+				  >
+					<Gauge className="h-4 w-4" />
+					<span>优先级 {provider.priority}</span>
+				  </div>
+				  <div
+					className="flex items-center gap-1 text-surface-500 dark:text-surface-400"
+					title="同优先级渠道的相对选择权重"
+				  >
+					<Scale className="h-4 w-4" />
+					<span>权重 {provider.weight}</span>
+				  </div>
                 </div>
 
                 {/* 测试结果 */}

@@ -28,6 +28,7 @@ import type {
   LLMProvider,
   UpdateAgentConfigRequest,
 } from '@/modules/ai-config/types/aiConfig';
+import { buildLogicalModelOptions, resolveAgentModelKey } from './agentModelOptions';
 
 interface AgentConfigPanelProps {
   agentTypes: AgentTypeInfo[];
@@ -40,7 +41,7 @@ interface AgentConfigPanelProps {
 }
 
 interface AgentConfigFormData {
-  model_id: string;
+  model_key: string;
   temperature_override: string;
   max_tokens_override: string;
   top_p_override: string;
@@ -49,7 +50,7 @@ interface AgentConfigFormData {
 }
 
 const defaultFormData: AgentConfigFormData = {
-  model_id: '',
+  model_key: '',
   temperature_override: '',
   max_tokens_override: '',
   top_p_override: '',
@@ -78,7 +79,7 @@ export const AgentConfigPanel: React.FC<AgentConfigPanelProps> = ({
       const config = agentConfigs.find((c) => c.agent_type === type.type);
       if (config) {
         initialData[type.type] = {
-          model_id: config.model_id || '',
+          model_key: resolveAgentModelKey(config, models),
           temperature_override: config.temperature_override?.toString() || '',
           max_tokens_override: config.max_tokens_override?.toString() || '',
           top_p_override: config.top_p_override?.toString() || '',
@@ -90,28 +91,16 @@ export const AgentConfigPanel: React.FC<AgentConfigPanelProps> = ({
       }
     });
     setFormData(initialData);
-  }, [agentTypes, agentConfigs]);
+  }, [agentTypes, agentConfigs, models]);
 
   // 获取配置
   const getConfig = (agentType: string) => {
     return agentConfigs.find((c) => c.agent_type === agentType);
   };
 
-  // 获取模型选项（按提供商分组）
+  // 获取按逻辑模型聚合的可用渠道。
   const modelOptions = useMemo(() => {
-    const options: { value: string; label: string }[] = [];
-
-    providers.forEach((provider) => {
-      const providerModels = models.filter((m) => m.provider_id === provider.id && m.is_active);
-      providerModels.forEach((model) => {
-        options.push({
-          value: model.id,
-          label: `${provider.name} / ${model.name}`,
-        });
-      });
-    });
-
-    return options;
+    return buildLogicalModelOptions(providers, models);
   }, [providers, models]);
 
   // 更新表单字段
@@ -128,17 +117,23 @@ export const AgentConfigPanel: React.FC<AgentConfigPanelProps> = ({
   // 保存配置
   const handleSave = async (agentType: string) => {
     const data = formData[agentType];
-    if (!data?.model_id) {
-      setError('请选择模型');
+    if (!data?.model_key) {
+      setError('请选择逻辑模型');
       return;
     }
+	const selectedModel = modelOptions.find((option) => option.value === data.model_key);
+	if (!selectedModel) {
+	  setError('所选逻辑模型当前没有可用渠道');
+	  return;
+	}
 
     setSavingAgent(agentType);
     setError(null);
 
     try {
       const request: UpdateAgentConfigRequest = {
-        model_id: data.model_id,
+		model_key: data.model_key,
+		model_id: selectedModel.representativeModelId,
         temperature_override: data.temperature_override
           ? parseFloat(data.temperature_override)
           : null,
@@ -197,24 +192,6 @@ export const AgentConfigPanel: React.FC<AgentConfigPanelProps> = ({
     return AgentTypeDisplayNames[type as keyof typeof AgentTypeDisplayNames] || type;
   };
 
-  // 获取模型显示信息（按 modelId -> { modelName, providerName } 的映射）
-  const modelDisplayInfoMap = useMemo(() => {
-    const map = new Map<string, { modelName: string; providerName: string }>();
-    models.forEach((model) => {
-      const provider = providers.find((p) => p.id === model.provider_id);
-      map.set(model.id, {
-        modelName: model.name,
-        providerName: provider?.name || '未知提供商',
-      });
-    });
-    return map;
-  }, [models, providers]);
-
-  const getModelDisplayInfo = (modelId: string | null) => {
-    if (!modelId) return null;
-    return modelDisplayInfoMap.get(modelId) ?? null;
-  };
-
   if (loading) {
     return (
       <div className="flex items-center justify-center py-12">
@@ -237,7 +214,8 @@ export const AgentConfigPanel: React.FC<AgentConfigPanelProps> = ({
         const config = getConfig(agentType.type);
         const isExpanded = expandedAgent === agentType.type;
         const data = formData[agentType.type] || defaultFormData;
-        const modelInfo = getModelDisplayInfo(config?.model_id || null);
+		const configuredModelKey = resolveAgentModelKey(config, models);
+		const configuredModel = modelOptions.find((option) => option.value === configuredModelKey);
 
         return (
           <Card key={agentType.type} className="overflow-hidden">
@@ -266,9 +244,9 @@ export const AgentConfigPanel: React.FC<AgentConfigPanelProps> = ({
                       </Badge>
                     )}
                   </div>
-                  {modelInfo && (
+				  {configuredModelKey && (
                     <p className="text-sm text-surface-500 dark:text-surface-400">
-                      {modelInfo.providerName} / {modelInfo.modelName}
+					  {configuredModelKey} · {configuredModel?.channelCount ?? 0} 个可用渠道
                     </p>
                   )}
                 </div>
@@ -289,14 +267,14 @@ export const AgentConfigPanel: React.FC<AgentConfigPanelProps> = ({
                   {/* 模型选择 */}
                   <div>
                     <label className="block text-sm font-medium text-surface-900 dark:text-surface-100 mb-2">
-                      选择模型 <span className="text-red-500">*</span>
+					  选择逻辑模型 <span className="text-red-500">*</span>
                     </label>
                     <Select
-                      value={data.model_id}
-                      onChange={(value) => updateField(agentType.type, 'model_id', value)}
+					  value={data.model_key}
+					  onChange={(value) => updateField(agentType.type, 'model_key', value)}
                       className="w-full"
                       options={[
-                        { value: '', label: '请选择模型...' },
+						{ value: '', label: '请选择逻辑模型...' },
                         ...modelOptions,
                       ]}
                     />
@@ -409,7 +387,7 @@ export const AgentConfigPanel: React.FC<AgentConfigPanelProps> = ({
                     </Button>
                     <Button
                       onClick={() => handleSave(agentType.type)}
-                      disabled={savingAgent === agentType.type || !data.model_id}
+					  disabled={savingAgent === agentType.type || !data.model_key}
                     >
                       {savingAgent === agentType.type ? (
                         <Loader2 className="w-4 h-4 mr-2 animate-spin" />

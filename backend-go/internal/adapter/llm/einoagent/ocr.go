@@ -47,27 +47,19 @@ func (r *ConfigurableAnswerOCR) Recognize(ctx context.Context, input answerocrap
 	if r == nil {
 		return answerocrapp.Result{}, errors.New("configurable Eino answer OCR is nil")
 	}
-	cfg := r.fallback
-	if r.provider != nil {
-		runtime, ok, err := r.provider.RuntimeConfig(ctx, "ocr")
-		if err != nil {
-			return answerocrapp.Result{}, fmt.Errorf("load OCR runtime config: %w", err)
-		}
-		if ok {
-			cfg = configFromRuntime(runtime)
-		}
-	}
 	newRecognizer := r.newRecognizer
 	if newRecognizer == nil {
 		newRecognizer = func(ctx context.Context, cfg Config) (answerocrapp.Recognizer, error) {
 			return NewAnswerOCR(ctx, cfg)
 		}
 	}
-	recognizer, err := newRecognizer(ctx, cfg)
-	if err != nil {
-		return answerocrapp.Result{}, err
-	}
-	return recognizer.Recognize(ctx, input)
+	return runWithRuntimeCandidates(ctx, r.provider, "ocr", r.fallback, func(ctx context.Context, cfg Config) (answerocrapp.Result, error) {
+		recognizer, err := newRecognizer(ctx, cfg)
+		if err != nil {
+			return answerocrapp.Result{}, candidateSetupError{cause: err}
+		}
+		return recognizer.Recognize(ctx, input)
+	})
 }
 
 type answerOCR struct {
