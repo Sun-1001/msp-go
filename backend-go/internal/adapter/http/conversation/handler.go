@@ -19,7 +19,7 @@ import (
 // Service is the conversation application surface used by HTTP handlers.
 type Service interface {
 	ListConversations(ctx context.Context, userID string, role user.Role, search string, status string, className string, page int, pageSize int) (conversationapp.ListResponse, error)
-	GetConversation(ctx context.Context, userID string, conversationID string) (conversationapp.ConversationDetail, error)
+	GetConversation(ctx context.Context, userID string, conversationID string, page int, pageSize int) (conversationapp.ConversationDetail, error)
 	CreateConversation(ctx context.Context, creatorID string, creatorRole user.Role, targetID string, subject string, initialMessage string) (conversationapp.ConversationDetail, error)
 	SendMessage(ctx context.Context, conversationID string, senderID string, senderRole string, text string) (conversationapp.Message, error)
 	ArchiveConversation(ctx context.Context, conversationID string, studentID string) error
@@ -88,6 +88,10 @@ func (h *Handler) listConversations(w http.ResponseWriter, r *http.Request) {
 	if pageSize < 1 {
 		pageSize = 20
 	}
+	if pageSize > 100 {
+		writeConvError(w, http.StatusUnprocessableEntity, "VALIDATION_ERROR", "page_size 必须在 1 到 100 之间")
+		return
+	}
 	response, err := h.service.ListConversations(r.Context(), principal.UserID, principal.Role,
 		q.Get("search"), q.Get("status"), q.Get("class_name"), page, pageSize)
 	if err != nil {
@@ -103,7 +107,12 @@ func (h *Handler) getConversation(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	response, err := h.service.GetConversation(r.Context(), principal.UserID, r.PathValue("id"))
+	page, _ := strconv.Atoi(r.URL.Query().Get("messages_page"))
+	if page < 1 { page = 1 }
+	pageSize, _ := strconv.Atoi(r.URL.Query().Get("messages_page_size"))
+	if pageSize < 1 { pageSize = 50 }
+	if pageSize > 100 { writeConvError(w, http.StatusUnprocessableEntity, "VALIDATION_ERROR", "messages_page_size 必须在 1 到 100 之间"); return }
+	response, err := h.service.GetConversation(r.Context(), principal.UserID, r.PathValue("id"), page, pageSize)
 	if err != nil {
 		if errors.Is(err, conversationapp.ErrNotFound) {
 			writeConvError(w, http.StatusNotFound, "NOT_FOUND", "会话不存在")

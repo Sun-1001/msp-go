@@ -170,17 +170,24 @@ func (r NoticeRepository) listTeacherNotices(ctx context.Context, teacherID stri
 			WHERE e.class_id = (SELECT class_id FROM public.notices WHERE id = $1) AND u.id NOT IN (
 				SELECT nc.student_id FROM public.notice_confirmations nc WHERE nc.notice_id = $1
 			)`, item.ID)
-		if err == nil {
-			names := make([]string, 0)
-			for studentRows.Next() {
-				var name string
-				if err := studentRows.Scan(&name); err == nil {
-					names = append(names, name)
-				}
-			}
-			studentRows.Close()
-			item.UnconfirmedStudents = names
+		if err != nil {
+			return nil, 0, err
 		}
+		names := make([]string, 0)
+		for studentRows.Next() {
+			var name string
+			if err := studentRows.Scan(&name); err != nil {
+				studentRows.Close()
+				return nil, 0, err
+			}
+			names = append(names, name)
+		}
+		if err := studentRows.Err(); err != nil {
+			studentRows.Close()
+			return nil, 0, err
+		}
+		studentRows.Close()
+		item.UnconfirmedStudents = names
 		items = append(items, item)
 	}
 	return items, total, rows.Err()
@@ -253,30 +260,44 @@ func (r NoticeRepository) getTeacherNotice(ctx context.Context, noticeID string,
 		WHERE e.class_id = (SELECT class_id FROM public.notices WHERE id = $1) AND u.id NOT IN (
 			SELECT nc.student_id FROM public.notice_confirmations nc WHERE nc.notice_id = $1
 		)`, item.ID)
-	if err == nil {
-		names := make([]string, 0)
-		for studentRows.Next() {
-			var name string
-			if err := studentRows.Scan(&name); err == nil {
-				names = append(names, name)
-			}
-		}
-		studentRows.Close()
-		item.UnconfirmedStudents = names
+	if err != nil {
+		return nil, false, err
 	}
+	names := make([]string, 0)
+	for studentRows.Next() {
+		var name string
+		if err := studentRows.Scan(&name); err != nil {
+			studentRows.Close()
+			return nil, false, err
+		}
+		names = append(names, name)
+	}
+	if err := studentRows.Err(); err != nil {
+		studentRows.Close()
+		return nil, false, err
+	}
+	studentRows.Close()
+	item.UnconfirmedStudents = names
 	return item, true, nil
 }
 
 // CreateNotice publishes a new notice.
-func (r NoticeRepository) CreateNotice(ctx context.Context, teacherID string, className string, title string, body string, now time.Time) (noticeapp.TeacherNoticeItem, error) {
+func (r NoticeRepository) CreateNotice(ctx context.Context, teacherID string, classID string, title string, body string, now time.Time) (noticeapp.TeacherNoticeItem, error) {
+	var className string
+	if err := r.DB().QueryRow(ctx, `SELECT name FROM public.classes WHERE id = $1 AND teacher_id = $2`, classID, teacherID).Scan(&className); err != nil {
+		if err == pgx.ErrNoRows {
+			return noticeapp.TeacherNoticeItem{}, noticeapp.ErrForbidden
+		}
+		return noticeapp.TeacherNoticeItem{}, err
+	}
 	id, err := newUUID()
 	if err != nil {
 		return noticeapp.TeacherNoticeItem{}, err
 	}
 	tag, err := r.DB().Exec(ctx, `
 		INSERT INTO public.notices (id, teacher_id, class_id, title, body, created_at)
-		SELECT $1, $2, c.id, $4, $5, $6 FROM public.classes c WHERE c.teacher_id = $2 AND c.name = $3`,
-		id, teacherID, className, title, body, now,
+		VALUES ($1, $2, $3, $4, $5, $6)`,
+		id, teacherID, classID, title, body, now,
 	)
 	if err != nil {
 		return noticeapp.TeacherNoticeItem{}, err

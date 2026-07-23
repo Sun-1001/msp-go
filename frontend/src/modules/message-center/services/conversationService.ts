@@ -25,6 +25,9 @@ export interface ConversationItem {
 
 export interface ConversationDetail extends ConversationItem {
   messages: Message[];
+  messages_total: number;
+  messages_page: number;
+  messages_page_size: number;
 }
 
 export interface ListResponse {
@@ -63,8 +66,8 @@ export const conversationService = {
     return data;
   },
 
-  async get(id: string): Promise<ConversationDetail> {
-    const { data } = await apiClient.get<ConversationDetail>(`${BASE}/${id}`);
+  async get(id: string, params?: { messages_page?: number; messages_page_size?: number }): Promise<ConversationDetail> {
+    const { data } = await apiClient.get<ConversationDetail>(`${BASE}/${id}`, { params });
     return data;
   },
 

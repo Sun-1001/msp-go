@@ -188,7 +188,7 @@ func (r ConversationRepository) listTeacherConversations(ctx context.Context, te
 }
 
 // GetConversation returns a conversation with full message history.
-func (r ConversationRepository) GetConversation(ctx context.Context, conversationID string, userID string) (conversationapp.ConversationDetail, bool, error) {
+func (r ConversationRepository) GetConversation(ctx context.Context, conversationID string, userID string, page, pageSize int) (conversationapp.ConversationDetail, bool, error) {
 	var detail conversationapp.ConversationDetail
 	var teacherName, teacherUsername, studentName, studentUsername, subject string
 	var teacherDisplay, studentDisplay pgtype.Text
@@ -225,13 +225,21 @@ func (r ConversationRepository) GetConversation(ctx context.Context, conversatio
 	detail.Scope = subject
 	detail.ClassName = subject
 
-	// Load messages
+	if page < 1 { page = 1 }
+	pgPage, err := NewPage((page-1)*pageSize, pageSize)
+	if err != nil { return conversationapp.ConversationDetail{}, false, err }
+	if err := r.DB().QueryRow(ctx, `SELECT COUNT(*) FROM public.conversation_messages WHERE conversation_id = $1`, conversationID).Scan(&detail.MessagesTotal); err != nil {
+		return conversationapp.ConversationDetail{}, false, err
+	}
+	detail.MessagesPage, detail.MessagesSize = page, pgPage.Limit
+	// Load the newest page, then restore chronological order for the UI.
 	msgRows, err := r.DB().Query(ctx, `
 		SELECT cm.id, cm.sender_role, cm.text, cm.created_at, cm.read_at
 		FROM public.conversation_messages cm
 		WHERE cm.conversation_id = $1
-		ORDER BY cm.created_at`,
-		conversationID,
+		ORDER BY cm.created_at DESC
+		LIMIT $2 OFFSET $3`,
+		conversationID, pgPage.Limit, pgPage.Offset,
 	)
 	if err != nil {
 		return conversationapp.ConversationDetail{}, false, err
@@ -254,6 +262,7 @@ func (r ConversationRepository) GetConversation(ctx context.Context, conversatio
 	if err := msgRows.Err(); err != nil {
 		return conversationapp.ConversationDetail{}, false, err
 	}
+	for left, right := 0, len(detail.Messages)-1; left < right; left, right = left+1, right-1 { detail.Messages[left], detail.Messages[right] = detail.Messages[right], detail.Messages[left] }
 
 	return detail, true, nil
 }
@@ -263,7 +272,13 @@ func (r ConversationRepository) MarkConversationRead(ctx context.Context, conver
 	_, err := r.DB().Exec(ctx, `
 		UPDATE public.conversation_messages
 		SET read_at = now()
-		WHERE conversation_id = $1 AND sender_id != $2 AND read_at IS NULL`,
+		WHERE conversation_id = $1
+		  AND sender_id != $2
+		  AND read_at IS NULL
+		  AND EXISTS (
+			  SELECT 1 FROM public.conversations c
+			  WHERE c.id = $1 AND (c.student_id = $2 OR c.teacher_id = $2)
+		  )`,
 		conversationID, userID,
 	)
 	return err
@@ -334,7 +349,7 @@ func (r ConversationRepository) CreateConversation(ctx context.Context, creatorI
 		return conversationapp.ConversationDetail{}, err
 	}
 
-	detail, found, err := r.GetConversation(ctx, convID, creatorID)
+	detail, found, err := r.GetConversation(ctx, convID, creatorID, 1, 50)
 	if err != nil || !found {
 		return conversationapp.ConversationDetail{}, err
 	}
@@ -356,9 +371,10 @@ func (r ConversationRepository) SendMessage(ctx context.Context, conversationID 
 
 	tag, err := tx.Exec(ctx, `
 		INSERT INTO public.conversation_messages (id, conversation_id, sender_id, sender_role, text, created_at)
-		SELECT $1, c.id, $3, $4, $5, $6
+		SELECT $1::character varying, c.id::character varying, $3::character varying, $4::character varying, $5, $6
 		FROM public.conversations c
-		WHERE c.id = $2 AND ((c.student_id = $3 AND $4 = 'student') OR (c.teacher_id = $3 AND $4 = 'teacher'))`,
+		WHERE c.id::text = $2::text
+		  AND ((c.student_id::text = $3::text AND $4 = 'student') OR (c.teacher_id::text = $3::text AND $4 = 'teacher'))`,
 		msgID, conversationID, senderID, senderRole, text, now,
 	)
 	if err != nil {

@@ -19,7 +19,7 @@ import (
 // Service is the Q&A thread application surface used by HTTP handlers.
 type Service interface {
 	ListThreads(ctx context.Context, userID string, role user.Role, search string, status string, className string, teacherID string, page int, pageSize int) (qathreadapp.ListResponse, error)
-	GetThread(ctx context.Context, userID string, threadID string, role user.Role) (any, error)
+	GetThread(ctx context.Context, userID string, threadID string, role user.Role, page int, pageSize int) (any, error)
 	CreateThread(ctx context.Context, studentID string, teacherID string, content string, source string) (qathreadapp.ThreadDetail, error)
 	CreateThreadMessage(ctx context.Context, threadID string, senderID string, senderRole string, text string) (qathreadapp.Message, error)
 	UpdateThreadStatus(ctx context.Context, threadID string, teacherID string, status string) error
@@ -83,6 +83,10 @@ func (h *Handler) listThreads(w http.ResponseWriter, r *http.Request) {
 	if pageSize < 1 {
 		pageSize = 20
 	}
+	if pageSize > 100 {
+		writeQAError(w, http.StatusUnprocessableEntity, "VALIDATION_ERROR", "page_size 必须在 1 到 100 之间")
+		return
+	}
 	response, err := h.service.ListThreads(r.Context(), principal.UserID, principal.Role,
 		q.Get("search"), q.Get("status"), q.Get("class_name"), q.Get("teacher_id"), page, pageSize)
 	if err != nil {
@@ -98,7 +102,12 @@ func (h *Handler) getThread(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	response, err := h.service.GetThread(r.Context(), principal.UserID, r.PathValue("id"), principal.Role)
+	page, _ := strconv.Atoi(r.URL.Query().Get("messages_page"))
+	if page < 1 { page = 1 }
+	pageSize, _ := strconv.Atoi(r.URL.Query().Get("messages_page_size"))
+	if pageSize < 1 { pageSize = 50 }
+	if pageSize > 100 { writeQAError(w, http.StatusUnprocessableEntity, "VALIDATION_ERROR", "messages_page_size 必须在 1 到 100 之间"); return }
+	response, err := h.service.GetThread(r.Context(), principal.UserID, r.PathValue("id"), principal.Role, page, pageSize)
 	if err != nil {
 		if errors.Is(err, qathreadapp.ErrNotFound) {
 			writeQAError(w, http.StatusNotFound, "NOT_FOUND", "提问不存在")
@@ -222,6 +231,10 @@ func (h *Handler) updateStatus(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := h.service.UpdateThreadStatus(r.Context(), r.PathValue("id"), principal.UserID, req.Status); err != nil {
+		if errors.Is(err, qathreadapp.ErrInvalidStatus) {
+			writeQAError(w, http.StatusUnprocessableEntity, "VALIDATION_ERROR", "status 无效")
+			return
+		}
 		if errors.Is(err, qathreadapp.ErrNotFound) {
 			writeQAError(w, http.StatusNotFound, "NOT_FOUND", "提问不存在")
 			return

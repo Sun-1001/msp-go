@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { MainLayout } from '@/components/layout/MainLayout';
 import { Badge } from '@/components/ui/Badge';
 import { Button } from '@/components/ui/Button';
@@ -6,6 +6,7 @@ import { Card, CardContent } from '@/components/ui/Card';
 import { Input } from '@/components/ui/Input';
 import { Modal } from '@/components/ui/Modal';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/Tabs';
+import { useToast } from '@/components/ui/Toast';
 import {
   Bell,
   CheckCircle2,
@@ -75,15 +76,26 @@ interface ConvItem {
   pendingReply: boolean;
 }
 
+function mergeMessages<T extends { id: string }>(current: T[], incoming: T[]): T[] {
+  const byID = new Map(current.map((item) => [item.id, item]));
+  incoming.forEach((item) => byID.set(item.id, item));
+  return [...byID.values()];
+}
+
 // ---------------------------------------------------------------------------
 // Page
 // ---------------------------------------------------------------------------
 export const MessageCenterPage: React.FC = () => {
+  const conversationRequest = useRef(0);
+  const threadRequest = useRef(0);
+  const { toast } = useToast();
   // ---- state ---------------------------------------------------------
   const [searchTerm, setSearchTerm] = useState('');
+  const [serverSearch, setServerSearch] = useState('');
   const [activeTab, setActiveTab] = useState('private');
   const [initialLoad, setInitialLoad] = useState(true);
   const [loading, setLoading] = useState(false);
+  const [loadError, setLoadError] = useState('');
 
   // conversations
   const [convItems, setConvItems] = useState<ConvItem[]>([]);
@@ -91,6 +103,9 @@ export const MessageCenterPage: React.FC = () => {
   const [activeConvId, setActiveConvId] = useState('');
   const [messageDraft, setMessageDraft] = useState('');
   const [sendingMsg, setSendingMsg] = useState(false);
+  const [loadingOlderMessages, setLoadingOlderMessages] = useState(false);
+  const [conversationPage, setConversationPage] = useState(1);
+  const [conversationTotal, setConversationTotal] = useState(0);
   const [privateStatus, setPrivateStatus] = useState('全部');
 
   // new conversation
@@ -109,9 +124,10 @@ export const MessageCenterPage: React.FC = () => {
   const [noticeModalOpen, setNoticeModalOpen] = useState(false);
   const [noticeTitle, setNoticeTitle] = useState('');
   const [noticeBody, setNoticeBody] = useState('');
-  const [noticeClass, setNoticeClass] = useState('高一数学 A 班');
+  const [noticeClassID, setNoticeClassID] = useState('');
   const [publishing, setPublishing] = useState(false);
-  const [reminding, setReminding] = useState('');
+  const [noticePage, setNoticePage] = useState(1);
+  const [noticeTotal, setNoticeTotal] = useState(0);
 
   // threads
   const [threads, setThreads] = useState<TeacherThreadItem[]>([]);
@@ -120,29 +136,39 @@ export const MessageCenterPage: React.FC = () => {
   const [answerStatus, setAnswerStatus] = useState('全部');
   const [answerDraft, setAnswerDraft] = useState('');
   const [sendingAnswer, setSendingAnswer] = useState(false);
+  const [loadingOlderThreadMessages, setLoadingOlderThreadMessages] = useState(false);
+  const [threadPage, setThreadPage] = useState(1);
+  const [threadTotal, setThreadTotal] = useState(0);
+  const [loadingMoreList, setLoadingMoreList] = useState('');
 
-  // class names (for notice publish)
-  const [classNames, setClassNames] = useState<string[]>([]);
+  const [noticeClasses, setNoticeClasses] = useState<Array<{ id: string; name: string }>>([]);
+
+  useEffect(() => {
+    const timer = window.setTimeout(() => setServerSearch(searchTerm.trim()), 300);
+    return () => window.clearTimeout(timer);
+  }, [searchTerm]);
 
   // load real class names from class service on mount
   useEffect(() => {
     let active = true;
     classService.listTeacherClasses().then((res) => {
       if (active && res.items?.length > 0) {
-        const names = res.items.map((c) => c.name);
-        setClassNames(names);
-        setNoticeClass(names[0]);
+        const classes = res.items.map((c) => ({ id: c.id, name: c.name }));
+        setNoticeClasses(classes);
+        setNoticeClassID(classes[0].id);
       }
-    }).catch(() => { /* fallback to notice-derived names */ });
+    }).catch(() => {
+      if (active) toast({ type: 'error', title: '班级列表加载失败，暂不能发布通知' });
+    });
     return () => { active = false; };
-  }, []);
+  }, [toast]);
 
   // ---- load data ------------------------------------------------------
-  const loadConversations = useCallback(async () => {
+  const loadConversations = useCallback(async (page = 1, append = false) => {
     try {
       const status = privateStatus === '全部' ? '' : privateStatus;
-      const res = await conversationService.list({ status, page: 1, page_size: 50 });
-      setConvItems(res.items.map((c) => ({
+      const response = await conversationService.list({ search: serverSearch, status, page, page_size: 50 });
+      const items = response.items.map((c) => ({
         id: c.id,
         studentName: c.student_name ?? '',
         className: c.class_name ?? '',
@@ -150,15 +176,21 @@ export const MessageCenterPage: React.FC = () => {
         lastTime: formatRelativeTime(c.last_time),
         unread: c.unread > 0,
         pendingReply: c.pending_reply ?? false,
-      })));
-    } catch { /* silent */ }
-  }, [privateStatus]);
+      }));
+      setConvItems((current) => append ? [...current, ...items] : items);
+      setConversationPage(page);
+      setConversationTotal(response.total);
+      return true;
+    } catch { return false; }
+  }, [serverSearch, privateStatus]);
 
-  const loadConvDetail = useCallback(async (id: string) => {
-    try {
-      const d = await conversationService.get(id);
-      setActiveConv(d);
-    } catch { /* silent */ }
+	const loadConvDetail = useCallback(async (id: string) => {
+		const request = ++conversationRequest.current;
+		try {
+			const d = await conversationService.get(id);
+			if (request === conversationRequest.current) setActiveConv(d);
+      return true;
+    } catch { return false; }
   }, []);
 
   const loadStudentContacts = useCallback(async () => {
@@ -166,7 +198,8 @@ export const MessageCenterPage: React.FC = () => {
       const { contacts: list } = await conversationService.studentContacts();
       setStudentContacts(list);
       if (list.length > 0) setSelectedStudentId(list[0].id);
-    } catch { /* silent */ }
+      return true;
+    } catch { return false; }
   }, []);
 
   const filteredStudentContacts = useMemo(
@@ -216,54 +249,90 @@ export const MessageCenterPage: React.FC = () => {
       await loadConversations();
       setActiveConvId(detail.id);
       setActiveConv(detail);
-    } catch { /* silent */ }
+    } catch {
+      toast({ type: 'error', title: '创建私信失败，请稍后重试' });
+    }
     finally { setCreatingConv(false); }
-  }, [selectedStudentId, studentContacts, newConvDraft, creatingConv, loadConversations]);
+  }, [selectedStudentId, studentContacts, newConvDraft, creatingConv, loadConversations, toast]);
 
-  const loadNotices = useCallback(async () => {
+  const loadNotices = useCallback(async (page = 1, append = false) => {
     try {
       const status = noticeStatus === '全部' ? '' : noticeStatus === '有未确认' ? '有未确认' : '全部确认';
-      const res = await noticeService.list({ status, page: 1, page_size: 50 });
-      const items = res.items as TeacherNoticeItem[];
-      setNotices(items);
-      // collect class names
-      const names = [...new Set(items.map((n) => n.class_name))];
-      setClassNames((prev) => prev.length === 0 ? names : prev);
+      const response = await noticeService.list({ search: serverSearch, status, page, page_size: 50 });
+      const items = response.items as TeacherNoticeItem[];
+      setNotices((current) => append ? [...current, ...items] : items);
+      setNoticePage(page);
+      setNoticeTotal(response.total);
       if (items.length > 0 && !activeNoticeId) setActiveNoticeId(items[0].id);
     } catch { /* silent */ }
-  }, [noticeStatus, activeNoticeId]);
+  }, [serverSearch, noticeStatus, activeNoticeId]);
 
-  const loadThreads = useCallback(async () => {
+  const loadThreads = useCallback(async (page = 1, append = false) => {
     try {
       const status = answerStatus === '全部' ? '' : answerStatus;
-      const res = await qaThreadService.list({ status, page: 1, page_size: 50 });
-      const items = res.items as TeacherThreadItem[];
-      setThreads(items);
+      const response = await qaThreadService.list({ search: serverSearch, status, page, page_size: 50 });
+      const items = response.items as TeacherThreadItem[];
+      setThreads((current) => append ? [...current, ...items] : items);
+      setThreadPage(page);
+      setThreadTotal(response.total);
       if (items.length > 0 && !activeThreadId) setActiveThreadId(items[0].id);
     } catch { /* silent */ }
-  }, [answerStatus, activeThreadId]);
+  }, [serverSearch, answerStatus, activeThreadId]);
 
-  const loadThreadDetail = useCallback(async (id: string) => {
-    try {
-      const d = await qaThreadService.get(id);
-      setActiveThread(d);
+	const loadThreadDetail = useCallback(async (id: string) => {
+		const request = ++threadRequest.current;
+		try {
+			const d = await qaThreadService.get(id);
+			if (request === threadRequest.current) setActiveThread(d);
     } catch { /* silent */ }
   }, []);
 
+  const reloadInitialData = useCallback(async () => {
+    setLoading(true);
+    setLoadError('');
+    const results = await Promise.all([loadConversations(), loadNotices(), loadThreads()]);
+    if (results.some((success) => !success)) setLoadError('部分消息中心数据加载失败，请检查网络后重试。');
+    setLoading(false);
+    setInitialLoad(false);
+  }, [loadConversations, loadNotices, loadThreads]);
+
   // initial load — only shows full-page spinner on first mount
+  useEffect(() => { void reloadInitialData(); }, [reloadInitialData]);
+
   useEffect(() => {
-    let active = true;
-    const init = async () => {
-      if (initialLoad) setLoading(true);
-      await Promise.allSettled([loadConversations(), loadNotices(), loadThreads()]);
-      if (active) {
-        setLoading(false);
-        setInitialLoad(false);
+    const refresh = async () => {
+      if (document.hidden) return;
+      await Promise.all([
+        conversationPage === 1 ? loadConversations() : Promise.resolve(),
+        noticePage === 1 ? loadNotices() : Promise.resolve(),
+        threadPage === 1 ? loadThreads() : Promise.resolve(),
+      ]);
+      if (activeConvId) {
+        try {
+          const detail = await conversationService.get(activeConvId);
+          setActiveConv((current) => current?.id === detail.id ? {
+            ...detail,
+            messages: mergeMessages(current.messages, detail.messages),
+            messages_page: current.messages_page,
+            messages_page_size: current.messages_page_size,
+          } : current);
+        } catch { /* retain the last successfully loaded detail */ }
+      }
+      if (activeThreadId) {
+        try {
+          const detail = await qaThreadService.get(activeThreadId);
+          setActiveThread((current) => current?.id === detail.id ? {
+            ...detail,
+            messages: mergeMessages(current.messages, detail.messages),
+            messages_page: current.messages_page,
+            messages_page_size: current.messages_page_size,
+          } : current);
+        } catch { /* retain the last successfully loaded detail */ }
       }
     };
-    init();
-    return () => { active = false; };
-  }, [loadConversations, loadNotices, loadThreads]);
+    const interval = window.setInterval(() => { void refresh(); }, 30_000);
+    return () => window.clearInterval(interval);
+  }, [loadConversations, loadNotices, loadThreads, conversationPage, noticePage, threadPage, activeConvId, activeThreadId]);
 
   // ---- derived --------------------------------------------------------
   const activeNotice = useMemo(() => notices.find((n) => n.id === activeNoticeId) ?? notices[0], [notices, activeNoticeId]);
@@ -319,28 +388,41 @@ export const MessageCenterPage: React.FC = () => {
     finally { setSendingMsg(false); }
   }, [activeConvId, messageDraft, sendingMsg, loadConvDetail, loadConversations]);
 
+  const loadOlderConversationMessages = useCallback(async () => {
+    if (!activeConv || loadingOlderMessages || activeConv.messages.length >= activeConv.messages_total) return;
+    setLoadingOlderMessages(true);
+    try {
+      const detail = await conversationService.get(activeConv.id, { messages_page: activeConv.messages_page + 1, messages_page_size: activeConv.messages_page_size });
+      setActiveConv((current) => current?.id === detail.id ? { ...detail, messages: [...detail.messages, ...current.messages] } : current);
+    } catch { toast({ type: 'error', title: '加载更早私信失败，请稍后重试' }); } finally { setLoadingOlderMessages(false); }
+  }, [activeConv, loadingOlderMessages, toast]);
+
+  const loadMoreConversations = useCallback(async () => {
+    if (loadingMoreList || convItems.length >= conversationTotal) return;
+    setLoadingMoreList('conversations');
+    await loadConversations(conversationPage + 1, true);
+    setLoadingMoreList('');
+  }, [loadingMoreList, convItems.length, conversationTotal, loadConversations, conversationPage]);
+
   // ---- actions: notices -----------------------------------------------
   const publishNotice = useCallback(async () => {
-    if (!noticeTitle.trim() || !noticeClass || publishing) return;
+    if (!noticeClassID) {
+      toast({ type: 'error', title: '请先创建或选择一个班级' });
+      return;
+    }
+    if (!noticeTitle.trim() || publishing) return;
     setPublishing(true);
     try {
-      await noticeService.create({ class_name: noticeClass, title: noticeTitle.trim(), body: noticeBody.trim() });
+      await noticeService.create({ class_id: noticeClassID, title: noticeTitle.trim(), body: noticeBody.trim() });
       setNoticeTitle('');
       setNoticeBody('');
       setNoticeModalOpen(false);
       await loadNotices();
-    } catch { /* silent */ }
+    } catch {
+      toast({ type: 'error', title: '发布通知失败，请稍后重试' });
+    }
     finally { setPublishing(false); }
-  }, [noticeTitle, noticeBody, noticeClass, publishing, loadNotices]);
-
-  const remindUnconfirmed = useCallback(async (id: string) => {
-    if (reminding === id) return;
-    setReminding(id);
-    try {
-      await noticeService.remind(id);
-    } catch { /* silent */ }
-    finally { setReminding(''); }
-  }, [reminding]);
+  }, [noticeTitle, noticeBody, noticeClassID, publishing, loadNotices, toast]);
 
   // ---- actions: threads -----------------------------------------------
   const replyThread = useCallback(async () => {
@@ -351,17 +433,44 @@ export const MessageCenterPage: React.FC = () => {
       setAnswerDraft('');
       await loadThreadDetail(activeThreadId);
       await loadThreads();
-    } catch { /* silent */ }
+    } catch {
+      toast({ type: 'error', title: '发送答复失败，请稍后重试' });
+    }
     finally { setSendingAnswer(false); }
-  }, [answerDraft, activeThreadId, sendingAnswer, loadThreadDetail, loadThreads]);
+  }, [answerDraft, activeThreadId, sendingAnswer, loadThreadDetail, loadThreads, toast]);
+
+  const loadOlderThreadMessages = useCallback(async () => {
+    if (!activeThread || loadingOlderThreadMessages || activeThread.messages.length >= activeThread.messages_total) return;
+    setLoadingOlderThreadMessages(true);
+    try {
+      const detail = await qaThreadService.get(activeThread.id, { messages_page: activeThread.messages_page + 1, messages_page_size: activeThread.messages_page_size });
+      setActiveThread((current) => current?.id === detail.id ? { ...detail, messages: [...detail.messages, ...current.messages] } : current);
+    } catch { toast({ type: 'error', title: '加载更早答疑消息失败，请稍后重试' }); } finally { setLoadingOlderThreadMessages(false); }
+  }, [activeThread, loadingOlderThreadMessages, toast]);
+
+  const loadMoreNotices = useCallback(async () => {
+    if (loadingMoreList || notices.length >= noticeTotal) return;
+    setLoadingMoreList('notices');
+    await loadNotices(noticePage + 1, true);
+    setLoadingMoreList('');
+  }, [loadingMoreList, notices.length, noticeTotal, loadNotices, noticePage]);
+
+  const loadMoreThreads = useCallback(async () => {
+    if (loadingMoreList || threads.length >= threadTotal) return;
+    setLoadingMoreList('threads');
+    await loadThreads(threadPage + 1, true);
+    setLoadingMoreList('');
+  }, [loadingMoreList, threads.length, threadTotal, loadThreads, threadPage]);
 
   const updateThreadStatus = useCallback(async (id: string, status: string) => {
     try {
       await qaThreadService.updateStatus(id, status);
       setThreads((prev) => prev.map((t) => (t.id === id ? { ...t, status } : t)));
       setActiveThread((prev) => prev?.id === id ? { ...prev, status } : prev);
-    } catch { /* silent */ }
-  }, []);
+    } catch {
+      toast({ type: 'error', title: '更新答疑状态失败，请稍后重试' });
+    }
+  }, [toast]);
 
   const selectThread = useCallback(async (id: string) => {
     setActiveThreadId(id);
@@ -393,6 +502,8 @@ export const MessageCenterPage: React.FC = () => {
             <Input value={searchTerm} onChange={(e) => setSearchTerm(e.target.value)} placeholder={activeTab === 'private' ? '搜索学生、班级…' : activeTab === 'notices' ? '搜索通知标题、内容…' : '搜索问题、知识点…'} className="pl-10" />
           </div>
         </div>
+
+        {loadError && <div className="mb-4 flex items-center justify-between gap-3 rounded-md border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700 dark:border-red-900 dark:bg-red-950/30 dark:text-red-200"><span>{loadError}</span><Button variant="outline" size="sm" onClick={() => void reloadInitialData()} disabled={loading}>重新加载</Button></div>}
 
         <Tabs defaultValue="private" keepMounted={false} onValueChange={(v) => { setActiveTab(v); setSearchTerm(''); }}>
           <TabsList className="mb-4">
@@ -435,6 +546,7 @@ export const MessageCenterPage: React.FC = () => {
                       <div className="mt-2 text-xs text-surface-400">{c.lastTime}</div>
                     </button>
                   ))}
+                  {convItems.length < conversationTotal && <Button variant="outline" size="sm" className="m-3 w-[calc(100%-1.5rem)]" onClick={loadMoreConversations} disabled={loadingMoreList !== ''}>{loadingMoreList === 'conversations' ? '加载中…' : '加载更多对话'}</Button>}
                 </CardContent>
               </Card>
 
@@ -451,6 +563,7 @@ export const MessageCenterPage: React.FC = () => {
                         </div>
                       </div>
                       <div className="flex-1 space-y-4 overflow-y-auto p-5">
+                        {activeConv.messages.length < activeConv.messages_total && <Button variant="outline" size="sm" className="w-full" onClick={loadOlderConversationMessages} disabled={loadingOlderMessages}>{loadingOlderMessages ? '加载中…' : '加载更早消息'}</Button>}
                         {activeConv.messages.map((msg) => (
                           <div key={msg.id} className="flex w-full">
                             <div className={cn('max-w-[80%]', msg.from === 'teacher' ? 'ml-auto text-right' : 'mr-auto')}>
@@ -516,6 +629,7 @@ export const MessageCenterPage: React.FC = () => {
                       <div className="mt-2 text-xs text-surface-400">{formatRelativeTime(n.published_at)}</div>
                     </button>
                   ))}
+                  {notices.length < noticeTotal && <Button variant="outline" size="sm" className="m-3 w-[calc(100%-1.5rem)]" onClick={loadMoreNotices} disabled={loadingMoreList !== ''}>{loadingMoreList === 'notices' ? '加载中…' : '加载更多通知'}</Button>}
                 </CardContent>
               </Card>
 
@@ -545,10 +659,6 @@ export const MessageCenterPage: React.FC = () => {
                           </div>
                         </div>
                       )}
-                      <Button onClick={() => remindUnconfirmed(activeNotice.id)} disabled={activeNotice.unconfirmed_students.length === 0 || reminding === activeNotice.id}>
-                        {reminding === activeNotice.id ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Bell className="mr-2 h-4 w-4" />}
-                        提醒未确认学生
-                      </Button>
                     </div>
                   )}
                 </CardContent>
@@ -581,6 +691,7 @@ export const MessageCenterPage: React.FC = () => {
                       </div>
                     </button>
                   ))}
+                  {threads.length < threadTotal && <Button variant="outline" size="sm" className="m-3 w-[calc(100%-1.5rem)]" onClick={loadMoreThreads} disabled={loadingMoreList !== ''}>{loadingMoreList === 'threads' ? '加载中…' : '加载更多答疑'}</Button>}
                 </CardContent>
               </Card>
 
@@ -614,6 +725,7 @@ export const MessageCenterPage: React.FC = () => {
                         {activeThread.context}
                       </div>
                       <div className="space-y-3">
+                        {activeThread.messages.length < activeThread.messages_total && <Button variant="outline" size="sm" className="w-full" onClick={loadOlderThreadMessages} disabled={loadingOlderThreadMessages}>{loadingOlderThreadMessages ? '加载中…' : '加载更早消息'}</Button>}
                         {activeThread.messages.map((msg) => (
                           <div key={msg.id} className={cn('rounded-md border p-3', msg.from === 'teacher' ? 'border-primary-200 bg-primary-50/30 dark:border-primary-800 dark:bg-primary-950/20' : 'border-surface-200 dark:border-surface-700')}>
                             <div className="mb-1 flex items-center gap-2">
@@ -691,11 +803,11 @@ export const MessageCenterPage: React.FC = () => {
         <Modal isOpen={noticeModalOpen} onClose={() => setNoticeModalOpen(false)} title="发布班级通知" className="max-w-xl">
           <div className="space-y-4">
             <label className="block text-sm font-medium text-surface-700 dark:text-surface-300">目标班级</label>
-            <select value={noticeClass} onChange={(e) => setNoticeClass(e.target.value)}
+            <select value={noticeClassID} onChange={(e) => setNoticeClassID(e.target.value)}
               className="h-10 w-full rounded-md border border-surface-200 bg-white px-3 text-sm dark:border-surface-700 dark:bg-surface-800 dark:text-surface-100">
-              {classNames.length > 0
-                ? classNames.map((n) => <option key={n} value={n}>{n}</option>)
-                : <option value="高一数学 A 班">高一数学 A 班</option>}
+              {noticeClasses.length > 0
+                ? noticeClasses.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)
+                : <option value="">暂无可用班级</option>}
             </select>
             <label className="block text-sm font-medium text-surface-700 dark:text-surface-300">通知标题</label>
             <Input value={noticeTitle} onChange={(e) => setNoticeTitle(e.target.value)} placeholder="通知标题" />
@@ -705,7 +817,7 @@ export const MessageCenterPage: React.FC = () => {
             />
             <div className="flex justify-end gap-2">
               <Button variant="outline" onClick={() => setNoticeModalOpen(false)}>取消</Button>
-              <Button onClick={publishNotice} disabled={publishing}>
+              <Button onClick={publishNotice} disabled={publishing || !noticeClassID}>
                 {publishing ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}发布
               </Button>
             </div>

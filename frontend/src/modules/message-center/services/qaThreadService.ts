@@ -44,6 +44,9 @@ export interface ThreadDetail {
   status: string;
   context: string;
   messages: ThreadMessage[];
+  messages_total: number;
+  messages_page: number;
+  messages_page_size: number;
 }
 
 export interface ListResponse {
@@ -77,8 +80,8 @@ export const qaThreadService = {
     return data;
   },
 
-  async get(id: string): Promise<ThreadDetail> {
-    const { data } = await apiClient.get<ThreadDetail>(`${BASE}/${id}`);
+  async get(id: string, params?: { messages_page?: number; messages_page_size?: number }): Promise<ThreadDetail> {
+    const { data } = await apiClient.get<ThreadDetail>(`${BASE}/${id}`, { params });
     return data;
   },
 

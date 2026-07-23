@@ -17,7 +17,7 @@ var (
 type Repository interface {
 	ListNotices(ctx context.Context, userID string, role user.Role, search string, status string, className string, page, pageSize int) ([]any, int, error)
 	GetNotice(ctx context.Context, noticeID string, userID string, role user.Role) (any, bool, error)
-	CreateNotice(ctx context.Context, teacherID string, className string, title string, body string, now time.Time) (TeacherNoticeItem, error)
+	CreateNotice(ctx context.Context, teacherID string, classID string, title string, body string, now time.Time) (TeacherNoticeItem, error)
 	ConfirmNotice(ctx context.Context, noticeID string, studentID string) (bool, error)
 	RemindUnconfirmed(ctx context.Context, noticeID string, teacherID string) ([]string, bool, error)
 }
@@ -88,8 +88,8 @@ func (s *Service) GetNotice(ctx context.Context, userID string, noticeID string,
 }
 
 // CreateNotice publishes a new notice.
-func (s *Service) CreateNotice(ctx context.Context, teacherID string, className string, title string, body string) (TeacherNoticeItem, error) {
-	return s.repo.CreateNotice(ctx, teacherID, className, title, body, time.Now())
+func (s *Service) CreateNotice(ctx context.Context, teacherID string, classID string, title string, body string) (TeacherNoticeItem, error) {
+	return s.repo.CreateNotice(ctx, teacherID, classID, title, body, time.Now())
 }
 
 // ConfirmNotice marks a notice as confirmed by a student.

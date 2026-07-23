@@ -159,14 +159,14 @@ func (r QAThreadRepository) listTeacherThreads(ctx context.Context, teacherID st
 }
 
 // GetThread returns a thread with full message history.
-func (r QAThreadRepository) GetThread(ctx context.Context, threadID string, userID string, role user.Role) (any, bool, error) {
+func (r QAThreadRepository) GetThread(ctx context.Context, threadID string, userID string, role user.Role, page, pageSize int) (any, bool, error) {
 	if role == user.RoleStudent {
-		return r.getStudentThread(ctx, threadID, userID)
+		return r.getStudentThread(ctx, threadID, userID, page, pageSize)
 	}
-	return r.getTeacherThread(ctx, threadID, userID)
+	return r.getTeacherThread(ctx, threadID, userID, page, pageSize)
 }
 
-func (r QAThreadRepository) getStudentThread(ctx context.Context, threadID string, studentID string) (any, bool, error) {
+func (r QAThreadRepository) getStudentThread(ctx context.Context, threadID string, studentID string, page, pageSize int) (any, bool, error) {
 	var detail qathreadapp.ThreadDetail
 	err := r.DB().QueryRow(ctx, `
 		SELECT qt.id, qt.title, qt.teacher_id,
@@ -183,15 +183,16 @@ func (r QAThreadRepository) getStudentThread(ctx context.Context, threadID strin
 		}
 		return nil, false, err
 	}
-	msgs, err := r.loadThreadMessages(ctx, threadID)
+	msgs, total, err := r.loadThreadMessages(ctx, threadID, page, pageSize)
 	if err != nil {
 		return nil, false, err
 	}
 	detail.Messages = msgs
+	detail.MessagesTotal, detail.MessagesPage, detail.MessagesSize = total, page, pageSize
 	return detail, true, nil
 }
 
-func (r QAThreadRepository) getTeacherThread(ctx context.Context, threadID string, teacherID string) (any, bool, error) {
+func (r QAThreadRepository) getTeacherThread(ctx context.Context, threadID string, teacherID string, page, pageSize int) (any, bool, error) {
 	var detail qathreadapp.ThreadDetail
 	var knowledgePoint, resourceName pgtype.Text
 	err := r.DB().QueryRow(ctx, `
@@ -219,33 +220,41 @@ func (r QAThreadRepository) getTeacherThread(ctx context.Context, threadID strin
 	if resourceName.Valid {
 		detail.ResourceName = resourceName.String
 	}
-	msgs, err := r.loadThreadMessages(ctx, threadID)
+	msgs, total, err := r.loadThreadMessages(ctx, threadID, page, pageSize)
 	if err != nil {
 		return nil, false, err
 	}
 	detail.Messages = msgs
+	detail.MessagesTotal, detail.MessagesPage, detail.MessagesSize = total, page, pageSize
 	return detail, true, nil
 }
 
-func (r QAThreadRepository) loadThreadMessages(ctx context.Context, threadID string) ([]qathreadapp.Message, error) {
+func (r QAThreadRepository) loadThreadMessages(ctx context.Context, threadID string, page, pageSize int) ([]qathreadapp.Message, int, error) {
+	if page < 1 { page = 1 }
+	pgPage, err := NewPage((page-1)*pageSize, pageSize)
+	if err != nil { return nil, 0, err }
+	var total int
+	if err := r.DB().QueryRow(ctx, `SELECT COUNT(*) FROM public.question_thread_messages WHERE thread_id = $1`, threadID).Scan(&total); err != nil { return nil, 0, err }
 	rows, err := r.DB().Query(ctx, `
 		SELECT id, sender_role, text, created_at
 		FROM public.question_thread_messages
 		WHERE thread_id = $1
-		ORDER BY created_at`, threadID)
+		ORDER BY created_at DESC LIMIT $2 OFFSET $3`, threadID, pgPage.Limit, pgPage.Offset)
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 	defer rows.Close()
 	msgs := make([]qathreadapp.Message, 0)
 	for rows.Next() {
 		var m qathreadapp.Message
 		if err := rows.Scan(&m.ID, &m.From, &m.Text, &m.Time); err != nil {
-			return nil, err
+			return nil, 0, err
 		}
 		msgs = append(msgs, m)
 	}
-	return msgs, rows.Err()
+	if err := rows.Err(); err != nil { return nil, 0, err }
+	for left, right := 0, len(msgs)-1; left < right; left, right = left+1, right-1 { msgs[left], msgs[right] = msgs[right], msgs[left] }
+	return msgs, total, nil
 }
 
 // extractQuestionPart returns the student's own question (before the --- separator).
@@ -384,9 +393,10 @@ func (r QAThreadRepository) CreateThreadMessage(ctx context.Context, threadID st
 
 	tag, err := tx.Exec(ctx, `
 		INSERT INTO public.question_thread_messages (id, thread_id, sender_id, sender_role, text, created_at)
-		SELECT $1, qt.id, $3, $4, $5, $6
+		SELECT $1::character varying, qt.id::character varying, $3::character varying, $4::character varying, $5, $6
 		FROM public.question_threads qt
-		WHERE qt.id = $2 AND ((qt.student_id = $3 AND $4 = 'student') OR (qt.teacher_id = $3 AND $4 = 'teacher'))`,
+		WHERE qt.id::text = $2::text
+		  AND ((qt.student_id::text = $3::text AND $4 = 'student') OR (qt.teacher_id::text = $3::text AND $4 = 'teacher'))`,
 		msgID, threadID, senderID, senderRole, text, now,
 	)
 	if err != nil {

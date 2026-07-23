@@ -20,7 +20,7 @@ type Repository interface {
 	// Role-based: students see their conversations with teachers, teachers see theirs with students.
 	ListConversations(ctx context.Context, userID string, role user.Role, search string, status string, className string, page, pageSize int) ([]ConversationItem, int, error)
 	// GetConversation returns full conversation detail with messages.
-	GetConversation(ctx context.Context, conversationID string, userID string) (ConversationDetail, bool, error)
+	GetConversation(ctx context.Context, conversationID string, userID string, page, pageSize int) (ConversationDetail, bool, error)
 	// MarkConversationRead marks all messages in a conversation as read for the given user.
 	MarkConversationRead(ctx context.Context, conversationID string, userID string) error
 	// CreateConversation creates a new conversation between a student and teacher.
@@ -74,7 +74,10 @@ type ConversationItem struct {
 // ConversationDetail includes full message history.
 type ConversationDetail struct {
 	ConversationItem
-	Messages []Message `json:"messages"`
+	Messages      []Message `json:"messages"`
+	MessagesTotal int       `json:"messages_total"`
+	MessagesPage  int       `json:"messages_page"`
+	MessagesSize  int       `json:"messages_page_size"`
 }
 
 // ListResponse is the paginated list response.
@@ -108,15 +111,17 @@ func (s *Service) ListConversations(ctx context.Context, userID string, role use
 }
 
 // GetConversation returns a single conversation with messages.
-func (s *Service) GetConversation(ctx context.Context, userID string, conversationID string) (ConversationDetail, error) {
-	detail, found, err := s.repo.GetConversation(ctx, conversationID, userID)
+func (s *Service) GetConversation(ctx context.Context, userID string, conversationID string, page, pageSize int) (ConversationDetail, error) {
+	if err := s.repo.MarkConversationRead(ctx, conversationID, userID); err != nil {
+		return ConversationDetail{}, err
+	}
+	detail, found, err := s.repo.GetConversation(ctx, conversationID, userID, page, pageSize)
 	if err != nil {
 		return ConversationDetail{}, err
 	}
 	if !found {
 		return ConversationDetail{}, ErrNotFound
 	}
-	_ = s.repo.MarkConversationRead(ctx, conversationID, userID)
 	return detail, nil
 }
 

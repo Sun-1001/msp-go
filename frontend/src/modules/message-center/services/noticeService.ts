@@ -57,7 +57,7 @@ export const noticeService = {
   },
 
   async create(body: {
-    class_name: string;
+    class_id: string;
     title: string;
     body: string;
   }): Promise<TeacherNoticeItem> {

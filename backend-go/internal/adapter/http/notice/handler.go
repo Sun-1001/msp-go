@@ -20,7 +20,7 @@ import (
 type Service interface {
 	ListNotices(ctx context.Context, userID string, role user.Role, search string, status string, className string, page int, pageSize int) (noticeapp.ListResponse, error)
 	GetNotice(ctx context.Context, userID string, noticeID string, role user.Role) (any, error)
-	CreateNotice(ctx context.Context, teacherID string, className string, title string, body string) (noticeapp.TeacherNoticeItem, error)
+	CreateNotice(ctx context.Context, teacherID string, classID string, title string, body string) (noticeapp.TeacherNoticeItem, error)
 	ConfirmNotice(ctx context.Context, noticeID string, studentID string) error
 	RemindUnconfirmed(ctx context.Context, noticeID string, teacherID string) ([]string, error)
 }
@@ -80,6 +80,10 @@ func (h *Handler) listNotices(w http.ResponseWriter, r *http.Request) {
 	if pageSize < 1 {
 		pageSize = 20
 	}
+	if pageSize > 100 {
+		writeNoticeError(w, http.StatusUnprocessableEntity, "VALIDATION_ERROR", "page_size 必须在 1 到 100 之间")
+		return
+	}
 	response, err := h.service.ListNotices(r.Context(), principal.UserID, principal.Role,
 		q.Get("search"), q.Get("status"), q.Get("class_name"), page, pageSize)
 	if err != nil {
@@ -109,9 +113,9 @@ func (h *Handler) getNotice(w http.ResponseWriter, r *http.Request) {
 }
 
 type createNoticeRequest struct {
-	ClassName string `json:"class_name"`
-	Title     string `json:"title"`
-	Body      string `json:"body"`
+	ClassID string `json:"class_id"`
+	Title   string `json:"title"`
+	Body    string `json:"body"`
 }
 
 func (h *Handler) createNotice(w http.ResponseWriter, r *http.Request) {
@@ -123,11 +127,11 @@ func (h *Handler) createNotice(w http.ResponseWriter, r *http.Request) {
 	if !httpjson.DecodeStrictOrBadRequest(w, r, maxJSONBodyBytes, &req) {
 		return
 	}
-	if strings.TrimSpace(req.ClassName) == "" || strings.TrimSpace(req.Title) == "" {
-		writeNoticeError(w, http.StatusUnprocessableEntity, "VALIDATION_ERROR", "class_name 和 title 不能为空")
+	if strings.TrimSpace(req.ClassID) == "" || strings.TrimSpace(req.Title) == "" {
+		writeNoticeError(w, http.StatusUnprocessableEntity, "VALIDATION_ERROR", "class_id 和 title 不能为空")
 		return
 	}
-	response, err := h.service.CreateNotice(r.Context(), principal.UserID, req.ClassName, req.Title, req.Body)
+	response, err := h.service.CreateNotice(r.Context(), principal.UserID, req.ClassID, req.Title, req.Body)
 	if err != nil {
 		if errors.Is(err, noticeapp.ErrForbidden) {
 			writeNoticeError(w, http.StatusForbidden, "FORBIDDEN", "只能向本人班级发布通知")
