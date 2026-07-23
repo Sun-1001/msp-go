@@ -185,29 +185,18 @@ export const MARKDOWN_COMPONENTS: Record<string, React.FC<Record<string, unknown
   ),
 
   // 代码
-  code: ({ className, children, ...props }) => {
-    const isInline = !className;
-    if (isInline) {
-      return (
-        <code
-          className="px-1.5 py-0.5 bg-surface-100 dark:bg-surface-700 rounded text-sm font-mono text-primary-600 dark:text-primary-400"
-          {...props}
-        >
-          {children as React.ReactNode}
-        </code>
-      );
-    }
-    return (
-      <code
-        className={`block overflow-x-auto p-3 bg-surface-100 dark:bg-surface-700 rounded-lg text-sm font-mono ${className}`}
-        {...props}
-      >
-        {children as React.ReactNode}
-      </code>
-    );
-  },
+  code: ({ className, children, ...props }) => (
+    <code
+      className={`rounded bg-surface-100 px-1.5 py-0.5 font-mono text-sm text-primary-600 dark:bg-surface-700 dark:text-primary-400 ${className ?? ''}`}
+      {...props}
+    >
+      {children as React.ReactNode}
+    </code>
+  ),
   pre: ({ children }) => (
-    <pre className="my-2 overflow-x-auto">{children as React.ReactNode}</pre>
+    <pre className="my-3 max-w-full overflow-x-auto whitespace-pre rounded-md border border-surface-200 bg-surface-50 p-4 font-mono text-sm leading-5 text-surface-800 dark:border-surface-700 dark:bg-surface-800/70 dark:text-surface-100 [&>code]:block [&>code]:min-w-max [&>code]:rounded-none [&>code]:bg-transparent [&>code]:p-0 [&>code]:text-inherit">
+      {children as React.ReactNode}
+    </pre>
   ),
 
   // 引用

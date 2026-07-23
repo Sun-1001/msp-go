@@ -267,10 +267,16 @@ export const MyClassPage: React.FC = () => {
                   onSubmit={handleSubmit(handleLookupClass)}
                 >
                   <Input
+                    className="sm:min-w-0 sm:flex-1"
                     placeholder="输入班级号"
                     {...register('code')}
                   />
-                  <Button variant="outline" type="submit" disabled={isLoading}>
+                  <Button
+                    className="shrink-0 whitespace-nowrap"
+                    variant="outline"
+                    type="submit"
+                    disabled={isLoading}
+                  >
                     <Search className="w-4 h-4 mr-2" />
                     搜索
                   </Button>

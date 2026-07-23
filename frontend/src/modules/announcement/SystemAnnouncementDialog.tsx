@@ -81,7 +81,7 @@ export function SystemAnnouncementDialog() {
       isOpen
       onClose={closeCurrent}
       title={
-        <span className="flex min-w-0 items-center gap-2">
+        <span className="flex w-full min-w-0 items-center justify-center gap-2 text-center">
           <Megaphone className="h-5 w-5 shrink-0 text-primary-600 dark:text-primary-400" />
           <span className="truncate">{current.title}</span>
         </span>

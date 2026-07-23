@@ -22,12 +22,10 @@
 
 ### Testing
 
-- Do not keep or commit test case source files in the repository. This includes `*_test.go`, `*.test.*`, `*.spec.*`, `test_*.py`, `*_test.py`, `__tests__/`, `test/`, and `tests/`.
-- Finish the production implementation first, then create only the temporary tests needed to verify it.
-- Temporary tests must cover public behavior, edge cases, error conditions, and external dependency failure paths; mock or isolate external dependencies.
-- Run the temporary tests and record the commands and results. Target 80%+ coverage for core business logic where practical while those tests exist.
-- Delete all temporary test sources and test-only fixtures before staging or committing. Test runner configuration and dependencies may remain so later work can repeat this workflow.
-- Record phase-level verification evidence in the migration tracker without retaining the test source files.
+- Test case source files are local, temporary verification artifacts and must not be kept or committed. This includes `*_test.go`, `*.test.*`, `*.spec.*`, `test_*.py`, `*_test.py`, `__tests__/`, `test/`, and `tests/`.
+- The absence of test source files in the repository or a pull request is expected. Do not report it as evidence that the author did not test the change or as a review finding by itself.
+- Reviewers may run builds, static checks, runtime checks, or their own temporary tests, but must not infer the submitter's local test coverage from the repository tree.
+- Delete any locally created temporary test sources and test-only fixtures before staging or committing. Test runner configuration and dependencies may remain.
 
 ### Error Handling
 
@@ -48,7 +46,7 @@
 
 - Study 3+ similar patterns before implementing.
 - Match project style exactly.
-- Verify behavior with existing code, temporary tests, runtime checks, or documented contracts.
+- Verify behavior with existing code, builds, static checks, runtime checks, or documented contracts.
 
 ### Pragmatic Execution
 
@@ -60,7 +58,7 @@
 
 - Reuse established migration decisions.
 - Maintain module boundaries already documented in the migration tracker.
-- Temporarily test integration between completed phases and newly migrated phases, record the result, and remove the test sources before commit.
+- Verify integration between completed phases and newly migrated phases without requiring test artifacts to be committed.
 
 ## Git Operations and Parallel Task Safety
 
@@ -103,13 +101,11 @@ If those MCP tools are unavailable in the current environment, use fast shell to
 ### During
 
 - Follow existing patterns.
-- After production code is complete, create or update temporary tests for the changed behavior.
-- Run relevant temporary tests, record their commands and results, then delete the test sources before staging.
+- Use verification appropriate to the change without requiring test sources to be part of the deliverable.
 - Keep the migration tracker current for backend Go rewrite work.
 
 ### After
 
-- Ensure relevant temporary tests pass or report why they were not run, and ensure their source files have been removed.
 - Confirm no test case source file is staged or tracked before handoff.
 - Ensure expected deliverables are complete.
 - Update documentation and phase status when a migration phase changes.

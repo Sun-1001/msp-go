@@ -177,7 +177,7 @@ export function AnnouncementEditorModal({
             </div>
             <div className="h-[min(68vh,680px)] min-h-96 overflow-auto rounded-md border border-surface-200 bg-white p-4 dark:border-surface-700 dark:bg-surface-900">
               {form.title.trim() ? (
-                <h2 className="mb-4 text-lg font-semibold text-surface-900 dark:text-surface-100">
+                <h2 className="mb-4 text-center text-lg font-semibold text-surface-900 dark:text-surface-100">
                   {form.title.trim()}
                 </h2>
               ) : null}
