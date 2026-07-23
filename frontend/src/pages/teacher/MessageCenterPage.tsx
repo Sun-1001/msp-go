@@ -264,7 +264,8 @@ export const MessageCenterPage: React.FC = () => {
       setNoticePage(page);
       setNoticeTotal(response.total);
       if (items.length > 0 && !activeNoticeId) setActiveNoticeId(items[0].id);
-    } catch { /* silent */ }
+      return true;
+    } catch { return false; }
   }, [serverSearch, noticeStatus, activeNoticeId]);
 
   const loadThreads = useCallback(async (page = 1, append = false) => {
@@ -276,7 +277,8 @@ export const MessageCenterPage: React.FC = () => {
       setThreadPage(page);
       setThreadTotal(response.total);
       if (items.length > 0 && !activeThreadId) setActiveThreadId(items[0].id);
-    } catch { /* silent */ }
+      return true;
+    } catch { return false; }
   }, [serverSearch, answerStatus, activeThreadId]);
 
 	const loadThreadDetail = useCallback(async (id: string) => {
