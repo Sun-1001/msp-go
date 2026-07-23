@@ -26,6 +26,7 @@ backups/
 *.temp
 .cache/
 .gocache/
+chroma_db/
 backend-go/coverage.out
 frontend/coverage/
 
