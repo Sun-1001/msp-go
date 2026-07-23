@@ -2,7 +2,7 @@
 # 生产环境首次部署脚本
 # 用法: ./deploy.sh [域名]
 
-set -e
+set -Eeuo pipefail
 
 # 颜色输出
 RED='\033[0;31m'
@@ -17,6 +17,12 @@ COMPOSE_FILE="docker-compose.yml"
 ENV_FILE=".env"
 NGINX_CONF_DIR="/etc/nginx/sites-available"
 NGINX_ENABLED_DIR="/etc/nginx/sites-enabled"
+SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" > /dev/null 2>&1 && pwd)"
+PROJECT_ROOT="$(cd -- "${SCRIPT_DIR}/.." > /dev/null 2>&1 && pwd)"
+
+cd "$PROJECT_ROOT"
+# shellcheck source=deployment-common.sh
+source "${SCRIPT_DIR}/deployment-common.sh"
 
 echo -e "${GREEN}=== MathStudyPlatform 生产环境部署 ===${NC}"
 
@@ -35,6 +41,9 @@ if [ -z "$DOMAIN" ]; then
     if [[ ! $REPLY =~ ^[Yy]$ ]]; then
         exit 1
     fi
+elif ! [[ "$DOMAIN" =~ ^([A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?\.)+[A-Za-z]{2,63}$ ]]; then
+    echo -e "${RED}域名格式无效，只接受标准 DNS 域名${NC}"
+    exit 1
 fi
 
 # 检查 Docker 和 Docker Compose
@@ -46,9 +55,9 @@ fi
 
 # 优先使用 docker compose (v2)，回退到 docker-compose (v1)
 if docker compose version &> /dev/null; then
-    DOCKER_COMPOSE="docker compose"
+    DOCKER_COMPOSE=(docker compose)
 elif command -v docker-compose &> /dev/null; then
-    DOCKER_COMPOSE="docker-compose"
+    DOCKER_COMPOSE=(docker-compose)
 else
     echo -e "${RED}Docker Compose 未安装，请先安装 Docker Compose${NC}"
     exit 1
@@ -78,13 +87,16 @@ fi
 
 # 设置 Docker Hub 用户名
 echo -e "${BLUE}[3/8] 配置 Docker Hub 用户名...${NC}"
-read -p "请输入 Docker Hub 用户名: " DOCKER_USERNAME
+read -r -p "请输入 Docker Hub 用户名: " DOCKER_USERNAME
 if [ -z "$DOCKER_USERNAME" ]; then
     echo -e "${RED}Docker Hub 用户名不能为空${NC}"
     exit 1
 fi
-export DOCKER_USERNAME=$DOCKER_USERNAME
-echo "export DOCKER_USERNAME=$DOCKER_USERNAME" >> ~/.bashrc
+if ! [[ "$DOCKER_USERNAME" =~ ^[a-z0-9]+([._-][a-z0-9]+)*$ ]]; then
+    echo -e "${RED}Docker Hub 用户名格式无效${NC}"
+    exit 1
+fi
+export DOCKER_USERNAME
 echo -e "${GREEN}✓ Docker Hub 用户名已设置${NC}"
 
 # 登录 Docker Hub（如果是私有镜像）
@@ -97,29 +109,40 @@ fi
 
 # 拉取镜像
 echo -e "${BLUE}[4/8] 拉取 Docker 镜像...${NC}"
-docker pull ${DOCKER_USERNAME}/backend-go:latest
-docker pull ${DOCKER_USERNAME}/frontend:latest
+docker pull "${DOCKER_USERNAME}/backend-go:latest"
+docker pull "${DOCKER_USERNAME}/frontend:latest"
 echo -e "${GREEN}✓ 镜像拉取完成${NC}"
 
 # 启动基础依赖
 echo -e "${BLUE}[5/8] 启动基础容器...${NC}"
-$DOCKER_COMPOSE -f $COMPOSE_FILE up -d postgres redis
+compose up -d postgres redis
 echo -e "${GREEN}✓ 基础容器启动完成${NC}"
 
-# 等待服务启动
-echo -e "${BLUE}[6/8] 等待服务启动...${NC}"
-sleep 15
+# 等待数据库接受连接
+echo -e "${BLUE}[6/8] 等待 PostgreSQL 就绪...${NC}"
+if ! wait_for_postgres "${POSTGRES_WAIT_ATTEMPTS:-30}"; then
+    echo -e "${RED}✗ PostgreSQL 未就绪，部署已中止${NC}"
+    exit 1
+fi
 
 # 数据库迁移
 echo -e "${BLUE}[7/8] 数据库迁移...${NC}"
 echo -e "${YELLOW}默认部署不运行 Python Alembic，改由 Go migration runner 应用数据库迁移。${NC}"
-$DOCKER_COMPOSE -f $COMPOSE_FILE run --rm --no-deps backend msp-migrate
+compose run --rm --no-deps backend msp-migrate
 echo -e "${GREEN}✓ Go 数据库迁移完成${NC}"
 
 # 启动应用容器
 echo -e "${BLUE}启动应用容器...${NC}"
-$DOCKER_COMPOSE -f $COMPOSE_FILE up -d backend frontend
+compose up -d backend frontend
 echo -e "${GREEN}✓ 应用容器启动完成${NC}"
+
+if ! wait_for_service backend "${BACKEND_WAIT_ATTEMPTS:-45}" || ! wait_for_service frontend "${FRONTEND_WAIT_ATTEMPTS:-30}"; then
+    echo -e "${RED}✗ 应用服务未正常启动${NC}"
+    compose logs --tail=50 backend frontend || true
+    compose stop backend frontend || true
+    echo -e "${YELLOW}后端与前端已停止，请修复问题后重新部署。${NC}"
+    exit 1
+fi
 
 # 配置 Nginx
 echo -e "${BLUE}[8/8] 配置 Nginx 反向代理...${NC}"
@@ -193,10 +216,10 @@ fi
 
 # 显示服务状态
 echo -e "${GREEN}=== 部署完成 ===${NC}"
-$DOCKER_COMPOSE -f $COMPOSE_FILE ps
+compose ps
 
 echo -e "${BLUE}常用命令:${NC}"
-echo "  查看日志: $DOCKER_COMPOSE -f $COMPOSE_FILE logs -f"
-echo "  停止服务: $DOCKER_COMPOSE -f $COMPOSE_FILE down"
-echo "  重启服务: $DOCKER_COMPOSE -f $COMPOSE_FILE restart"
+echo "  查看日志: ${DOCKER_COMPOSE[*]} -f $COMPOSE_FILE logs -f"
+echo "  停止服务: ${DOCKER_COMPOSE[*]} -f $COMPOSE_FILE down"
+echo "  重启服务: ${DOCKER_COMPOSE[*]} -f $COMPOSE_FILE restart"
 echo "  更新服务: ./update.sh"

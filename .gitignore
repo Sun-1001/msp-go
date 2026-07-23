@@ -19,6 +19,7 @@ desktop.ini
 *.log
 logs/
 uploads/
+backups/
 
 # 临时文件
 *.tmp

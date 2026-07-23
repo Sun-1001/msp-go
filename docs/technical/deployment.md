@@ -39,6 +39,23 @@ docker compose up -d backend frontend
 
 默认生产链路不运行 Python 或 Alembic。
 
+迁移 runner 不随 API 自动执行。合并包含 `backend-go/migrations/*.up.sql` 的变更后，必须在启动新版本 API 前执行一次迁移，并确认重复执行没有待应用版本：
+
+```powershell
+Set-Location backend-go
+go run ./cmd/migrate
+go run ./cmd/migrate
+Set-Location ..
+```
+
+首次命令应记录实际 `applied_count`，第二次应为 `applied_count=0`。也可在数据库中核对已应用版本：
+
+```sql
+SELECT version, name, applied_at
+FROM public.go_schema_migrations
+ORDER BY version;
+```
+
 ## 反向代理
 
 `frontend/nginx.conf` 负责前端容器内的静态资源和 API 转发，根目录 `nginx-site.conf` 可用于站点级反向代理。部署时应确认：
@@ -135,8 +152,67 @@ go test ./internal/adapter/llm/einoagent -run 'TestLiveMathSolver' -count=1 -v
 
 ## 更新与回滚
 
-- 更新前备份 PostgreSQL 和持久化上传目录。
-- 使用 `scripts/update.sh` 或按“迁移后启动应用”的顺序滚动更新。
+- 使用 `scripts/update.sh <镜像标签>` 或按“确认数据库、拉取镜像、停止应用写入、备份数据、迁移、启动新应用”的顺序更新。脚本确认 PostgreSQL 可用并拉取新镜像时旧应用仍保持运行，随后只停止 backend/frontend，不停止数据库和 Redis。
+- 更新脚本在迁移前创建权限收紧的 `backups/<时间戳>/`，保存 `.env`、解析后的 Compose 配置、旧镜像引用及不可变镜像 ID、PostgreSQL custom-format dump，以及存在时的 `uploads.tar.gz`。可通过 `BACKUP_ROOT` 修改备份根目录。该目录被 Git 忽略，但包含生产凭据和业务数据，仍需限制访问并按运维保留策略清理。
+- `postgres.dump` 失败或为空时脚本不会执行迁移，并尝试重新启动原应用容器；迁移失败或新版本健康检查失败时应用保持停止，避免在未知 schema 或不健康状态下继续提供服务。
+- `uploads/` 不在默认路径时，通过 `MSP_UPLOADS_BACKUP_DIR` 指定宿主机持久化目录。使用 S3/七牛等外部对象存储时，仍需遵循对应供应商的版本与备份策略。
 - 数据迁移不提供自动 down migration；失败时恢复备份，或发布经过评审的补偿性 forward migration。
 - 应用镜像回滚前必须确认旧版本能够读取当前数据库结构。
 - 回滚后重新执行健康检查、认证和核心业务 smoke。
+
+需要恢复备份时，先停止应用并保留故障现场，再使用对应备份目录。以下命令会覆盖当前数据库与本地上传目录，只能在确认目标目录和恢复窗口后执行：
+
+```bash
+COMPOSE_FILE="${COMPOSE_FILE:-docker-compose.yml}"
+BACKUP_ROOT="${BACKUP_ROOT:-backups}"
+BACKUP_DIR="${BACKUP_ROOT}/20260723_120000"
+docker compose -f "${COMPOSE_FILE}" stop backend frontend
+docker compose -f "${COMPOSE_FILE}" up -d postgres
+for attempt in {1..30}; do
+    if docker compose -f "${COMPOSE_FILE}" exec -T postgres sh -ec 'pg_isready -q -U "${POSTGRES_USER:-postgres}" -d "${POSTGRES_DB:-${POSTGRES_USER:-postgres}}"'; then
+        break
+    fi
+    if [ "$attempt" -eq 30 ]; then
+        echo "PostgreSQL 未在 60 秒内就绪" >&2
+        exit 1
+    fi
+    sleep 2
+done
+
+# 先验证 archive，再清空项目 schema；仅使用 --clean 无法删除备份后新增的表。
+docker compose -f "${COMPOSE_FILE}" exec -T postgres sh -ec 'exec pg_restore --list >/dev/null' < "${BACKUP_DIR}/postgres.dump"
+docker compose -f "${COMPOSE_FILE}" exec -T postgres sh -ec 'exec psql -v ON_ERROR_STOP=1 -U "${POSTGRES_USER:-postgres}" -d "${POSTGRES_DB:-${POSTGRES_USER:-postgres}}" -c "DROP SCHEMA public CASCADE"'
+docker compose -f "${COMPOSE_FILE}" exec -T postgres sh -ec 'exec pg_restore --exit-on-error --clean --if-exists --no-owner --no-privileges -U "${POSTGRES_USER:-postgres}" -d "${POSTGRES_DB:-${POSTGRES_USER:-postgres}}"' < "${BACKUP_DIR}/postgres.dump"
+
+# 仅当备份中存在 uploads.tar.gz 且使用本地存储时执行。
+UPLOADS_DIR="${MSP_UPLOADS_BACKUP_DIR:-uploads}"
+if [ -f "${BACKUP_DIR}/uploads.tar.gz" ]; then
+    if [ -e "${UPLOADS_DIR}" ]; then
+        mv "${UPLOADS_DIR}" "${UPLOADS_DIR}.failed-$(date +%Y%m%d_%H%M%S)"
+    fi
+    mkdir -p "$(dirname -- "${UPLOADS_DIR}")"
+    tar -xzf "${BACKUP_DIR}/uploads.tar.gz" -C "$(dirname -- "${UPLOADS_DIR}")"
+elif [ -f "${BACKUP_DIR}/uploads.absent.txt" ]; then
+    if [ -e "${UPLOADS_DIR}" ]; then
+        mv "${UPLOADS_DIR}" "${UPLOADS_DIR}.failed-$(date +%Y%m%d_%H%M%S)"
+    fi
+    echo "备份时上传目录不存在，当前目录已保留为故障现场"
+fi
+```
+
+`previous-images.txt` 同时保存原镜像引用和容器实际使用的镜像 ID。需要回滚镜像时，先确认两个 ID 在本机仍存在，再把它们标记为同一个临时版本并启动应用：
+
+```bash
+: "${DOCKER_USERNAME:?请先导出原镜像仓库用户名}"
+export DOCKER_USERNAME
+ROLLBACK_TAG="rollback-20260723_120000"
+BACKEND_IMAGE_ID="$(sed -n 's/^backend_image_id=//p' "${BACKUP_DIR}/previous-images.txt")"
+FRONTEND_IMAGE_ID="$(sed -n 's/^frontend_image_id=//p' "${BACKUP_DIR}/previous-images.txt")"
+docker image inspect "${BACKEND_IMAGE_ID}" "${FRONTEND_IMAGE_ID}" >/dev/null
+docker tag "${BACKEND_IMAGE_ID}" "${DOCKER_USERNAME}/backend-go:${ROLLBACK_TAG}"
+docker tag "${FRONTEND_IMAGE_ID}" "${DOCKER_USERNAME}/frontend:${ROLLBACK_TAG}"
+export IMAGE_VERSION="${ROLLBACK_TAG}"
+docker compose -f "${COMPOSE_FILE}" up -d backend frontend
+```
+
+恢复备份中的 `.env` 后再使用上述旧镜像。数据库已成功完成 forward migration、且旧镜像确认兼容新 schema 时，可以只回滚镜像；否则必须先恢复数据库或发布补偿迁移，不能只复制旧 `.env` 后直接启动。
