@@ -5,6 +5,7 @@ import {
   ExercisePanel,
   useExerciseViewModel,
 } from '@/modules/exercise';
+import type { GenerateQuestionType } from '@/modules/exercise/services/exerciseService';
 import { knowledgeService } from '@/modules/knowledge/services/knowledgeService';
 import type { KnowledgeNode } from '@/modules/knowledge/types/knowledge';
 import { Badge } from '@/components/ui/Badge';
@@ -82,6 +83,7 @@ export const ExercisePage: React.FC = () => {
   const [knowledgeError, setKnowledgeError] = useState<string | null>(null);
   const [selectedConceptId, setSelectedConceptId] = useState('');
   const [difficulty, setDifficulty] = useState(0.5);
+  const [questionType, setQuestionType] = useState<GenerateQuestionType>('multiple_choice');
 
   useEffect(() => {
     if (classLoadStarted.current) return;
@@ -137,7 +139,7 @@ export const ExercisePage: React.FC = () => {
 
   const generateQuestion = () => {
     if (!selectedConceptId) return Promise.resolve();
-    return requestAIQuestion(selectedConceptId, difficulty);
+    return requestAIQuestion(selectedConceptId, difficulty, questionType);
   };
 
   const retryKnowledgeLoad = () => {
@@ -167,7 +169,7 @@ export const ExercisePage: React.FC = () => {
     <MainLayout>
       <div className="container mx-auto max-w-6xl p-4 sm:p-6">
         <div className="grid grid-cols-1 gap-6 lg:grid-cols-12">
-          <div className="space-y-6 lg:col-span-8">
+          <div className="min-w-0 space-y-6 lg:col-span-8">
             <div>
               <h1 className="text-3xl font-bold tracking-normal text-surface-900 dark:text-surface-100">
                 智能刷题
@@ -213,6 +215,7 @@ export const ExercisePage: React.FC = () => {
                   knowledgeOptions={knowledgeOptions}
                   selectedConceptId={selectedConceptId}
                   difficulty={difficulty}
+                  questionType={questionType}
                   isLoadingKnowledge={isLoadingKnowledge}
                   isGenerating={isGenerating}
                   isSubmitting={isAISubmitting}
@@ -220,6 +223,7 @@ export const ExercisePage: React.FC = () => {
                   hasQuestion={Boolean(aiQuestion)}
                   onConceptChange={setSelectedConceptId}
                   onDifficultyChange={setDifficulty}
+                  onQuestionTypeChange={setQuestionType}
                   onGenerate={generateQuestion}
                   onRetryKnowledge={retryKnowledgeLoad}
                 />

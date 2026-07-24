@@ -80,11 +80,11 @@ const questionParserInstruction = `你是高等数学学习平台的题目解析
 - 信息缺失时使用空字符串或空数组，不要编造标准答案。`
 
 const questionGeneratorInstruction = `你是高等数学学习平台的题目生成智能体。
-目标：根据平台提供的可信知识点和难度，生成一道四选一练习题。
+目标：根据平台提供的可信知识点、难度和题型，生成一道练习题。
 约束：
 - 只输出一个严格 JSON 对象，不要输出 Markdown、代码围栏或解释性前后缀。
-- type 固定为 multiple_choice，answer_type 固定为 text。
-- options 必须恰好包含 4 个去除首尾空白后非空且互不重复的选项，answer 必须与其中一个选项完全一致。
+- 选择题：type 固定为 multiple_choice，answer_type 固定为 text；options 恰好包含 4 个去除首尾空白后非空且互不重复的选项，answer 必须与其中一个选项完全一致。
+- 填空题：type 固定为 short_answer，answer_type 只能是 numeric 或 expression；options 必须为空数组，题干必须恰好使用一个 ` + exerciseapp.QuestionBlankMarker + ` 表示填空位置，answer 只包含答案本身。
 - title、body、answer、hints、solution_steps 均不能为空；hints 和 solution_steps 至少各包含 1 项。
 - estimated_time_seconds 必须在 30 到 3600 之间。
 - 题目必须属于输入知识点，不扩展到无关章节，不编造学习记录或学生信息。`
@@ -692,7 +692,7 @@ func (g exerciseQuestionGenerator) GenerateQuestion(ctx context.Context, input e
 	}
 	question, err := parseGeneratedQuestionJSON(output.Content)
 	if err != nil {
-		return exerciseapp.GeneratedQuestion{}, err
+		return exerciseapp.GeneratedQuestion{}, fmt.Errorf("%w: %v", exerciseapp.ErrGeneratedContentInvalid, err)
 	}
 	question.Difficulty = input.Difficulty
 	question.ConceptIDs = []string{strings.TrimSpace(input.Concept.ID)}
@@ -1050,20 +1050,43 @@ func questionParserPrompt(input questionapp.ParserInput) string {
 }
 
 func questionGeneratorPrompt(input exerciseapp.GenerationInput) string {
+	questionType := strings.ToLower(strings.TrimSpace(input.QuestionType))
+	if questionType == "" {
+		questionType = exerciseapp.QuestionTypeMultipleChoice
+	}
 	contextJSON, _ := json.Marshal(map[string]any{
-		"concept_id":   strings.TrimSpace(input.Concept.ID),
-		"concept_name": strings.TrimSpace(input.Concept.Name),
-		"description":  strings.TrimSpace(input.Concept.Description),
-		"chapter":      strings.TrimSpace(input.Concept.Chapter),
-		"difficulty":   input.Difficulty,
+		"concept_id":    strings.TrimSpace(input.Concept.ID),
+		"concept_name":  strings.TrimSpace(input.Concept.Name),
+		"description":   strings.TrimSpace(input.Concept.Description),
+		"chapter":       strings.TrimSpace(input.Concept.Chapter),
+		"difficulty":    input.Difficulty,
+		"question_type": questionType,
 	})
 	var builder strings.Builder
-	builder.WriteString("请根据以下可信知识点上下文生成一道高等数学四选一练习题。\n\n")
+	if questionType == exerciseapp.QuestionTypeShortAnswer {
+		builder.WriteString("请根据以下可信知识点上下文生成一道高等数学单空填空题。\n\n")
+	} else {
+		builder.WriteString("请根据以下可信知识点上下文生成一道高等数学四选一练习题。\n\n")
+	}
 	builder.WriteString("只返回严格 JSON，格式如下：\n")
-	builder.WriteString(`{"title":"","body":"","type":"multiple_choice","difficulty":0.5,"answer":"","answer_type":"text","options":["","","",""],"hints":[""],"solution_steps":[""],"estimated_time_seconds":300,"concept_ids":[""],"knowledge_point_names":[""]}`)
+	if questionType == exerciseapp.QuestionTypeShortAnswer {
+		builder.WriteString(`{"title":"","body":"计算结果为 `)
+		builder.WriteString(exerciseapp.QuestionBlankMarker)
+		builder.WriteString(`。","type":"short_answer","difficulty":0.5,"answer":"","answer_type":"expression","options":[],"hints":[""],"solution_steps":[""],"estimated_time_seconds":300,"concept_ids":[""],"knowledge_point_names":[""]}`)
+	} else {
+		builder.WriteString(`{"title":"","body":"","type":"multiple_choice","difficulty":0.5,"answer":"","answer_type":"text","options":["","","",""],"hints":[""],"solution_steps":[""],"estimated_time_seconds":300,"concept_ids":[""],"knowledge_point_names":[""]}`)
+	}
 	builder.WriteString("\n\n硬性要求：\n")
-	builder.WriteString("- type 固定为 multiple_choice，answer_type 固定为 text。\n")
-	builder.WriteString("- options 恰好 4 项，去除首尾空白后均非空且互不重复；answer 必须与一个选项完全一致。\n")
+	if questionType == exerciseapp.QuestionTypeShortAnswer {
+		builder.WriteString("- type 固定为 short_answer，answer_type 只能是 numeric 或 expression。\n")
+		builder.WriteString("- options 必须为空数组；body 必须恰好包含一个 ")
+		builder.WriteString(exerciseapp.QuestionBlankMarker)
+		builder.WriteString(" 作为填空位置，并将它放在数学公式定界符之外。\n")
+		builder.WriteString("- answer 只写答案本身，不添加答案为、解释文字或 $ 定界符。\n")
+	} else {
+		builder.WriteString("- type 固定为 multiple_choice，answer_type 固定为 text。\n")
+		builder.WriteString("- options 恰好 4 项，去除首尾空白后均非空且互不重复；answer 必须与一个选项完全一致。\n")
+	}
 	builder.WriteString("- title、body、answer 必填；hints 和 solution_steps 至少各 1 项。\n")
 	builder.WriteString("- estimated_time_seconds 在 30 到 3600 之间。\n")
 	builder.WriteString("- difficulty 使用输入值，不自行调整；concept_ids 和 knowledge_point_names 只使用输入值。\n\n")
@@ -1370,9 +1393,6 @@ func parseGeneratedQuestionJSON(content string) (exerciseapp.GeneratedQuestion, 
 	if payload.EstimatedTimeSeconds == nil || *payload.EstimatedTimeSeconds < 30 || *payload.EstimatedTimeSeconds > 3600 {
 		return exerciseapp.GeneratedQuestion{}, errors.New("question generator JSON estimated_time_seconds out of range")
 	}
-	if len(payload.Options) != 4 {
-		return exerciseapp.GeneratedQuestion{}, errors.New("question generator JSON options must contain four unique non-empty values")
-	}
 	question := exerciseapp.GeneratedQuestion{
 		Title:                strings.TrimSpace(payload.Title),
 		Body:                 strings.TrimSpace(payload.Body),
@@ -1390,14 +1410,20 @@ func parseGeneratedQuestionJSON(content string) (exerciseapp.GeneratedQuestion, 
 	if question.Title == "" || question.Body == "" || question.Answer == "" {
 		return exerciseapp.GeneratedQuestion{}, errors.New("question generator JSON missing required question fields")
 	}
-	if question.Type != "multiple_choice" || question.AnswerType != "text" {
-		return exerciseapp.GeneratedQuestion{}, errors.New("question generator JSON must describe a multiple_choice text answer")
-	}
-	if len(question.Options) != 4 || !uniqueStrings(question.Options) {
-		return exerciseapp.GeneratedQuestion{}, errors.New("question generator JSON options must contain four unique non-empty values")
-	}
-	if !containsExact(question.Options, question.Answer) {
-		return exerciseapp.GeneratedQuestion{}, errors.New("question generator JSON answer must match one option")
+	switch question.Type {
+	case exerciseapp.QuestionTypeMultipleChoice:
+		if question.AnswerType != "text" || len(question.Options) != 4 || !uniqueStrings(question.Options) {
+			return exerciseapp.GeneratedQuestion{}, errors.New("question generator JSON must describe a multiple_choice text answer with four unique non-empty options")
+		}
+		if !containsExact(question.Options, question.Answer) {
+			return exerciseapp.GeneratedQuestion{}, errors.New("question generator JSON answer must match one option")
+		}
+	case exerciseapp.QuestionTypeShortAnswer:
+		if (question.AnswerType != "numeric" && question.AnswerType != "expression") || len(question.Options) != 0 || strings.Count(question.Body, exerciseapp.QuestionBlankMarker) != 1 {
+			return exerciseapp.GeneratedQuestion{}, errors.New("question generator JSON must describe a single-blank numeric or expression short_answer")
+		}
+	default:
+		return exerciseapp.GeneratedQuestion{}, errors.New("question generator JSON contains an unsupported question type")
 	}
 	if len(question.Hints) == 0 || len(question.SolutionSteps) == 0 {
 		return exerciseapp.GeneratedQuestion{}, errors.New("question generator JSON requires hints and solution_steps")
@@ -1411,6 +1437,10 @@ func validateGenerationInput(input exerciseapp.GenerationInput) error {
 	}
 	if math.IsNaN(input.Difficulty) || math.IsInf(input.Difficulty, 0) || input.Difficulty < 0 || input.Difficulty > 1 {
 		return errors.New("question generator difficulty must be between 0 and 1")
+	}
+	questionType := strings.ToLower(strings.TrimSpace(input.QuestionType))
+	if questionType != "" && questionType != exerciseapp.QuestionTypeMultipleChoice && questionType != exerciseapp.QuestionTypeShortAnswer {
+		return errors.New("question generator question type must be multiple_choice or short_answer")
 	}
 	return nil
 }

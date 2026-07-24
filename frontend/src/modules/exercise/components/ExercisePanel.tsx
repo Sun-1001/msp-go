@@ -41,15 +41,26 @@ const renderMathContent = (
 ) => {
   if (!value) return null;
 
+  const safeContentClassName = [
+    'min-w-0 max-w-full overflow-x-auto overflow-y-hidden [overflow-wrap:anywhere]',
+    options.className,
+  ].filter(Boolean).join(' ');
+
   if (inlineOrBlockMathRegex.test(value)) {
-    return <MathText className={options.className}>{value}</MathText>;
+    return <MathText className={safeContentClassName}>{value}</MathText>;
   }
 
   if (latexHintRegex.test(value)) {
-    return <MathRenderer expression={value} block={options.block} className={options.className} />;
+    return (
+      <MathRenderer
+        expression={value}
+        block={options.block}
+        className={`inline-block ${safeContentClassName}`}
+      />
+    );
   }
 
-  return <span className={options.className}>{value}</span>;
+  return <span className={safeContentClassName}>{value}</span>;
 };
 
 export interface ExercisePanelProps {
@@ -193,7 +204,7 @@ const ExercisePanelContent: React.FC<ExercisePanelProps> = ({
         : '提交答案';
 
   return (
-    <div className="space-y-6 animate-fade-in">
+    <div className="min-w-0 max-w-full space-y-6 animate-fade-in">
       {/* 题目卡片 */}
       <Card className="border-primary-100 dark:border-primary-900 shadow-md overflow-hidden">
         <CardHeader className="bg-primary-50/50 dark:bg-primary-950/50 border-b border-primary-100 dark:border-primary-900">
@@ -302,7 +313,7 @@ const ExercisePanelContent: React.FC<ExercisePanelProps> = ({
           role="status"
           aria-live="polite"
           aria-atomic="true"
-          className={`animate-slide-up border-l-4 ${
+          className={`min-w-0 max-w-full overflow-hidden animate-slide-up border-l-4 ${
             isIndeterminate
               ? 'border-l-amber-500 bg-amber-50 dark:bg-amber-950/30'
               : submitResult.isCorrect
@@ -310,7 +321,7 @@ const ExercisePanelContent: React.FC<ExercisePanelProps> = ({
               : 'border-l-red-500 bg-red-50 dark:bg-red-950/30'
           }`}
         >
-          <CardContent className="p-4 space-y-3">
+          <CardContent className="min-w-0 space-y-3 overflow-hidden p-4 [overflow-wrap:anywhere]">
             <h4
               className={`flex items-center gap-2 font-bold text-lg ${
                 isIndeterminate
@@ -371,7 +382,7 @@ const ExercisePanelContent: React.FC<ExercisePanelProps> = ({
             {!isIndeterminate && !submitResult.isCorrect && submitResult.correctAnswerLatex && (
               <div className="mt-2 p-3 bg-white/50 dark:bg-surface-900/50 rounded-lg">
                 <span className="text-sm font-medium text-surface-500">正确答案：</span>
-                <MathRenderer expression={submitResult.correctAnswerLatex} block />
+                {renderMathContent(submitResult.correctAnswerLatex, { block: true })}
               </div>
             )}
 

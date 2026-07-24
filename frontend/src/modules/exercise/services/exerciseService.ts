@@ -25,6 +25,8 @@ export interface Question {
   options?: string[] | null;
 }
 
+export type GenerateQuestionType = 'multiple_choice' | 'short_answer';
+
 interface QuestionResponse {
   id: string;
   title: string;
@@ -42,6 +44,7 @@ interface QuestionResponse {
 export interface GenerateQuestionPayload {
   conceptId: string;
   difficulty: number;
+  questionType: GenerateQuestionType;
 }
 
 export interface DiagnosisDetail {
@@ -184,11 +187,13 @@ export const exerciseService = {
     exerciseLogger.debug('Generating question', {
       conceptId: payload.conceptId,
       difficulty: payload.difficulty,
+      questionType: payload.questionType,
     });
 
     const res = await apiClient.post<QuestionResponse>('/exercise/generate', {
       concept_id: payload.conceptId,
       difficulty: payload.difficulty,
+      question_type: payload.questionType,
     }, {
       timeout: 60000,
     });

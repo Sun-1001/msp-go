@@ -3,6 +3,7 @@ import axios from 'axios';
 import {
   exerciseService,
   type ExerciseSolution,
+  type GenerateQuestionType,
   type Question,
   type SubmitResult,
 } from '@/modules/exercise/services/exerciseService';
@@ -293,7 +294,11 @@ export function useExerciseViewModel() {
     }
   }, []);
 
-  const generateQuestion = useCallback(async (conceptId: string, difficulty: number) => {
+  const generateQuestion = useCallback(async (
+    conceptId: string,
+    difficulty: number,
+    questionType: GenerateQuestionType = 'multiple_choice',
+  ) => {
     if (generationInFlightRef.current || submissionInFlightRef.current) return;
 
     const normalizedConceptId = conceptId.trim();
@@ -320,6 +325,7 @@ export function useExerciseViewModel() {
       const question = await exerciseService.generateQuestion({
         conceptId: normalizedConceptId,
         difficulty,
+        questionType,
       });
       questionVersionRef.current += 1;
       setCurrentQuestion(question);
@@ -331,6 +337,7 @@ export function useExerciseViewModel() {
         questionId: question.id,
         conceptId: normalizedConceptId,
         difficulty,
+        questionType,
       });
     } catch (err) {
       const generationError = getGenerationError(err);
