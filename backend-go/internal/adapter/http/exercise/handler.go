@@ -319,7 +319,19 @@ func (h *Handler) requireStudent(w http.ResponseWriter, r *http.Request) (authap
 }
 
 func (h *Handler) writeExerciseError(w http.ResponseWriter, err error, fallback string) {
+	if errors.Is(err, context.Canceled) {
+		h.logger.Debug("exercise request canceled")
+		return
+	}
+	if errors.Is(err, context.DeadlineExceeded) {
+		writeExerciseError(w, http.StatusGatewayTimeout, "REQUEST_TIMEOUT", "请求处理超时，请稍后重试")
+		return
+	}
 	if writeAIRiskError(w, err) {
+		return
+	}
+	if errors.Is(err, exerciseapp.ErrAIGenerationTimeout) {
+		writeExerciseError(w, http.StatusGatewayTimeout, "AI_GENERATION_TIMEOUT", "AI 出题处理超时，请稍后重试")
 		return
 	}
 	if errors.Is(err, exerciseapp.ErrAIGenerationUnavailable) {
