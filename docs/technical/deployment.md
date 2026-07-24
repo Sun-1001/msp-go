@@ -60,11 +60,32 @@ ORDER BY version;
 
 `frontend/nginx.conf` 负责前端容器内的静态资源和 API 转发，根目录 `nginx-site.conf` 可用于站点级反向代理。部署时应确认：
 
+默认请求超时按工作负载分层：
+
+| 层级 | 默认超时 |
+| --- | ---: |
+| 普通 Go API 总请求预算 | 30 秒 |
+| `POST /api/v1/exercise/generate` 总请求预算 | 55 秒 |
+| 前端生成请求 Axios 超时 | 60 秒 |
+| Nginx `/api/` 上游响应读取超时 | 300 秒 |
+| Go HTTP `WriteTimeout` | 310 秒 |
+
+`EXERCISE_GENERATION_REQUEST_TIMEOUT_SECONDS` 是生成、独立求解、验证及最多一次重试共享的总预算。生产环境通常应保持默认 55 秒；如需配置到 60 秒以上，必须同步调整前端请求超时，如需超过 300 秒还必须同步调整所有边缘代理。Nginx 的 300 秒仅是代理安全上限，不代表业务请求应持续运行 300 秒。
+
 - `/api/` 指向 Go API；
 - SSE 路径关闭不必要的代理缓冲并保留足够超时；
 - 上传大小限制与后端配置一致；
 - TLS、HSTS、CSP 和其他安全响应头由边缘代理统一设置；
 - `/metrics` 和详细健康信息只对管理网络开放。
+
+`scripts/deploy.sh` 只会为首次部署或重新执行部署脚本时生成站点配置。已经部署的服务器不会因代码更新自动改写 `/etc/nginx`；应先用 `sudo nginx -T` 确认实际生效的站点文件，再将 `/api/` location 中的 `proxy_read_timeout` 调整为 `300s`，随后执行：
+
+```bash
+sudo nginx -t
+sudo systemctl reload nginx
+```
+
+不要在通用更新脚本中自动编辑系统 Nginx；自定义域名、面板托管、Ingress、云负载均衡或其他边缘代理应在各自配置入口应用相同的响应读取上限。
 
 ## 监控指标
 

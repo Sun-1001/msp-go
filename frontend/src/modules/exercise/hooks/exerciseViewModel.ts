@@ -43,12 +43,47 @@ export interface ExerciseAnswerSubmission {
 
 type SubmissionStage = 'upload' | 'grading';
 
+const getErrorCode = (err: unknown): string => {
+  if (!axios.isAxiosError(err)) return '';
+  const data = err.response?.data as { code?: unknown } | undefined;
+  return typeof data?.code === 'string' ? data.code.trim().toUpperCase() : '';
+};
+
 const getGenerationError = (err: unknown): { message: string; type: ExerciseErrorType } => {
   if (!axios.isAxiosError(err)) {
     return {
       message: getApiErrorMessage(err, '生成题目失败，请稍后重试'),
       type: 'unknown',
     };
+  }
+
+  const code = getErrorCode(err);
+  switch (code) {
+    case 'AI_GENERATION_TIMEOUT':
+      return {
+        message: 'AI 出题处理超时，请稍后重试',
+        type: 'generation_unavailable',
+      };
+    case 'MATH_SOLVER_TIMEOUT':
+      return {
+        message: 'AI 题目验证超时，请稍后重试',
+        type: 'generation_unavailable',
+      };
+    case 'MATH_SOLVER_INVALID_RESPONSE':
+      return {
+        message: 'AI 题目验证服务返回异常，请稍后重试',
+        type: 'generation_unavailable',
+      };
+    case 'MATH_SOLVER_UNAVAILABLE':
+      return {
+        message: 'AI 题目验证服务暂不可用，请稍后重试',
+        type: 'generation_unavailable',
+      };
+    case 'AI_GENERATION_UNAVAILABLE':
+      return {
+        message: 'AI 出题服务暂不可用，请稍后重试',
+        type: 'generation_unavailable',
+      };
   }
 
   const status = err.response?.status;
@@ -70,6 +105,18 @@ const getGenerationError = (err: unknown): { message: string; type: ExerciseErro
       type: 'generation_unavailable',
     };
   }
+  if (status === 504) {
+    return {
+      message: 'AI 出题处理超时，请稍后重试',
+      type: 'generation_unavailable',
+    };
+  }
+  if (status === 502) {
+    return {
+      message: 'AI 出题服务连接异常，请稍后重试',
+      type: 'generation_unavailable',
+    };
+  }
   if (!err.response) {
     return {
       message: '无法连接到服务器，请检查网络后重试',
@@ -81,12 +128,6 @@ const getGenerationError = (err: unknown): { message: string; type: ExerciseErro
     message: getApiErrorMessage(err, '生成题目失败，请稍后重试'),
     type: 'unknown',
   };
-};
-
-const getErrorCode = (err: unknown): string => {
-  if (!axios.isAxiosError(err)) return '';
-  const data = err.response?.data as { code?: unknown } | undefined;
-  return typeof data?.code === 'string' ? data.code.trim().toUpperCase() : '';
 };
 
 const getSubmissionError = (

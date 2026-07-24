@@ -3,7 +3,7 @@ import react from '@vitejs/plugin-react'
 import path from 'path'
 
 // https://vite.dev/config/
-export default defineConfig({
+export default defineConfig(({ command }) => ({
   plugins: [
     react({
       babel: {
@@ -18,6 +18,9 @@ export default defineConfig({
       '@': path.resolve(__dirname, './src'),
     },
   },
+  esbuild: command === 'build' ? {
+    drop: ['console', 'debugger'],
+  } : undefined,
   build: {
     rollupOptions: {
       output: {
@@ -37,21 +40,7 @@ export default defineConfig({
       },
     },
     sourcemap: false,
-    // 使用 terser 进行更好的压缩
-    minify: 'terser',
-    terserOptions: {
-      compress: {
-        // 生产环境移除 console 和 debugger
-        drop_console: true,
-        drop_debugger: true,
-        // 移除未使用的代码
-        pure_funcs: ['console.log', 'console.info', 'console.debug', 'console.trace'],
-      },
-      format: {
-        // 移除注释
-        comments: false,
-      },
-    },
+    minify: 'esbuild',
     // 设置 chunk 大小警告阈值为 1MB
     chunkSizeWarningLimit: 1000,
     // 报告压缩后的大小
@@ -67,4 +56,4 @@ export default defineConfig({
       },
     },
   },
-})
+}))
