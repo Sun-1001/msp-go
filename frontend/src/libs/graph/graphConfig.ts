@@ -5,10 +5,10 @@ import type { KnowledgeNode, KnowledgeEdge } from '@/modules/knowledge/types/kno
  * 根据掌握度获取颜色
  */
 export const getMasteryColor = (mastery: number): string => {
-  if (mastery >= 0.8) return '#10b981'; // emerald-500
-  if (mastery >= 0.6) return '#0ea5e9'; // primary-500
-  if (mastery >= 0.4) return '#f59e0b'; // amber-500
-  return '#ef4444'; // red-500
+  if (mastery <= 0) return '#64748b'; // neutral / not started
+  if (mastery >= 0.8) return '#16a34a'; // mastered
+  if (mastery >= 0.4) return '#d97706'; // in progress
+  return '#f97360'; // weak
 };
 
 /**
@@ -85,13 +85,7 @@ export const getNodeConfig = (size: number, fontSize: number, labelOffsetY: numb
     cursor: 'pointer' as const,
     labelText: (d: { data?: { label?: string } }) => d.data?.label || '',
     // 根据当前是否处于 dark 模式动态选择标签颜色
-    labelFill: () => {
-      if (typeof document !== 'undefined') {
-        const isDark = document.documentElement.classList.contains('dark');
-        return isDark ? '#e5e7eb' : '#334155';
-      }
-      return '#334155';
-    },
+    labelFill: '#e5e7eb',
     labelFontSize: fontSize,
     labelFontWeight: 500,
     labelPlacement: 'bottom' as const,
@@ -108,10 +102,20 @@ export const getNodeConfig = (size: number, fontSize: number, labelOffsetY: numb
       shadowColor: 'rgba(14, 165, 233, 0.4)',
     },
     selected: {
-      stroke: '#0ea5e9',
+      size: size * 1.2,
+      stroke: '#f8fafc',
       lineWidth: 4,
       shadowBlur: 25,
-      shadowColor: 'rgba(14, 165, 233, 0.5)',
+      shadowColor: 'rgba(255, 255, 255, 0.5)',
+    },
+    active: {
+      lineWidth: 3,
+      shadowBlur: 18,
+      shadowColor: 'rgba(245, 158, 11, 0.35)',
+    },
+    inactive: {
+      opacity: 0.2,
+      labelOpacity: 0.25,
     },
   },
 });

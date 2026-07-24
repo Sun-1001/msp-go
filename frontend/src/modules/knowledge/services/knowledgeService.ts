@@ -10,6 +10,8 @@ import type {
   KnowledgeGraphData,
   KnowledgeGraphFilters,
   KnowledgeGraphResponse,
+  LearningGoalResponse,
+  LearningPathResponse,
 } from '@/modules/knowledge/types/knowledge';
 
 const knowledgeLogger = logger.createContextLogger('Knowledge');
@@ -68,6 +70,33 @@ export const knowledgeService = {
       knowledgeLogger.error('章节列表获取失败', error);
       throw error;
     }
+  },
+
+  async getLearningGoal(signal?: AbortSignal): Promise<LearningGoalResponse> {
+    const response = await apiClient.get<LearningGoalResponse>(
+      `${BASE_PATH}/learning-goal`,
+      { signal },
+    );
+    return response.data;
+  },
+
+  async setLearningGoal(targetId: string): Promise<LearningGoalResponse> {
+    const response = await apiClient.put<LearningGoalResponse>(
+      `${BASE_PATH}/learning-goal`,
+      { target_id: targetId },
+    );
+    return response.data;
+  },
+
+  async getLearningPath(targetId?: string, signal?: AbortSignal): Promise<LearningPathResponse> {
+    const response = await apiClient.get<LearningPathResponse>(
+      `${BASE_PATH}/path`,
+      {
+        params: targetId ? { target: targetId } : undefined,
+        signal,
+      },
+    );
+    return response.data;
   },
 };
 

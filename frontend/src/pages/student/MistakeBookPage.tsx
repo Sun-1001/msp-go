@@ -1,4 +1,5 @@
 import React from 'react';
+import { useSearchParams } from 'react-router-dom';
 import { MainLayout } from '../../components/layout/MainLayout';
 import { Card, CardContent, CardHeader, CardTitle } from '../../components/ui/Card';
 import { Button } from '../../components/ui/Button';
@@ -24,6 +25,8 @@ import {
 } from '@/modules/mistake/hooks/useMistakeBook';
 
 export const MistakeBookPage: React.FC = () => {
+  const [searchParams] = useSearchParams();
+  const conceptId = searchParams.get('concept_id')?.trim() || undefined;
   const {
     mistakes,
     pagination,
@@ -39,7 +42,7 @@ export const MistakeBookPage: React.FC = () => {
     handleFetchMistakes,
     handleGeneratePortrait,
     handleClearPortrait,
-  } = useMistakeBook();
+  } = useMistakeBook(conceptId);
 
   return (
     <MainLayout>

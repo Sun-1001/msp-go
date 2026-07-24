@@ -28,8 +28,9 @@ export function getErrorTypeLabel(errorType: string | null) {
   return errorType ? labels[errorType] || '未知错误' : '未分类';
 }
 
-export function useMistakeBook() {
+export function useMistakeBook(conceptId?: string) {
   const dispatch = useAppDispatch();
+  const normalizedConceptId = conceptId?.trim() || undefined;
   const { portrait, loadingState: portraitLoading, generating, clearing } = useAppSelector(
     (state) => state.studentPortrait,
   );
@@ -38,17 +39,21 @@ export function useMistakeBook() {
   const mistakesLoading = useAppSelector(selectLoadingState);
   const mistakesError = useAppSelector(selectError);
 
+  const fetchMistakePage = useCallback((page: number) => {
+    dispatch(fetchMistakes({ page, pageSize: 20, conceptId: normalizedConceptId }));
+  }, [dispatch, normalizedConceptId]);
+
   useEffect(() => {
-    dispatch(fetchMistakes({ page: 1, pageSize: 20 }));
-  }, [dispatch]);
+    fetchMistakePage(1);
+  }, [fetchMistakePage]);
 
   const handleTabChange = useCallback((value: string) => {
     if (value === 'mistakes') {
-      dispatch(fetchMistakes({ page: 1, pageSize: 20 }));
+      fetchMistakePage(1);
     } else if (value === 'portrait') {
       dispatch(fetchPortrait());
     }
-  }, [dispatch]);
+  }, [dispatch, fetchMistakePage]);
 
   const handleDeleteMistake = useCallback(async (attemptId: string) => {
     if (window.confirm('确定要删除这条错题记录吗？删除后无法恢复。')) {
@@ -58,10 +63,6 @@ export function useMistakeBook() {
 
   const handleMarkAsMastered = useCallback(async (attemptId: string) => {
     await dispatch(markAsMastered(attemptId));
-  }, [dispatch]);
-
-  const handleFetchMistakes = useCallback((page: number) => {
-    dispatch(fetchMistakes({ page, pageSize: 20 }));
   }, [dispatch]);
 
   const handleGeneratePortrait = useCallback(() => {
@@ -86,7 +87,7 @@ export function useMistakeBook() {
     handleTabChange,
     handleDeleteMistake,
     handleMarkAsMastered,
-    handleFetchMistakes,
+    handleFetchMistakes: fetchMistakePage,
     handleGeneratePortrait,
     handleClearPortrait,
   };
