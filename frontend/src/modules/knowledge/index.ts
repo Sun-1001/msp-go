@@ -5,7 +5,6 @@
 // Components
 export {
   KnowledgeGraph,
-  KnowledgeGraphModal,
   KnowledgeGraphLegend,
 } from './components/KnowledgeGraph';
 
@@ -13,7 +12,6 @@ export type {
   KnowledgeNode,
   KnowledgeEdge,
   KnowledgeGraphProps,
-  KnowledgeGraphModalProps,
 } from './components/KnowledgeGraph';
 
 // Services

@@ -50,6 +50,56 @@ func (r ProgressRepository) GetProfile(ctx context.Context, userID string) (prog
 	return profile, true, nil
 }
 
+// GetLearningGoal returns the active target for one student.
+func (r ProgressRepository) GetLearningGoal(ctx context.Context, userID string) (progressapp.LearningGoal, bool, error) {
+	var goal progressapp.LearningGoal
+	err := r.DB().QueryRow(ctx, `
+		SELECT target_node_id, updated_at
+		FROM public.student_learning_goals
+		WHERE student_id = $1`,
+		userID,
+	).Scan(&goal.TargetID, &goal.UpdatedAt)
+	if err != nil {
+		if err == pgx.ErrNoRows {
+			return progressapp.LearningGoal{}, false, nil
+		}
+		return progressapp.LearningGoal{}, false, err
+	}
+	return goal, true, nil
+}
+
+// UpsertLearningGoal atomically replaces a student's target when the node exists.
+func (r ProgressRepository) UpsertLearningGoal(
+	ctx context.Context,
+	userID string,
+	targetID string,
+	now time.Time,
+) (progressapp.LearningGoal, bool, error) {
+	var goal progressapp.LearningGoal
+	err := r.DB().QueryRow(ctx, `
+		INSERT INTO public.student_learning_goals (
+			student_id, target_node_id, created_at, updated_at
+		)
+		SELECT $1, id, $3, $3
+		FROM public.knowledge_nodes
+		WHERE id = $2
+		ON CONFLICT (student_id) DO UPDATE SET
+			target_node_id = EXCLUDED.target_node_id,
+			updated_at = EXCLUDED.updated_at
+		RETURNING target_node_id, updated_at`,
+		userID,
+		targetID,
+		now,
+	).Scan(&goal.TargetID, &goal.UpdatedAt)
+	if err != nil {
+		if err == pgx.ErrNoRows {
+			return progressapp.LearningGoal{}, false, nil
+		}
+		return progressapp.LearningGoal{}, false, err
+	}
+	return goal, true, nil
+}
+
 // GetAttemptTotals derives total and correct attempt counts.
 func (r ProgressRepository) GetAttemptTotals(ctx context.Context, userID string) (int, int, error) {
 	var total int
@@ -191,7 +241,7 @@ func (r ProgressRepository) ListMasteryStates(ctx context.Context, userID string
 func (r ProgressRepository) ListKnowledgeNodes(ctx context.Context, filter progressapp.KnowledgeNodeFilter) ([]progressapp.KnowledgeNode, error) {
 	nodeType := progressNodeTypeToDB(filter.NodeType)
 	rows, err := r.DB().Query(ctx, `
-		SELECT id, name, node_type::text, description, chapter, difficulty, created_at
+		SELECT id, name, node_type::text, description, chapter, difficulty, latex_formula, created_at
 		FROM public.knowledge_nodes
 		WHERE
 			($1 = '' OR chapter = $1) AND
@@ -435,6 +485,7 @@ func (r ProgressRepository) listLearningStats(ctx context.Context, userID string
 func scanKnowledgeNode(rows pgx.Rows) (progressapp.KnowledgeNode, error) {
 	var node progressapp.KnowledgeNode
 	var chapter pgtype.Text
+	var latexFormula pgtype.Text
 	if err := rows.Scan(
 		&node.ID,
 		&node.Name,
@@ -442,11 +493,13 @@ func scanKnowledgeNode(rows pgx.Rows) (progressapp.KnowledgeNode, error) {
 		&node.Description,
 		&chapter,
 		&node.Difficulty,
+		&latexFormula,
 		&node.CreatedAt,
 	); err != nil {
 		return progressapp.KnowledgeNode{}, err
 	}
 	node.Chapter = textPtr(chapter)
+	node.LatexFormula = textPtr(latexFormula)
 	return node, nil
 }
 

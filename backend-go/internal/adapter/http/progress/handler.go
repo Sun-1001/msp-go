@@ -8,6 +8,7 @@ import (
 
 	authapp "mathstudy/backend-go/internal/application/auth"
 	progressapp "mathstudy/backend-go/internal/application/progress"
+	"mathstudy/backend-go/internal/domain/user"
 	"mathstudy/backend-go/internal/platform/httpauth"
 	"mathstudy/backend-go/internal/platform/httpjson"
 	"mathstudy/backend-go/internal/platform/redact"
@@ -16,6 +17,8 @@ import (
 // Service is the progress application surface used by HTTP handlers.
 type Service interface {
 	GetOverview(context.Context, string) (progressapp.Overview, error)
+	GetLearningGoal(context.Context, string) (progressapp.LearningGoalResponse, error)
+	SetLearningGoal(context.Context, string, string) (progressapp.LearningGoalResponse, error)
 	GetMasteryVector(context.Context, string) (progressapp.MasteryResponse, error)
 	GetLearningPath(context.Context, string, string) (progressapp.PathResponse, error)
 	GetKnowledgeGraphView(context.Context, string, progressapp.KnowledgeNodeFilter) (progressapp.GraphResponse, error)
@@ -53,6 +56,8 @@ func NewHandler(logger *slog.Logger, service Service, auth Authenticator) (*Hand
 // Register attaches progress routes under prefix, for example /api/v1/progress.
 func (h *Handler) Register(mux *http.ServeMux, prefix string) {
 	mux.HandleFunc("GET "+prefix+"/overview", h.overview)
+	mux.HandleFunc("GET "+prefix+"/learning-goal", h.learningGoal)
+	mux.HandleFunc("PUT "+prefix+"/learning-goal", h.setLearningGoal)
 	mux.HandleFunc("GET "+prefix+"/mastery", h.mastery)
 	mux.HandleFunc("GET "+prefix+"/path", h.path)
 	mux.HandleFunc("GET "+prefix+"/knowledge-graph", h.knowledgeGraph)
@@ -65,6 +70,10 @@ type chaptersResponse struct {
 	Chapters []string `json:"chapters"`
 }
 
+type setLearningGoalRequest struct {
+	TargetID string `json:"target_id"`
+}
+
 func (h *Handler) overview(w http.ResponseWriter, r *http.Request) {
 	principal, ok := h.requirePrincipal(w, r)
 	if !ok {
@@ -74,6 +83,45 @@ func (h *Handler) overview(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		h.logProgressError("get progress overview failed", err)
 		writeProgressError(w, http.StatusInternalServerError, "INTERNAL_ERROR", "获取学习进度失败")
+		return
+	}
+	httpjson.Write(w, http.StatusOK, response)
+}
+
+func (h *Handler) learningGoal(w http.ResponseWriter, r *http.Request) {
+	principal, ok := h.requireStudent(w, r)
+	if !ok {
+		return
+	}
+	response, err := h.service.GetLearningGoal(r.Context(), principal.UserID)
+	if err != nil {
+		h.logProgressError("get learning goal failed", err)
+		writeProgressError(w, http.StatusInternalServerError, "INTERNAL_ERROR", "获取学习目标失败")
+		return
+	}
+	httpjson.Write(w, http.StatusOK, response)
+}
+
+func (h *Handler) setLearningGoal(w http.ResponseWriter, r *http.Request) {
+	principal, ok := h.requireStudent(w, r)
+	if !ok {
+		return
+	}
+	var request setLearningGoalRequest
+	if !httpjson.DecodeStrictOrDetailError(w, r, 1<<20, &request) {
+		return
+	}
+	response, err := h.service.SetLearningGoal(r.Context(), principal.UserID, request.TargetID)
+	if err != nil {
+		switch {
+		case errors.Is(err, progressapp.ErrInvalidLearningGoal):
+			writeProgressError(w, http.StatusUnprocessableEntity, "VALIDATION_ERROR", "target_id 不能为空")
+		case errors.Is(err, progressapp.ErrLearningGoalTargetNotFound):
+			writeProgressError(w, http.StatusNotFound, "NOT_FOUND", "知识节点不存在")
+		default:
+			h.logProgressError("set learning goal failed", err)
+			writeProgressError(w, http.StatusInternalServerError, "INTERNAL_ERROR", "保存学习目标失败")
+		}
 		return
 	}
 	httpjson.Write(w, http.StatusOK, response)
@@ -173,6 +221,19 @@ func (h *Handler) chapters(w http.ResponseWriter, r *http.Request) {
 
 func (h *Handler) requirePrincipal(w http.ResponseWriter, r *http.Request) (authapp.Principal, bool) {
 	return httpauth.RequireBearerAccess(w, r, h.auth.DecodeAccessToken, nil, "", writeProgressError)
+}
+
+func (h *Handler) requireStudent(w http.ResponseWriter, r *http.Request) (authapp.Principal, bool) {
+	return httpauth.RequireBearerAccess(
+		w,
+		r,
+		h.auth.DecodeAccessToken,
+		func(principal authapp.Principal) bool {
+			return authapp.HasAnyRole(principal, user.RoleStudent)
+		},
+		"权限不足，仅学生可以访问学习目标",
+		writeProgressError,
+	)
 }
 
 func (h *Handler) logProgressError(message string, err error) {

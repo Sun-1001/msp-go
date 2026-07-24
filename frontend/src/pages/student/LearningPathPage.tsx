@@ -1,10 +1,16 @@
 import React, { useEffect, useMemo, useState } from 'react';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 import { MainLayout } from '../../components/layout/MainLayout';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '../../components/ui/Card';
 import { Button } from '../../components/ui/Button';
 import { Badge } from '../../components/ui/Badge';
 import { Progress } from '../../components/ui/Progress';
-import { apiClient, getApiErrorMessage } from '@/libs/http/apiClient';
+import { getApiErrorMessage } from '@/libs/http/apiClient';
+import { knowledgeService } from '@/modules/knowledge/services/knowledgeService';
+import type {
+  LearningPathItem,
+  LearningPathResponse,
+} from '@/modules/knowledge/types/knowledge';
 import {
   Target,
   CheckCircle2,
@@ -14,27 +20,10 @@ import {
   ArrowRight,
   Loader2,
   Circle,
+  AlertCircle,
 } from 'lucide-react';
 
-type PathItem = {
-  id: string;
-  title: string;
-  description: string;
-  chapter: string | null;
-  status: 'completed' | 'current' | 'available' | 'locked';
-  mastery: number;
-  confidence: number;
-  exercises: number;
-  difficulty: number;
-};
-
-type PathResponse = {
-  path: PathItem[];
-  estimated_exercises: number;
-  statistics: { total: number; completed: number; progress: number };
-};
-
-const EMPTY_PATH_ITEMS: ReadonlyArray<PathItem> = [];
+const EMPTY_PATH_ITEMS: ReadonlyArray<LearningPathItem> = [];
 const EMPTY_PATH_STATISTICS = { total: 0, completed: 0, progress: 0 };
 
 const getStatusIcon = (status: string) => {
@@ -68,30 +57,59 @@ const getStatusBadge = (status: string) => {
 };
 
 export const LearningPathPage: React.FC = () => {
-  const [pathData, setPathData] = useState<PathResponse | null>(null);
+  const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
+  const requestedTargetId = searchParams.get('target')?.trim() || null;
+  const [pathData, setPathData] = useState<LearningPathResponse | null>(null);
+  const [targetId, setTargetId] = useState<string | null>(requestedTargetId);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [goalWarning, setGoalWarning] = useState<string | null>(null);
+  const [reloadVersion, setReloadVersion] = useState(0);
 
   useEffect(() => {
     const controller = new AbortController();
     const load = async () => {
       setLoading(true);
       setError(null);
+      setGoalWarning(null);
       try {
-        const res = await apiClient.get<PathResponse>('/progress/path', { signal: controller.signal });
-        if (!controller.signal.aborted) setPathData(res.data);
+        let resolvedTargetId = requestedTargetId;
+        if (!resolvedTargetId) {
+          try {
+            const goal = await knowledgeService.getLearningGoal(controller.signal);
+            resolvedTargetId = goal.target_id;
+          } catch (goalError) {
+            if (controller.signal.aborted) return;
+            setGoalWarning(getApiErrorMessage(goalError, '学习目标读取失败，已显示完整学习路径'));
+          }
+        }
+
+        const response = await knowledgeService.getLearningPath(
+          resolvedTargetId ?? undefined,
+          controller.signal,
+        );
+        if (!controller.signal.aborted) {
+          setTargetId(resolvedTargetId);
+          setPathData(response);
+        }
       } catch (err) {
         if (!controller.signal.aborted) setError(getApiErrorMessage(err, '加载学习路径失败'));
       } finally {
         if (!controller.signal.aborted) setLoading(false);
       }
     };
-    load();
+    void load();
     return () => { controller.abort(); };
-  }, []);
+  }, [reloadVersion, requestedTargetId]);
 
   const pathItems = pathData?.path ?? EMPTY_PATH_ITEMS;
   const stats = pathData?.statistics ?? EMPTY_PATH_STATISTICS;
+  const pathNodesById = useMemo(
+    () => new Map(pathItems.map((item) => [item.id, item])),
+    [pathItems],
+  );
+  const targetNode = targetId ? pathNodesById.get(targetId) ?? null : null;
   const overallProgress = Math.round(stats.progress * 100);
   const currentCount = useMemo(() => pathItems.filter((p) => p.status === 'current').length, [pathItems]);
   const lockedCount = useMemo(() => pathItems.filter((p) => p.status === 'locked' || p.status === 'available').length, [pathItems]);
@@ -101,12 +119,26 @@ export const LearningPathPage: React.FC = () => {
       <div className="container mx-auto px-6 py-8 max-w-7xl">
         <div className="mb-8">
           <h1 className="text-3xl font-bold text-surface-900 dark:text-surface-100 mb-2">学习路径</h1>
-          <p className="text-surface-500 dark:text-surface-400">基于知识图谱和掌握度为你规划的个性化学习路径</p>
+          <p className="text-surface-500 dark:text-surface-400">
+            {targetNode ? `当前目标：${targetNode.title}` : '基于知识图谱和掌握度为你规划的个性化学习路径'}
+          </p>
         </div>
 
-        {error && (
-          <div className="mb-6 p-4 rounded-lg bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 text-red-700 dark:text-red-300">{error}</div>
-        )}
+        {goalWarning ? (
+          <div className="mb-4 flex items-start gap-2 rounded-md border border-amber-200 bg-amber-50 p-3 text-sm text-amber-800 dark:border-amber-800 dark:bg-amber-900/20 dark:text-amber-200">
+            <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
+            <span>{goalWarning}</span>
+          </div>
+        ) : null}
+
+        {error ? (
+          <div className="mb-6 flex flex-wrap items-center justify-between gap-3 rounded-md border border-red-200 bg-red-50 p-4 text-red-700 dark:border-red-800 dark:bg-red-900/20 dark:text-red-300">
+            <span>{error}</span>
+            <Button size="sm" variant="outline" onClick={() => setReloadVersion((value) => value + 1)}>
+              重试
+            </Button>
+          </div>
+        ) : null}
 
         {loading ? (
           <div className="flex justify-center p-10"><Loader2 className="h-8 w-8 animate-spin text-primary-500" /></div>
@@ -120,7 +152,8 @@ export const LearningPathPage: React.FC = () => {
                   <div className="flex items-center justify-between">
                     <div>
                       <CardTitle className="flex items-center gap-2">
-                        <Target className="h-5 w-5 text-primary-500" />个性化学习路径
+                        <Target className="h-5 w-5 text-primary-500" />
+                        {targetNode ? `通往 ${targetNode.title}` : '个性化学习路径'}
                       </CardTitle>
                       <CardDescription className="mt-1">共 {stats.total} 个知识点，已掌握 {stats.completed} 个</CardDescription>
                     </div>
@@ -178,8 +211,38 @@ export const LearningPathPage: React.FC = () => {
                                 />
                               </div>
                             )}
+                            {item.recommendation ? (
+                              <p className="mt-3 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-sm leading-5 text-amber-900 dark:border-amber-900/60 dark:bg-amber-950/30 dark:text-amber-200">
+                                {item.recommendation}
+                              </p>
+                            ) : null}
+                            {item.locked_by?.length ? (
+                              <div className="mt-3">
+                                <p className="mb-2 text-xs font-medium text-surface-500 dark:text-surface-400">需要先掌握</p>
+                                <div className="flex flex-wrap gap-2">
+                                  {item.locked_by.map((blockerId) => {
+                                    const blocker = pathNodesById.get(blockerId);
+                                    return (
+                                      <button
+                                        key={blockerId}
+                                        type="button"
+                                        onClick={() => navigate(`/knowledge-graph?focus=${encodeURIComponent(blockerId)}`)}
+                                        className="inline-flex min-h-8 items-center gap-1 rounded-md border border-[#f97360]/40 bg-[#f97360]/10 px-2.5 py-1 text-xs font-medium text-[#c24132] hover:bg-[#f97360]/15 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary-500 dark:text-[#ff9b8d]"
+                                      >
+                                        <Lock className="h-3.5 w-3.5" />
+                                        {blocker?.title || blockerId}
+                                      </button>
+                                    );
+                                  })}
+                                </div>
+                              </div>
+                            ) : null}
                             {(item.status === 'current' || item.status === 'available') && (
-                              <Button className="mt-4" size="sm">
+                              <Button
+                                className="mt-4"
+                                size="sm"
+                                onClick={() => navigate(`/exercise?mode=ai&concept_id=${encodeURIComponent(item.id)}&autostart=1`)}
+                              >
                                 {item.status === 'current' ? '继续学习' : '开始学习'}
                                 <ArrowRight className="h-4 w-4 ml-1" />
                               </Button>

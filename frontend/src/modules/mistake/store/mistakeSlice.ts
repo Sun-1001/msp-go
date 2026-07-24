@@ -187,9 +187,13 @@ const mistakeSlice = createSlice({
   extraReducers: (builder) => {
     // 获取错题列表
     builder
-      .addCase(fetchMistakes.pending, (state) => {
+      .addCase(fetchMistakes.pending, (state, action) => {
         state.loadingState = 'loading';
         state.error = null;
+        state.queryParams = {
+          ...state.queryParams,
+          ...action.meta.arg,
+        };
       })
       .addCase(fetchMistakes.fulfilled, (state, action) => {
         state.loadingState = 'success';

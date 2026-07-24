@@ -1,5 +1,5 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 import {
   AIPracticeConfigurator,
   ExercisePanel,
@@ -24,6 +24,8 @@ import { buildExerciseTutorLaunch } from './exerciseTutorLaunch';
 
 type ExerciseMode = 'class' | 'ai';
 
+const INVALID_CONCEPT_MESSAGE = '指定的知识点不存在，请重新选择';
+
 const tutorCopy = {
   class: {
     title: '班级题辅导',
@@ -41,6 +43,12 @@ const tutorCopy = {
 
 export const ExercisePage: React.FC = () => {
   const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
+  const requestedMode: ExerciseMode = searchParams.get('mode') === 'ai' ? 'ai' : 'class';
+  const requestedConceptId = searchParams.get('concept_id')?.trim() ?? '';
+  const shouldAutoStart = requestedMode === 'ai'
+    && searchParams.get('autostart') === '1'
+    && Boolean(requestedConceptId);
   const {
     currentQuestion: classQuestion,
     isLoading: isClassLoading,
@@ -76,7 +84,8 @@ export const ExercisePage: React.FC = () => {
   const knowledgeLoaded = useRef(false);
   const knowledgeLoadInFlight = useRef(false);
   const knowledgeRequestId = useRef(0);
-  const [mode, setMode] = useState<ExerciseMode>('class');
+  const autoStartedRequest = useRef<string | null>(null);
+  const [mode, setMode] = useState<ExerciseMode>(requestedMode);
   const [knowledgeNodes, setKnowledgeNodes] = useState<KnowledgeNode[]>([]);
   const [isLoadingKnowledge, setIsLoadingKnowledge] = useState(false);
   const [knowledgeError, setKnowledgeError] = useState<string | null>(null);
@@ -95,7 +104,7 @@ export const ExercisePage: React.FC = () => {
     };
   }, []);
 
-  const loadKnowledgeNodes = async (force = false) => {
+  const loadKnowledgeNodes = useCallback(async (force = false) => {
     if ((!force && knowledgeLoaded.current) || knowledgeLoadInFlight.current) return;
 
     const requestId = knowledgeRequestId.current + 1;
@@ -114,7 +123,13 @@ export const ExercisePage: React.FC = () => {
         setKnowledgeError('暂无可用知识点，请联系管理员配置');
         return;
       }
-      setSelectedConceptId((current) => current || graph.nodes[0]?.id || '');
+      const requestedNode = requestedConceptId
+        ? graph.nodes.find((node) => node.id === requestedConceptId)
+        : null;
+      setSelectedConceptId((current) => requestedNode?.id || current || graph.nodes[0]?.id || '');
+      if (requestedConceptId && !requestedNode) {
+        setKnowledgeError(INVALID_CONCEPT_MESSAGE);
+      }
     } catch {
       if (requestId === knowledgeRequestId.current) {
         setKnowledgeError('知识点加载失败，请稍后重试');
@@ -125,7 +140,45 @@ export const ExercisePage: React.FC = () => {
         setIsLoadingKnowledge(false);
       }
     }
-  };
+  }, [requestedConceptId]);
+
+  useEffect(() => {
+    setMode(requestedMode);
+  }, [requestedMode]);
+
+  useEffect(() => {
+    if (mode === 'ai') {
+      void loadKnowledgeNodes();
+    }
+  }, [loadKnowledgeNodes, mode]);
+
+  useEffect(() => {
+    if (mode !== 'ai' || !requestedConceptId || knowledgeNodes.length === 0) return;
+    const requestedNode = knowledgeNodes.find((node) => node.id === requestedConceptId);
+    if (!requestedNode) {
+      setKnowledgeError(INVALID_CONCEPT_MESSAGE);
+      return;
+    }
+    setSelectedConceptId(requestedNode.id);
+    setKnowledgeError((current) => current === INVALID_CONCEPT_MESSAGE ? null : current);
+  }, [knowledgeNodes, mode, requestedConceptId]);
+
+  useEffect(() => {
+    if (!shouldAutoStart || mode !== 'ai' || isLoadingKnowledge) return;
+    if (!knowledgeNodes.some((node) => node.id === requestedConceptId)) return;
+    if (autoStartedRequest.current === requestedConceptId) return;
+
+    autoStartedRequest.current = requestedConceptId;
+    void requestAIQuestion(requestedConceptId, difficulty);
+  }, [
+    difficulty,
+    isLoadingKnowledge,
+    knowledgeNodes,
+    mode,
+    requestAIQuestion,
+    requestedConceptId,
+    shouldAutoStart,
+  ]);
 
   const knowledgeOptions = useMemo(
     () => knowledgeNodes.map((node) => ({

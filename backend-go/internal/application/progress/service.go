@@ -23,9 +23,18 @@ const (
 	dktModelName      = "dkt-sakt-lite"
 )
 
+var (
+	// ErrInvalidLearningGoal is returned when the requested target is empty.
+	ErrInvalidLearningGoal = errors.New("invalid learning goal")
+	// ErrLearningGoalTargetNotFound is returned when the requested knowledge node does not exist.
+	ErrLearningGoalTargetNotFound = errors.New("learning goal target not found")
+)
+
 // Repository is the persistence surface required by progress use cases.
 type Repository interface {
 	GetProfile(context.Context, string) (StudentProfile, bool, error)
+	GetLearningGoal(context.Context, string) (LearningGoal, bool, error)
+	UpsertLearningGoal(context.Context, string, string, time.Time) (LearningGoal, bool, error)
 	GetAttemptTotals(context.Context, string) (int, int, error)
 	SumStudySeconds(context.Context, string, *time.Time) (int, error)
 	CountAttemptsStartedSince(context.Context, string, time.Time) (int, error)
@@ -49,6 +58,12 @@ type StudentProfile struct {
 	MasteryVector  map[string]float64
 }
 
+// LearningGoal stores one student's persisted target node.
+type LearningGoal struct {
+	TargetID  string
+	UpdatedAt time.Time
+}
+
 // MasteryState stores DKT state used by read-side progress queries.
 type MasteryState struct {
 	ConceptID     string
@@ -60,13 +75,14 @@ type MasteryState struct {
 
 // KnowledgeNode is a read model for knowledge graph nodes.
 type KnowledgeNode struct {
-	ID          string
-	Name        string
-	NodeType    string
-	Description string
-	Chapter     *string
-	Difficulty  float64
-	CreatedAt   time.Time
+	ID           string
+	Name         string
+	NodeType     string
+	Description  string
+	Chapter      *string
+	Difficulty   float64
+	LatexFormula *string
+	CreatedAt    time.Time
 }
 
 // KnowledgeNodeFilter stores optional filters for graph queries.
@@ -165,6 +181,12 @@ type PathStatistics struct {
 	Progress  float64 `json:"progress"`
 }
 
+// LearningGoalResponse is the /progress/learning-goal response.
+type LearningGoalResponse struct {
+	TargetID  *string `json:"target_id"`
+	UpdatedAt *string `json:"updated_at"`
+}
+
 // GraphResponse is the /progress/knowledge-graph response.
 type GraphResponse struct {
 	Nodes      []GraphNode     `json:"nodes"`
@@ -180,6 +202,7 @@ type GraphNode struct {
 	Mastery     float64 `json:"mastery"`
 	Chapter     *string `json:"chapter"`
 	Description string  `json:"description"`
+	Formula     *string `json:"formula,omitempty"`
 }
 
 // GraphEdge stores one frontend graph edge.
@@ -243,6 +266,40 @@ func NewService(repo Repository) (*Service, error) {
 		repo: repo,
 		now:  time.Now,
 	}, nil
+}
+
+// GetLearningGoal returns the student's current target, or null fields when none is set.
+func (s *Service) GetLearningGoal(ctx context.Context, userID string) (LearningGoalResponse, error) {
+	goal, found, err := s.repo.GetLearningGoal(ctx, userID)
+	if err != nil {
+		return LearningGoalResponse{}, err
+	}
+	if !found {
+		return LearningGoalResponse{}, nil
+	}
+	return learningGoalResponse(goal), nil
+}
+
+// SetLearningGoal replaces the student's current target.
+func (s *Service) SetLearningGoal(ctx context.Context, userID, targetID string) (LearningGoalResponse, error) {
+	targetID = strings.TrimSpace(targetID)
+	if targetID == "" {
+		return LearningGoalResponse{}, ErrInvalidLearningGoal
+	}
+	goal, found, err := s.repo.UpsertLearningGoal(ctx, userID, targetID, s.now())
+	if err != nil {
+		return LearningGoalResponse{}, err
+	}
+	if !found {
+		return LearningGoalResponse{}, ErrLearningGoalTargetNotFound
+	}
+	return learningGoalResponse(goal), nil
+}
+
+func learningGoalResponse(goal LearningGoal) LearningGoalResponse {
+	targetID := goal.TargetID
+	updatedAt := timefmt.DateTimeMicros(goal.UpdatedAt)
+	return LearningGoalResponse{TargetID: &targetID, UpdatedAt: &updatedAt}
 }
 
 // GetOverview returns the student learning progress overview.
@@ -481,6 +538,7 @@ func (s *Service) GetKnowledgeGraphView(ctx context.Context, userID string, filt
 			Mastery:     mastery[node.ID],
 			Chapter:     node.Chapter,
 			Description: node.Description,
+			Formula:     node.LatexFormula,
 		})
 	}
 

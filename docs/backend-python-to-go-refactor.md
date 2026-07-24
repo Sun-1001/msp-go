@@ -3,7 +3,7 @@
 > 文档定位：本文是仓库规则要求保留的迁移阶段跟踪与验证证据，不作为通用路线图。当前跨模块未完成事项统一维护在 [项目待办](TODO.md)；任何迁移阶段的开始、阻塞、恢复或完成仍必须同步更新本文。
 
 **Document status**: P4 in progress; P5 done; P6 AI/Agent in progress (Eino Tutor/Portrait/Diagnostician/Math Solver/Question Parser/Question Generator/OCR/Content Moderator Agents, admin LLM/Agent config loop, and uniform student AI risk center wired; unified channel scheduling/model catalog slice in progress; OCR, general-math, student AI risk-control, model-moderation, and multi-key channel-management slices delivered, token streaming and live external-provider quality acceptance pending); P7 in progress; P8 static contract handoff done; P9 Python backend removed by user confirmation; repository-wide quality cleanup batch done 2026-07-12
-**Last updated**: 2026-07-23
+**Last updated**: 2026-07-24
 **适用范围**：原 `backend/` Python FastAPI 后端整体迁移到 Go 后端；`backend/` 已从当前工作区删除
 **重构原则**：接口兼容、数据连续、分阶段验收、每阶段完成必须更新本文档
 
@@ -1445,3 +1445,12 @@ backend-go/
 - 浏览器验收结果：应用内 Browser 使用临时受控认证/API fixture 验证真实生产组件，fixture 在验收后删除。`1440x900` 桌面视口确认页面身份、2 条初始公告、Markdown 与 HTML 非空预览、空 `sandbox` iframe、教师受众、追加/常驻选项和发布成功；提交后列表由 2 条增至 3 条并显示成功通知。`390x844` 移动视口无文档级横向溢出，342px 内容区内 896px 表格由 341px `overflow-x:auto` 容器承载；管理抽屉可开合，发布弹窗为 342x812px、内部滚动 1631px，顶部字段与底部发布/取消按钮均可达且无重叠。学生会话确认常驻公告显示 `1 / 2` 且无“不再弹出”，关闭后普通 HTML 公告接续并可账号级关闭；新标签页会话中常驻公告重新显示。最终各流程无框架错误覆盖层或新增 console error/warn。
 - 交付物：`backend-go/migrations/0009_system_announcements.up.sql`、`backend-go/internal/application/announcement/`、`backend-go/internal/adapter/http/announcement/`、`backend-go/internal/adapter/postgres/announcement_repository.go`、`backend-go/cmd/api/main.go`、`backend-go/internal/application/adminsettings/service.go`、`frontend/src/modules/announcement/`、`frontend/src/pages/admin/AnnouncementManagementPage.tsx`、管理员路由/导航、全局 Provider 接线及本迁移追踪记录。
 - 残余风险：浏览器验收使用受控 fixture，没有使用真实管理员/学生/教师凭据执行端到端登录与生产数据写入；真实 API/数据库契约由临时 HTTP、application 和 PostgreSQL 集成测试覆盖。当前“替换”只停用完全相同受众，`all` 与 `student`/`teacher` 公告可同时进入队列；这符合“同一受众替换、追加排队”的当前语义，但若产品期望跨受众互斥需另行明确并修改事务规则。HTML CSP 有意禁止外部资源和脚本，仅允许 data 图片与内联样式；未执行 Safari/Firefox、多实例高并发压力或生产备份恢复演练。version 9 为 forward-only migration，生产应用前仍需备份；永久回归测试源码按仓库策略不保留。
+
+### 2026-07-24
+
+- 3D 知识星图与学习目标导航切片（P4 横切）启动状态：`IN_PROGRESS`；最终状态：`DONE`；启动与完成日期：2026-07-24。P4 总体保持 `IN_PROGRESS`。
+- 本切片范围：新增 version 11 学生唯一学习目标持久化与 `/api/v1/progress/learning-goal` 读写接口；将学生知识图谱重构为按设备能力自动选择 3D、2D 或列表渲染的学习导航，并接通知识点讲解、练习、错题和既有目标路径。该切片修改数据库 schema 和 progress API，但不重写既有学习路径算法，不改变认证边界或部署入口。
+- 验证命令：临时 Go 测试覆盖目标读取、原子 UPSERT、未知节点、学生权限、错误映射和迁移唯一性；临时 Vitest 覆盖模式选择、WebGL/减少动画降级、节点详情动作、路由参数、目标状态与失败回滚；`go test ./... -count=1`、`go vet ./...`、`go build ./...`；frontend `pnpm.cmd run lint`、`pnpm.cmd run build`；`go run ./cmd/migrate` 连续两次；Playwright 在 `1440x900`、`1707x899`、`390x844` 以及 WebGL 禁用、`prefers-reduced-motion`、300 节点场景执行 23 项验收；仓库根目录 `git diff --check` 和测试源码/fixture 残留扫描。临时测试源码和 fixture 已在记录结果后删除。
+- 验证结果：学习目标相关临时 Go 测试和知识星图相关临时 Vitest 全部通过，新增模块覆盖率分别约 82% 和 85%，达到 80% 目标；Go 全仓测试、vet、build 与前端 lint、TypeScript/Vite 生产构建通过。version 11 首次迁移 `applied_count=1`，再次执行 `applied_count=0`。Playwright 23/23 通过：桌面自动启用 3D，Canvas 像素方差确认非空，节点拾取与镜头聚焦生效；全屏、详情、目标保存/路径、练习/错题参数联动正常；移动端自动使用 2D，键盘列表和底部 Sheet 可用且无横向溢出；WebGL 禁用和减少动画均降级到 2D；300 节点约 1.39 秒可交互，交互采样约 224 FPS；控制台和 page error 为 0。生产构建生成独立 2D、列表和 3D 懒加载 chunk，非图谱入口不加载 3D 依赖。
+- 交付物：`backend-go/migrations/0011_student_learning_goals.up.sql`、progress application/HTTP/PostgreSQL adapter 的学习目标读写能力、`frontend/src/modules/knowledge/components/KnowledgeGraph.tsx`、`KnowledgeGraphRenderer3D.tsx`、`KnowledgeGraphRenderer2D.tsx`、`KnowledgeGraphListView.tsx`、`KnowledgeGraphInspector.tsx`、统一渲染器类型和视图模式 hook，以及练习、错题、学习路径页面的知识点/目标路由联动和本迁移追踪记录。
+- 残余风险：3D 懒加载 chunk 约 1.39 MB，仍有进一步拆分和压缩空间；未执行 Safari/Firefox、真实低端设备 GPU 或生产多实例压力测试；`npm audit` 仍报告开发工具链 `brace-expansion` 8 个 high，当前无可用兼容修复且不进入生产运行包；永久测试源码按仓库策略不保留，后续回归需重建临时用例。自动模式可通过将默认视图切回 2D 快速回滚，G6 渲染器和已保存学习目标继续保留。
