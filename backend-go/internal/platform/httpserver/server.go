@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"mathstudy/backend-go/internal/platform/config"
 	"mathstudy/backend-go/internal/platform/health"
@@ -95,12 +96,21 @@ func NewHandler(cfg config.Config, logger *slog.Logger, checker health.Checker, 
 		router,
 		middleware.RequestID,
 		middleware.SecurityHeaders,
-		middleware.Timeout(cfg.RequestTimeout),
+		middleware.TimeoutByRequest(cfg.RequestTimeout, func(r *http.Request) time.Duration {
+			return requestTimeout(cfg, r)
+		}),
 		middleware.RequestMetrics(store),
 		middleware.CORS(cfg.CORSOrigins, cfg.CORSAllowMethods, cfg.CORSAllowHeaders),
 		middleware.Gzip,
 		middleware.RequestLogger(logger),
 	), nil
+}
+
+func requestTimeout(cfg config.Config, r *http.Request) time.Duration {
+	if r.Method == http.MethodPost && r.URL.Path == cfg.APIV1Prefix+"/exercise/generate" {
+		return cfg.ExerciseGenTimeout
+	}
+	return cfg.RequestTimeout
 }
 
 func muxWithFallbacks(mux *http.ServeMux) http.Handler {

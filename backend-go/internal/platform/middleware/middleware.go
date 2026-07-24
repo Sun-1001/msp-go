@@ -66,8 +66,20 @@ func SecurityHeaders(next http.Handler) http.Handler {
 
 // Timeout attaches a deadline to request contexts.
 func Timeout(timeout time.Duration) func(http.Handler) http.Handler {
+	return TimeoutByRequest(timeout, nil)
+}
+
+// TimeoutByRequest attaches a deadline selected for each request.
+// Non-positive selected values fall back to defaultTimeout.
+func TimeoutByRequest(defaultTimeout time.Duration, selectTimeout func(*http.Request) time.Duration) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			timeout := defaultTimeout
+			if selectTimeout != nil {
+				if selected := selectTimeout(r); selected > 0 {
+					timeout = selected
+				}
+			}
 			ctx, cancel := context.WithTimeout(r.Context(), timeout)
 			defer cancel()
 			next.ServeHTTP(w, r.WithContext(ctx))

@@ -37,6 +37,7 @@ var (
 	ErrMathSolverInvalidResult = errors.New("math solver returned an invalid result")
 	ErrExerciseChanged         = errors.New("exercise changed while grading")
 	ErrAIGenerationUnavailable = errors.New("AI exercise generation is unavailable")
+	ErrAIGenerationTimeout     = errors.New("AI exercise generation timed out")
 )
 
 const (
@@ -231,6 +232,7 @@ type GenerateExerciseRequest struct {
 type GenerationInput struct {
 	Concept    KnowledgeConcept
 	Difficulty float64
+	Feedback   string // 首次生成为空；重试时携带上次验证失败原因
 }
 
 // GeneratedQuestion stores a validated, persistable AI exercise candidate.
@@ -252,6 +254,52 @@ type GeneratedQuestion struct {
 // QuestionGenerator creates structured self-practice questions.
 type QuestionGenerator interface {
 	GenerateQuestion(context.Context, GenerationInput) (GeneratedQuestion, error)
+}
+
+// verifiedGenerated 承载独立求解验证通过的产物。
+type verifiedGenerated struct {
+	Answer     string   // 四选一为经验证的选项文本（判题所需）
+	Steps      []string // solver 独立生成、经步骤验证的解析
+	MathAnswer string   // solver 返回的数学表达式
+}
+
+type generatedContentError struct {
+	message string
+}
+
+func (e generatedContentError) Error() string { return e.message }
+
+func generatedContentInvalid(message string) error {
+	return generatedContentError{message: message}
+}
+
+func isGeneratedContentError(err error) bool {
+	var contentErr generatedContentError
+	return errors.As(err, &contentErr)
+}
+
+func normalizeGenerationSolverError(err error) error {
+	switch {
+	case errors.Is(err, context.Canceled):
+		return context.Canceled
+	case errors.Is(err, context.DeadlineExceeded), errors.Is(err, ErrMathSolverTimeout):
+		return ErrMathSolverTimeout
+	case errors.Is(err, ErrMathSolverInvalidResult):
+		return ErrMathSolverInvalidResult
+	default:
+		return ErrMathSolverUnavailable
+	}
+}
+
+func normalizeQuestionGenerationError(err error) error {
+	switch {
+	case errors.Is(err, context.Canceled):
+		return context.Canceled
+	case errors.Is(err, context.DeadlineExceeded):
+		return ErrAIGenerationTimeout
+	default:
+		return ErrAIGenerationUnavailable
+	}
 }
 
 // ExerciseResponse is the Python-compatible exercise summary response.
@@ -552,6 +600,104 @@ func (s *Service) GetNextExercise(ctx context.Context, userID string, query Next
 	return toExerciseResponse(selected), nil
 }
 
+// verifyGenerated 对 LLM 生成的题目做独立求解与双重验证。
+// 逻辑与 GetSolution 验证段（lines 999-1089）一一对应，最大化复用已有辅助函数。
+func (s *Service) verifyGenerated(ctx context.Context, studentID string, generated GeneratedQuestion) (verifiedGenerated, error) {
+	if s.solutionSolver == nil {
+		return verifiedGenerated{}, ErrMathSolverUnavailable
+	}
+
+	// 构造临时 Exercise，Meta 需含判题所需键
+	// （deterministicMultipleChoiceCheck 依赖 meta.type / meta.options）
+	meta := map[string]any{
+		"type":                   generated.Type,
+		"options":                append([]string(nil), generated.Options...),
+		"answer":                 generated.Answer,
+		"answer_type":            generated.AnswerType,
+		"estimated_time_seconds": generated.EstimatedTimeSeconds,
+	}
+	exercise := Exercise{
+		GeneratedByStudentID: studentID,
+		Title:                generated.Title,
+		Body:                 generated.Body,
+		Difficulty:           generated.Difficulty,
+		ConceptIDs:           append([]string(nil), generated.ConceptIDs...),
+		Meta:                 meta,
+	}
+
+	// 克隆 Meta 并删除答案/解析，避免求解器偷看答案（同 GetSolution:1000-1002）
+	solverExercise := exercise
+	solverExercise.Meta = maps.Clone(meta)
+	delete(solverExercise.Meta, "answer")
+	delete(solverExercise.Meta, "solution_steps")
+
+	// 独立求解
+	candidate, err := s.solutionSolver.Solve(ctx, SolutionInput{
+		Exercise:   solverExercise,
+		AnswerType: metautil.String(meta, "answer_type"),
+	})
+	if err != nil {
+		return verifiedGenerated{}, normalizeGenerationSolverError(err)
+	}
+
+	// 结构/范围校验（confidence、字段长度等）
+	candidate, ok := normalizeSolutionResult(candidate)
+	if !ok {
+		return verifiedGenerated{}, ErrMathSolverInvalidResult
+	}
+	// indeterminate → 失败（同 GetSolution:1019）
+	if candidate.Status == SolutionStatusIndeterminate {
+		return verifiedGenerated{}, generatedContentInvalid(fmt.Sprintf("独立求解无法确定结果：%s", candidate.Reason))
+	}
+
+	// 答案交叉验证：solver 数学答案 vs LLM 所标答案
+	// 四选一内部会走 deterministicMultipleChoiceCheck，把 solver 数学答案
+	// 映射到选项再与 LLM 选项比对（service.go:1173/1369）
+	answerVerification, err := s.verifySolutionAnswer(ctx, exercise, candidate.Answer, generated.Answer)
+	if err != nil {
+		return verifiedGenerated{}, normalizeGenerationSolverError(err)
+	}
+	answerVerification = normalizeAnswerCheckResult(answerVerification)
+	if answerVerification.Decision != mathsolverapp.DecisionCorrect {
+		return verifiedGenerated{}, generatedContentInvalid("独立求解结果与所标答案不一致")
+	}
+
+	// 步骤独立验证（SolutionVerifier 接口）
+	verifier, ok := s.solutionSolver.(SolutionVerifier)
+	if !ok {
+		return verifiedGenerated{}, ErrMathSolverUnavailable
+	}
+	verification, err := verifier.VerifySolution(ctx, SolutionVerificationInput{
+		Exercise:        solverExercise,
+		CandidateAnswer: candidate.Answer,
+		CandidateSteps:  append([]string(nil), candidate.Steps...),
+		ReferenceAnswer: generated.Answer,
+		AnswerType:      metautil.String(meta, "answer_type"),
+	})
+	if err != nil {
+		return verifiedGenerated{}, normalizeGenerationSolverError(err)
+	}
+	verification = normalizeAnswerCheckResult(verification)
+	if verification.Decision != mathsolverapp.DecisionCorrect {
+		return verifiedGenerated{}, generatedContentInvalid("生成解析的推导步骤未通过独立验证")
+	}
+
+	// 把 solver 数学答案映射回选项文本，作为经验证的标准答案
+	// 复用 matchingOption / optionFromLabel，与 normalizeGeneratedQuestion 同策略
+	verifiedAnswer := generated.Answer
+	if option, ok := matchingOption(generated.Options, candidate.Answer); ok {
+		verifiedAnswer = option
+	} else if option, ok := optionFromLabel(generated.Options, candidate.Answer); ok {
+		verifiedAnswer = option
+	}
+
+	return verifiedGenerated{
+		Answer:     verifiedAnswer,
+		Steps:      append([]string(nil), candidate.Steps...),
+		MathAnswer: candidate.Answer,
+	}, nil
+}
+
 // GenerateExercise creates and persists one student-owned AI self-practice question.
 func (s *Service) GenerateExercise(ctx context.Context, userID string, request GenerateExerciseRequest) (*ExerciseResponse, error) {
 	request.ConceptID = strings.TrimSpace(request.ConceptID)
@@ -568,20 +714,59 @@ func (s *Service) GenerateExercise(ctx context.Context, userID string, request G
 	if !ok {
 		return nil, ErrNotFound
 	}
-	generated, err := s.questionGenerator.GenerateQuestion(ctx, GenerationInput{
-		Concept:    concept,
-		Difficulty: request.Difficulty,
-	})
-	if err != nil {
-		return nil, ErrAIGenerationUnavailable
+	const maxAttempts = 2
+	var verified verifiedGenerated
+	var lastVerifyErr error
+	var generated GeneratedQuestion
+
+	for attempt := 1; attempt <= maxAttempts; attempt++ {
+		feedback := ""
+		if attempt > 1 {
+			feedback = lastVerifyErr.Error()
+		}
+
+		generated, err = s.questionGenerator.GenerateQuestion(ctx, GenerationInput{
+			Concept:    concept,
+			Difficulty: request.Difficulty,
+			Feedback:   feedback,
+		})
+		if err != nil {
+			return nil, normalizeQuestionGenerationError(err)
+		}
+
+		generated.Difficulty = request.Difficulty
+		generated.ConceptIDs = []string{concept.ID}
+		generated.KnowledgePointNames = []string{concept.Name}
+		generated = normalizeGeneratedQuestion(generated)
+		if !validGeneratedQuestion(generated) {
+			lastVerifyErr = generatedContentInvalid("生成题目格式或内容不符合要求")
+			if attempt == maxAttempts {
+				return nil, ErrAIGenerationUnavailable
+			}
+			continue
+		}
+
+		// solver 未配置：直接失败，不重试（重试无意义）
+		if s.solutionSolver == nil {
+			return nil, ErrMathSolverUnavailable
+		}
+		verified, lastVerifyErr = s.verifyGenerated(ctx, userID, generated)
+		if lastVerifyErr == nil {
+			break // 验证通过
+		}
+		if !isGeneratedContentError(lastVerifyErr) {
+			return nil, lastVerifyErr
+		}
+		if attempt == maxAttempts {
+			return nil, ErrAIGenerationUnavailable // 二次失败，不落库
+		}
+		// 否则带 lastVerifyErr 进入下一轮重试
 	}
-	generated.Difficulty = request.Difficulty
-	generated.ConceptIDs = []string{concept.ID}
-	generated.KnowledgePointNames = []string{concept.Name}
-	generated = normalizeGeneratedQuestion(generated)
-	if !validGeneratedQuestion(generated) {
-		return nil, ErrAIGenerationUnavailable
-	}
+
+	// 用验证结果覆盖（落库前）
+	generated.Answer = verified.Answer
+	generated.SolutionSteps = verified.Steps
+
 	exercise, err := s.repo.CreateGeneratedExercise(ctx, userID, generated, s.now())
 	if err != nil {
 		return nil, err

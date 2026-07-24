@@ -189,6 +189,8 @@ export const exerciseService = {
     const res = await apiClient.post<QuestionResponse>('/exercise/generate', {
       concept_id: payload.conceptId,
       difficulty: payload.difficulty,
+    }, {
+      timeout: 60000,
     });
 
     return mapQuestion(res.data);
