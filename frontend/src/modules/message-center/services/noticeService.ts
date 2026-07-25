@@ -45,9 +45,9 @@ export const noticeService = {
     class_name?: string;
     page?: number;
     page_size?: number;
-  }): Promise<ListResponse> {
+  }, signal?: AbortSignal): Promise<ListResponse> {
     const qs = toParams(params);
-    const { data } = await apiClient.get<ListResponse>(`${BASE}?${qs}`);
+    const { data } = await apiClient.get<ListResponse>(`${BASE}?${qs}`, { signal });
     return data;
   },
 

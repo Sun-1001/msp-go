@@ -33,6 +33,7 @@ var (
 // Repository is the persistence surface required by progress use cases.
 type Repository interface {
 	GetProfile(context.Context, string) (StudentProfile, bool, error)
+	GetOverviewSnapshot(context.Context, string, time.Time) (OverviewSnapshot, error)
 	GetLearningGoal(context.Context, string) (LearningGoal, bool, error)
 	UpsertLearningGoal(context.Context, string, string, time.Time) (LearningGoal, bool, error)
 	GetAttemptTotals(context.Context, string) (int, int, error)
@@ -43,6 +44,7 @@ type Repository interface {
 	ListMasteryStates(context.Context, string, []string) ([]MasteryState, error)
 	ListKnowledgeNodes(context.Context, KnowledgeNodeFilter) ([]KnowledgeNode, error)
 	ListKnowledgeRelations(context.Context) ([]KnowledgeRelation, error)
+	ListKnowledgeRelationsForNodes(context.Context, []string) ([]KnowledgeRelation, error)
 	ListLearningStatsByDay(context.Context, string, time.Time, time.Time) ([]PeriodStat, error)
 	ListLearningStatsByWeek(context.Context, string, time.Time, time.Time) ([]PeriodStat, error)
 	CountErrorsByType(context.Context, string, time.Time, time.Time) (map[string]int, error)
@@ -56,6 +58,17 @@ type StudentProfile struct {
 	TotalExercises int
 	CorrectCount   int
 	MasteryVector  map[string]float64
+}
+
+// OverviewSnapshot combines profile fallback and attempt aggregates used by /progress/overview.
+type OverviewSnapshot struct {
+	TotalExercises int
+	CorrectCount   int
+	MasteryVector  map[string]float64
+	TotalSeconds   int
+	TodaySeconds   int
+	TodayAttempts  int
+	LatestAttempt  *time.Time
 }
 
 // LearningGoal stores one student's persisted target node.
@@ -304,21 +317,13 @@ func learningGoalResponse(goal LearningGoal) LearningGoalResponse {
 
 // GetOverview returns the student learning progress overview.
 func (s *Service) GetOverview(ctx context.Context, userID string) (Overview, error) {
-	profile, hasProfile, err := s.repo.GetProfile(ctx, userID)
+	now := s.now()
+	snapshot, err := s.repo.GetOverviewSnapshot(ctx, userID, timefmt.StartOfDay(now))
 	if err != nil {
 		return Overview{}, err
 	}
 
-	totalExercises := profile.TotalExercises
-	correctCount := profile.CorrectCount
-	if !hasProfile {
-		totalExercises, correctCount, err = s.repo.GetAttemptTotals(ctx, userID)
-		if err != nil {
-			return Overview{}, err
-		}
-	}
-
-	mastery, _, _, err := s.masteryDetails(ctx, userID, profile.MasteryVector, nil)
+	mastery, _, _, err := s.masteryDetails(ctx, userID, snapshot.MasteryVector, nil)
 	if err != nil {
 		return Overview{}, err
 	}
@@ -329,44 +334,26 @@ func (s *Service) GetOverview(ctx context.Context, userID string) (Overview, err
 		}
 	}
 
-	totalSeconds, err := s.repo.SumStudySeconds(ctx, userID, nil)
-	if err != nil {
-		return Overview{}, err
-	}
-	now := s.now()
-	todayStart := timefmt.StartOfDay(now)
-	todaySeconds, err := s.repo.SumStudySeconds(ctx, userID, &todayStart)
-	if err != nil {
-		return Overview{}, err
-	}
-	todayAttempts, err := s.repo.CountAttemptsStartedSince(ctx, userID, todayStart)
-	if err != nil {
-		return Overview{}, err
-	}
 	streakDays, err := s.calculateStreakDays(ctx, userID)
-	if err != nil {
-		return Overview{}, err
-	}
-	latest, err := s.repo.LatestAttemptStartedAt(ctx, userID)
 	if err != nil {
 		return Overview{}, err
 	}
 
 	var recent *RecentContent
-	if latest != nil {
-		recent = &RecentContent{LastAccessed: timefmt.DateTimeMicros(*latest)}
+	if snapshot.LatestAttempt != nil {
+		recent = &RecentContent{LastAccessed: timefmt.DateTimeMicros(*snapshot.LatestAttempt)}
 	}
 
 	return Overview{
-		TotalExercises:   totalExercises,
-		CorrectCount:     correctCount,
-		CorrectRate:      numutil.RoundPlaces(numutil.Percent(totalExercises, correctCount), 1),
-		StudyMinutes:     totalSeconds / 60,
+		TotalExercises:   snapshot.TotalExercises,
+		CorrectCount:     snapshot.CorrectCount,
+		CorrectRate:      numutil.RoundPlaces(numutil.Percent(snapshot.TotalExercises, snapshot.CorrectCount), 1),
+		StudyMinutes:     snapshot.TotalSeconds / 60,
 		StreakDays:       streakDays,
 		MasteredConcepts: masteredConcepts,
 		TodayStats: TodayStats{
-			StudyMinutes:       todaySeconds / 60,
-			ExercisesCompleted: todayAttempts,
+			StudyMinutes:       snapshot.TodaySeconds / 60,
+			ExercisesCompleted: snapshot.TodayAttempts,
 		},
 		RecentContent: recent,
 	}, nil
@@ -518,12 +505,8 @@ func (s *Service) GetKnowledgeGraphView(ctx context.Context, userID string, filt
 	if err != nil {
 		return GraphResponse{}, err
 	}
-	relations, err := s.repo.ListKnowledgeRelations(ctx)
-	if err != nil {
-		return GraphResponse{}, err
-	}
-
 	nodeIDs := make(map[string]struct{}, len(nodes))
+	relationNodeIDs := make([]string, 0, len(nodes))
 	graphNodes := make([]GraphNode, 0, len(nodes))
 	for _, node := range nodes {
 		nodeType := graphNodeType(node.NodeType)
@@ -531,6 +514,7 @@ func (s *Service) GetKnowledgeGraphView(ctx context.Context, userID string, filt
 			continue
 		}
 		nodeIDs[node.ID] = struct{}{}
+		relationNodeIDs = append(relationNodeIDs, node.ID)
 		graphNodes = append(graphNodes, GraphNode{
 			ID:          node.ID,
 			Label:       node.Name,
@@ -540,6 +524,10 @@ func (s *Service) GetKnowledgeGraphView(ctx context.Context, userID string, filt
 			Description: node.Description,
 			Formula:     node.LatexFormula,
 		})
+	}
+	relations, err := s.repo.ListKnowledgeRelationsForNodes(ctx, relationNodeIDs)
+	if err != nil {
+		return GraphResponse{}, err
 	}
 
 	graphEdges := make([]GraphEdge, 0, len(relations))

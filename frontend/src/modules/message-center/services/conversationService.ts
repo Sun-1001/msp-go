@@ -60,14 +60,18 @@ export const conversationService = {
     class_name?: string;
     page?: number;
     page_size?: number;
-  }): Promise<ListResponse> {
+  }, signal?: AbortSignal): Promise<ListResponse> {
     const qs = toParams(params);
-    const { data } = await apiClient.get<ListResponse>(`${BASE}?${qs}`);
+    const { data } = await apiClient.get<ListResponse>(`${BASE}?${qs}`, { signal });
     return data;
   },
 
-  async get(id: string, params?: { messages_page?: number; messages_page_size?: number }): Promise<ConversationDetail> {
-    const { data } = await apiClient.get<ConversationDetail>(`${BASE}/${id}`, { params });
+  async get(
+    id: string,
+    params?: { messages_page?: number; messages_page_size?: number },
+    signal?: AbortSignal,
+  ): Promise<ConversationDetail> {
+    const { data } = await apiClient.get<ConversationDetail>(`${BASE}/${id}`, { params, signal });
     return data;
   },
 

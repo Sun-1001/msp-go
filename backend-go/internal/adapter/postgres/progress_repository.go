@@ -50,6 +50,56 @@ func (r ProgressRepository) GetProfile(ctx context.Context, userID string) (prog
 	return profile, true, nil
 }
 
+// GetOverviewSnapshot returns profile counters with attempt-derived fallback and overview aggregates.
+func (r ProgressRepository) GetOverviewSnapshot(ctx context.Context, userID string, todayStart time.Time) (progressapp.OverviewSnapshot, error) {
+	var snapshot progressapp.OverviewSnapshot
+	var masteryRaw []byte
+	var latestAttempt pgtype.Timestamp
+	err := r.DB().QueryRow(ctx, `
+		WITH attempt_stats AS (
+			SELECT
+				count(id)::int AS total_exercises,
+				(count(id) FILTER (WHERE is_correct))::int AS correct_count,
+				coalesce(sum(time_spent_seconds), 0)::int AS total_seconds,
+				coalesce(sum(time_spent_seconds) FILTER (WHERE started_at >= $2), 0)::int AS today_seconds,
+				(count(id) FILTER (WHERE started_at >= $2))::int AS today_attempts,
+				max(started_at) AS latest_attempt
+			FROM public.content_attempts
+			WHERE student_id = $1
+		)
+		SELECT
+			coalesce(sp.total_exercises, stats.total_exercises),
+			coalesce(sp.correct_count, stats.correct_count),
+			coalesce(sp.mastery_vector, '{}'::json),
+			stats.total_seconds,
+			stats.today_seconds,
+			stats.today_attempts,
+			stats.latest_attempt
+		FROM attempt_stats stats
+		LEFT JOIN public.student_profiles sp ON sp.student_id = $1`,
+		userID,
+		todayStart,
+	).Scan(
+		&snapshot.TotalExercises,
+		&snapshot.CorrectCount,
+		&masteryRaw,
+		&snapshot.TotalSeconds,
+		&snapshot.TodaySeconds,
+		&snapshot.TodayAttempts,
+		&latestAttempt,
+	)
+	if err != nil {
+		return progressapp.OverviewSnapshot{}, err
+	}
+	mastery, err := decodeFloatMap(masteryRaw)
+	if err != nil {
+		return progressapp.OverviewSnapshot{}, fmt.Errorf("decode overview mastery vector: %w", err)
+	}
+	snapshot.MasteryVector = mastery
+	snapshot.LatestAttempt = timestampPtr(latestAttempt)
+	return snapshot, nil
+}
+
 // GetLearningGoal returns the active target for one student.
 func (r ProgressRepository) GetLearningGoal(ctx context.Context, userID string) (progressapp.LearningGoal, bool, error) {
 	var goal progressapp.LearningGoal
@@ -283,7 +333,29 @@ func (r ProgressRepository) ListKnowledgeRelations(ctx context.Context) ([]progr
 		return nil, err
 	}
 	defer rows.Close()
+	return scanKnowledgeRelations(rows)
+}
 
+// ListKnowledgeRelationsForNodes returns relations whose endpoints are both in nodeIDs.
+func (r ProgressRepository) ListKnowledgeRelationsForNodes(ctx context.Context, nodeIDs []string) ([]progressapp.KnowledgeRelation, error) {
+	if len(nodeIDs) == 0 {
+		return []progressapp.KnowledgeRelation{}, nil
+	}
+	rows, err := r.DB().Query(ctx, `
+		SELECT id, source_id, target_id, relation_type::text, created_at
+		FROM public.knowledge_relations
+		WHERE source_id = ANY($1::varchar[]) AND target_id = ANY($1::varchar[])
+		ORDER BY created_at`,
+		nodeIDs,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	return scanKnowledgeRelations(rows)
+}
+
+func scanKnowledgeRelations(rows pgx.Rows) ([]progressapp.KnowledgeRelation, error) {
 	relations := []progressapp.KnowledgeRelation{}
 	for rows.Next() {
 		var relation progressapp.KnowledgeRelation

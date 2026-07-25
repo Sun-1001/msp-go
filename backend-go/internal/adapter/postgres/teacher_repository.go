@@ -2,6 +2,7 @@ package postgres
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"strings"
 	"time"
@@ -24,6 +25,136 @@ func NewTeacherRepository(db Querier) (TeacherRepository, error) {
 		return TeacherRepository{}, err
 	}
 	return TeacherRepository{Repository: base}, nil
+}
+
+// ListAnalyticsStudents returns the shared per-student read model for teacher analytics views.
+// An empty classID selects all classes owned by the teacher; scopeOwned is false only when a
+// non-empty classID is not owned by the teacher.
+func (r TeacherRepository) ListAnalyticsStudents(
+	ctx context.Context,
+	teacherID string,
+	classID string,
+	rangeStart time.Time,
+	weekStart time.Time,
+) ([]teacherapp.AnalyticsStudentReadModel, bool, error) {
+	rows, err := r.DB().Query(ctx, `
+		WITH owned_classes AS (
+			SELECT id
+			FROM public.classes
+			WHERE teacher_id = $1 AND ($2 = '' OR id = $2)
+		), scope_status AS (
+			SELECT CASE WHEN $2 = '' THEN true ELSE EXISTS(SELECT 1 FROM owned_classes) END AS owned
+		), scoped_students AS (
+			SELECT ce.student_id, max(ce.joined_at) AS joined_at
+			FROM public.class_enrollments ce
+			JOIN owned_classes c ON c.id = ce.class_id
+			GROUP BY ce.student_id
+		), scoped_attempts AS (
+			SELECT ca.student_id, ca.score, ca.started_at, ca.time_spent_seconds
+			FROM public.content_attempts ca
+			JOIN public.contents c ON c.id = ca.content_id
+			JOIN scoped_students ss ON ss.student_id = ca.student_id
+			WHERE c.owner_teacher_id = $1 AND c.generated_by_student_id IS NULL
+		), attempt_stats AS (
+			SELECT
+				student_id,
+				coalesce(sum(score) FILTER (WHERE started_at >= $3), 0)::double precision AS range_score_sum,
+				(count(score) FILTER (WHERE started_at >= $3))::int AS range_attempt_count,
+				coalesce(sum(time_spent_seconds) FILTER (WHERE started_at >= $3), 0)::int AS range_seconds,
+				coalesce(sum(score), 0)::double precision AS all_score_sum,
+				count(score)::int AS all_attempt_count,
+				coalesce(sum(time_spent_seconds) FILTER (WHERE started_at >= $4), 0)::int AS weekly_seconds
+			FROM scoped_attempts
+			GROUP BY student_id
+		), session_days AS (
+			SELECT
+				ls.student_id,
+				jsonb_agg(DISTINCT ls.started_at::date::text ORDER BY ls.started_at::date::text) AS dates
+			FROM public.learning_sessions ls
+			JOIN scoped_students ss ON ss.student_id = ls.student_id
+			WHERE ls.started_at >= $4
+			GROUP BY ls.student_id
+		)
+		SELECT
+			scope_status.owned,
+			ss.student_id,
+			sp.student_id IS NOT NULL AS has_profile,
+			coalesce(sp.mastery_vector, '{}'::json),
+			coalesce(sp.total_exercises, 0),
+			coalesce(sp.correct_count, 0),
+			coalesce(sp.total_study_time_minutes, 0),
+			coalesce(nullif(btrim(u.display_name), ''), u.username, '未知'),
+			coalesce(stats.range_score_sum, 0),
+			coalesce(stats.range_attempt_count, 0),
+			coalesce(stats.range_seconds, 0),
+			coalesce(stats.all_score_sum, 0),
+			coalesce(stats.all_attempt_count, 0),
+			coalesce(stats.weekly_seconds, 0),
+			coalesce(session_days.dates, '[]'::jsonb)
+		FROM scope_status
+		LEFT JOIN scoped_students ss ON scope_status.owned
+		LEFT JOIN public.users u ON u.id = ss.student_id
+		LEFT JOIN public.student_profiles sp ON sp.student_id = ss.student_id
+		LEFT JOIN attempt_stats stats ON stats.student_id = ss.student_id
+		LEFT JOIN session_days ON session_days.student_id = ss.student_id
+		ORDER BY ss.joined_at DESC NULLS LAST, ss.student_id DESC`,
+		teacherID,
+		strings.TrimSpace(classID),
+		rangeStart,
+		weekStart,
+	)
+	if err != nil {
+		return nil, false, err
+	}
+	defer rows.Close()
+
+	students := []teacherapp.AnalyticsStudentReadModel{}
+	scopeOwned := false
+	for rows.Next() {
+		var owned bool
+		var studentID pgtype.Text
+		var masteryRaw []byte
+		var sessionDatesRaw []byte
+		var student teacherapp.AnalyticsStudentReadModel
+		if err := rows.Scan(
+			&owned,
+			&studentID,
+			&student.HasProfile,
+			&masteryRaw,
+			&student.Profile.TotalExercises,
+			&student.Profile.CorrectCount,
+			&student.Profile.TotalStudyTimeMinutes,
+			&student.DisplayName,
+			&student.RangeScoreSum,
+			&student.RangeAttemptCount,
+			&student.RangeSeconds,
+			&student.AllScoreSum,
+			&student.AllAttemptCount,
+			&student.WeeklySeconds,
+			&sessionDatesRaw,
+		); err != nil {
+			return nil, false, err
+		}
+		scopeOwned = owned
+		if !studentID.Valid {
+			continue
+		}
+		student.StudentID = studentID.String
+		student.Profile.StudentID = student.StudentID
+		mastery, err := decodeFloatMap(masteryRaw)
+		if err != nil {
+			return nil, false, fmt.Errorf("decode analytics mastery vector: %w", err)
+		}
+		student.Profile.MasteryVector = mastery
+		if err := json.Unmarshal(sessionDatesRaw, &student.WeeklySessionDates); err != nil {
+			return nil, false, fmt.Errorf("decode analytics session dates: %w", err)
+		}
+		students = append(students, student)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, false, err
+	}
+	return students, scopeOwned, nil
 }
 
 // ListTeacherClassIDs returns all class IDs owned by a teacher.

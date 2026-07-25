@@ -65,6 +65,51 @@ func (r QuestionRepository) MatchConceptIDs(ctx context.Context, groupName strin
 	return ids, rows.Err()
 }
 
+// MatchConceptIDsBatch resolves knowledge nodes for multiple question groups in one query.
+func (r QuestionRepository) MatchConceptIDsBatch(ctx context.Context, groupNames []string) ([][]string, error) {
+	matches := make([][]string, len(groupNames))
+	inputIndexes := make([]int32, 0, len(groupNames))
+	keywords := make([]string, 0, len(groupNames))
+	for inputIndex, groupName := range groupNames {
+		matches[inputIndex] = []string{}
+		for _, keyword := range splitGroupKeywords(groupName) {
+			inputIndexes = append(inputIndexes, int32(inputIndex))
+			keywords = append(keywords, keyword)
+		}
+	}
+	if len(keywords) == 0 {
+		return matches, nil
+	}
+
+	rows, err := r.DB().Query(ctx, `
+		SELECT DISTINCT inputs.input_index, kn.id
+		FROM unnest($1::integer[], $2::text[]) AS inputs(input_index, keyword)
+		JOIN public.knowledge_nodes kn ON
+			kn.name ILIKE '%' || inputs.keyword || '%' OR
+			kn.chapter ILIKE '%' || inputs.keyword || '%'
+		ORDER BY inputs.input_index, kn.id`,
+		inputIndexes,
+		keywords,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var inputIndex int
+		var conceptID string
+		if err := rows.Scan(&inputIndex, &conceptID); err != nil {
+			return nil, err
+		}
+		if inputIndex < 0 || inputIndex >= len(matches) {
+			return nil, fmt.Errorf("match concept ids batch: invalid input index %d", inputIndex)
+		}
+		matches[inputIndex] = append(matches[inputIndex], conceptID)
+	}
+	return matches, rows.Err()
+}
+
 // ListQuestions returns teacher-owned problem content with usage statistics.
 func (r QuestionRepository) ListQuestions(ctx context.Context, ownerID string, filter questionapp.ListFilter) ([]questionapp.Question, int, error) {
 	where, args := questionWhereClause(ownerID, filter)

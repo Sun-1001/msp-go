@@ -94,6 +94,16 @@ export const selectAllNodes = createSelector(
   (state) => state.allNodes
 );
 
+export const selectAllNodesLoading = createSelector(
+  [selectKnowledgeAdminState],
+  (state) => state.allNodesLoading
+);
+
+export const selectAllNodesError = createSelector(
+  [selectKnowledgeAdminState],
+  (state) => state.allNodesError
+);
+
 export const selectNodeModalOpen = createSelector(
   [selectKnowledgeAdminState],
   (state) => state.nodeModalOpen
@@ -184,6 +194,8 @@ export const selectModalState = createSelector(
     deleteConfirm: state.deleteConfirm,
     saving: state.saving,
     allNodes: state.allNodes,
+    allNodesLoading: state.allNodesLoading,
+    allNodesError: state.allNodesError,
     chapters: state.chapters,
   })
 );

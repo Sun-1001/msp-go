@@ -74,14 +74,18 @@ export const qaThreadService = {
     teacher_id?: string;
     page?: number;
     page_size?: number;
-  }): Promise<ListResponse> {
+  }, signal?: AbortSignal): Promise<ListResponse> {
     const qs = toParams(params);
-    const { data } = await apiClient.get<ListResponse>(`${BASE}?${qs}`);
+    const { data } = await apiClient.get<ListResponse>(`${BASE}?${qs}`, { signal });
     return data;
   },
 
-  async get(id: string, params?: { messages_page?: number; messages_page_size?: number }): Promise<ThreadDetail> {
-    const { data } = await apiClient.get<ThreadDetail>(`${BASE}/${id}`, { params });
+  async get(
+    id: string,
+    params?: { messages_page?: number; messages_page_size?: number },
+    signal?: AbortSignal,
+  ): Promise<ThreadDetail> {
+    const { data } = await apiClient.get<ThreadDetail>(`${BASE}/${id}`, { params, signal });
     return data;
   },
 

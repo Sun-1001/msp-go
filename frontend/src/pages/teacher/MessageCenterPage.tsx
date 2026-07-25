@@ -21,6 +21,7 @@ import {
 } from 'lucide-react';
 import { cn } from '@/libs/utils/cn';
 import { formatRelativeTime } from '@/libs/utils/dateFormat';
+import { useSerialPolling } from '@/hooks/useSerialPolling';
 import { classService } from '@/modules/classroom/services/classService';
 import {
   conversationService,
@@ -88,6 +89,14 @@ function mergeMessages<T extends { id: string }>(current: T[], incoming: T[]): T
 export const MessageCenterPage: React.FC = () => {
   const conversationRequest = useRef(0);
   const threadRequest = useRef(0);
+  const conversationListRequest = useRef(0);
+  const noticeListRequest = useRef(0);
+  const threadListRequest = useRef(0);
+  const initialLoadStarted = useRef(false);
+  const conversationQuery = useRef<string | null>(null);
+  const noticeQuery = useRef<string | null>(null);
+  const threadQuery = useRef<string | null>(null);
+  const loadingMoreListRef = useRef('');
   const { toast } = useToast();
   // ---- state ---------------------------------------------------------
   const [searchTerm, setSearchTerm] = useState('');
@@ -164,10 +173,15 @@ export const MessageCenterPage: React.FC = () => {
   }, [toast]);
 
   // ---- load data ------------------------------------------------------
-  const loadConversations = useCallback(async (page = 1, append = false) => {
+  const conversationQueryKey = `${serverSearch}\u0000${privateStatus}`;
+  const loadConversations = useCallback(async (page = 1, append = false, signal?: AbortSignal) => {
+    const request = ++conversationListRequest.current;
+    const query = conversationQueryKey;
+    if (page === 1 && !append) conversationQuery.current = query;
     try {
       const status = privateStatus === '全部' ? '' : privateStatus;
-      const response = await conversationService.list({ search: serverSearch, status, page, page_size: 50 });
+      const response = await conversationService.list({ search: serverSearch, status, page, page_size: 50 }, signal);
+      if (request !== conversationListRequest.current || conversationQuery.current !== query) return true;
       const items = response.items.map((c) => ({
         id: c.id,
         studentName: c.student_name ?? '',
@@ -182,7 +196,7 @@ export const MessageCenterPage: React.FC = () => {
       setConversationTotal(response.total);
       return true;
     } catch { return false; }
-  }, [serverSearch, privateStatus]);
+  }, [conversationQueryKey, privateStatus, serverSearch]);
 
 	const loadConvDetail = useCallback(async (id: string) => {
 		const request = ++conversationRequest.current;
@@ -197,7 +211,7 @@ export const MessageCenterPage: React.FC = () => {
     try {
       const { contacts: list } = await conversationService.studentContacts();
       setStudentContacts(list);
-      if (list.length > 0) setSelectedStudentId(list[0].id);
+      if (list.length > 0) setSelectedStudentId((current) => current || list[0].id);
       return true;
     } catch { return false; }
   }, []);
@@ -255,31 +269,41 @@ export const MessageCenterPage: React.FC = () => {
     finally { setCreatingConv(false); }
   }, [selectedStudentId, studentContacts, newConvDraft, creatingConv, loadConversations, toast]);
 
-  const loadNotices = useCallback(async (page = 1, append = false) => {
+  const noticeQueryKey = `${serverSearch}\u0000${noticeStatus}`;
+  const loadNotices = useCallback(async (page = 1, append = false, signal?: AbortSignal) => {
+    const request = ++noticeListRequest.current;
+    const query = noticeQueryKey;
+    if (page === 1 && !append) noticeQuery.current = query;
     try {
       const status = noticeStatus === '全部' ? '' : noticeStatus === '有未确认' ? '有未确认' : '全部确认';
-      const response = await noticeService.list({ search: serverSearch, status, page, page_size: 50 });
+      const response = await noticeService.list({ search: serverSearch, status, page, page_size: 50 }, signal);
+      if (request !== noticeListRequest.current || noticeQuery.current !== query) return true;
       const items = response.items as TeacherNoticeItem[];
       setNotices((current) => append ? [...current, ...items] : items);
       setNoticePage(page);
       setNoticeTotal(response.total);
-      if (items.length > 0 && !activeNoticeId) setActiveNoticeId(items[0].id);
+      if (items.length > 0) setActiveNoticeId((current) => current || items[0].id);
       return true;
     } catch { return false; }
-  }, [serverSearch, noticeStatus, activeNoticeId]);
+  }, [noticeQueryKey, noticeStatus, serverSearch]);
 
-  const loadThreads = useCallback(async (page = 1, append = false) => {
+  const threadQueryKey = `${serverSearch}\u0000${answerStatus}`;
+  const loadThreads = useCallback(async (page = 1, append = false, signal?: AbortSignal) => {
+    const request = ++threadListRequest.current;
+    const query = threadQueryKey;
+    if (page === 1 && !append) threadQuery.current = query;
     try {
       const status = answerStatus === '全部' ? '' : answerStatus;
-      const response = await qaThreadService.list({ search: serverSearch, status, page, page_size: 50 });
+      const response = await qaThreadService.list({ search: serverSearch, status, page, page_size: 50 }, signal);
+      if (request !== threadListRequest.current || threadQuery.current !== query) return true;
       const items = response.items as TeacherThreadItem[];
       setThreads((current) => append ? [...current, ...items] : items);
       setThreadPage(page);
       setThreadTotal(response.total);
-      if (items.length > 0 && !activeThreadId) setActiveThreadId(items[0].id);
+      if (items.length > 0) setActiveThreadId((current) => current || items[0].id);
       return true;
     } catch { return false; }
-  }, [serverSearch, answerStatus, activeThreadId]);
+  }, [answerStatus, serverSearch, threadQueryKey]);
 
 	const loadThreadDetail = useCallback(async (id: string) => {
 		const request = ++threadRequest.current;
@@ -299,42 +323,57 @@ export const MessageCenterPage: React.FC = () => {
   }, [loadConversations, loadNotices, loadThreads]);
 
   // initial load — only shows full-page spinner on first mount
-  useEffect(() => { void reloadInitialData(); }, [reloadInitialData]);
+  useEffect(() => {
+    if (initialLoadStarted.current) return;
+    initialLoadStarted.current = true;
+    void reloadInitialData();
+  }, [reloadInitialData]);
 
   useEffect(() => {
-    const refresh = async () => {
-      if (document.hidden) return;
+    if (conversationQuery.current !== conversationQueryKey) void loadConversations();
+  }, [conversationQueryKey, loadConversations]);
+
+  useEffect(() => {
+    if (noticeQuery.current !== noticeQueryKey) void loadNotices();
+  }, [loadNotices, noticeQueryKey]);
+
+  useEffect(() => {
+    if (threadQuery.current !== threadQueryKey) void loadThreads();
+  }, [loadThreads, threadQueryKey]);
+
+  const pollMessages = useCallback(async (signal: AbortSignal) => {
+    if (initialLoad || document.hidden) return;
+    if (!loadingMoreListRef.current) {
       await Promise.all([
-        conversationPage === 1 ? loadConversations() : Promise.resolve(),
-        noticePage === 1 ? loadNotices() : Promise.resolve(),
-        threadPage === 1 ? loadThreads() : Promise.resolve(),
+        conversationPage === 1 ? loadConversations(1, false, signal) : Promise.resolve(),
+        noticePage === 1 ? loadNotices(1, false, signal) : Promise.resolve(),
+        threadPage === 1 ? loadThreads(1, false, signal) : Promise.resolve(),
       ]);
-      if (activeConvId) {
-        try {
-          const detail = await conversationService.get(activeConvId);
-          setActiveConv((current) => current?.id === detail.id ? {
-            ...detail,
-            messages: mergeMessages(current.messages, detail.messages),
-            messages_page: current.messages_page,
-            messages_page_size: current.messages_page_size,
-          } : current);
-        } catch { /* retain the last successfully loaded detail */ }
-      }
-      if (activeThreadId) {
-        try {
-          const detail = await qaThreadService.get(activeThreadId);
-          setActiveThread((current) => current?.id === detail.id ? {
-            ...detail,
-            messages: mergeMessages(current.messages, detail.messages),
-            messages_page: current.messages_page,
-            messages_page_size: current.messages_page_size,
-          } : current);
-        } catch { /* retain the last successfully loaded detail */ }
-      }
-    };
-    const interval = window.setInterval(() => { void refresh(); }, 30_000);
-    return () => window.clearInterval(interval);
-  }, [loadConversations, loadNotices, loadThreads, conversationPage, noticePage, threadPage, activeConvId, activeThreadId]);
+    }
+    if (activeConvId) {
+      try {
+        const detail = await conversationService.get(activeConvId, undefined, signal);
+        setActiveConv((current) => current?.id === detail.id ? {
+          ...detail,
+          messages: mergeMessages(current.messages, detail.messages),
+          messages_page: current.messages_page,
+          messages_page_size: current.messages_page_size,
+        } : current);
+      } catch { /* retain the last successfully loaded detail */ }
+    }
+    if (activeThreadId) {
+      try {
+        const detail = await qaThreadService.get(activeThreadId, undefined, signal);
+        setActiveThread((current) => current?.id === detail.id ? {
+          ...detail,
+          messages: mergeMessages(current.messages, detail.messages),
+          messages_page: current.messages_page,
+          messages_page_size: current.messages_page_size,
+        } : current);
+      } catch { /* retain the last successfully loaded detail */ }
+    }
+  }, [activeConvId, activeThreadId, conversationPage, initialLoad, loadConversations, loadNotices, loadThreads, noticePage, threadPage]);
+  useSerialPolling(pollMessages, 30_000);
 
   // ---- derived --------------------------------------------------------
   const activeNotice = useMemo(() => notices.find((n) => n.id === activeNoticeId) ?? notices[0], [notices, activeNoticeId]);
@@ -400,11 +439,16 @@ export const MessageCenterPage: React.FC = () => {
   }, [activeConv, loadingOlderMessages, toast]);
 
   const loadMoreConversations = useCallback(async () => {
-    if (loadingMoreList || convItems.length >= conversationTotal) return;
+    if (loadingMoreListRef.current || convItems.length >= conversationTotal) return;
+    loadingMoreListRef.current = 'conversations';
     setLoadingMoreList('conversations');
-    await loadConversations(conversationPage + 1, true);
-    setLoadingMoreList('');
-  }, [loadingMoreList, convItems.length, conversationTotal, loadConversations, conversationPage]);
+    try {
+      await loadConversations(conversationPage + 1, true);
+    } finally {
+      loadingMoreListRef.current = '';
+      setLoadingMoreList('');
+    }
+  }, [convItems.length, conversationTotal, loadConversations, conversationPage]);
 
   // ---- actions: notices -----------------------------------------------
   const publishNotice = useCallback(async () => {
@@ -451,18 +495,28 @@ export const MessageCenterPage: React.FC = () => {
   }, [activeThread, loadingOlderThreadMessages, toast]);
 
   const loadMoreNotices = useCallback(async () => {
-    if (loadingMoreList || notices.length >= noticeTotal) return;
+    if (loadingMoreListRef.current || notices.length >= noticeTotal) return;
+    loadingMoreListRef.current = 'notices';
     setLoadingMoreList('notices');
-    await loadNotices(noticePage + 1, true);
-    setLoadingMoreList('');
-  }, [loadingMoreList, notices.length, noticeTotal, loadNotices, noticePage]);
+    try {
+      await loadNotices(noticePage + 1, true);
+    } finally {
+      loadingMoreListRef.current = '';
+      setLoadingMoreList('');
+    }
+  }, [notices.length, noticeTotal, loadNotices, noticePage]);
 
   const loadMoreThreads = useCallback(async () => {
-    if (loadingMoreList || threads.length >= threadTotal) return;
+    if (loadingMoreListRef.current || threads.length >= threadTotal) return;
+    loadingMoreListRef.current = 'threads';
     setLoadingMoreList('threads');
-    await loadThreads(threadPage + 1, true);
-    setLoadingMoreList('');
-  }, [loadingMoreList, threads.length, threadTotal, loadThreads, threadPage]);
+    try {
+      await loadThreads(threadPage + 1, true);
+    } finally {
+      loadingMoreListRef.current = '';
+      setLoadingMoreList('');
+    }
+  }, [threads.length, threadTotal, loadThreads, threadPage]);
 
   const updateThreadStatus = useCallback(async (id: string, status: string) => {
     try {
