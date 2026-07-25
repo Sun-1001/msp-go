@@ -48,9 +48,13 @@ func (r ConversationRepository) ListConversations(ctx context.Context, userID st
 func (r ConversationRepository) listStudentConversations(ctx context.Context, studentID string, search string, page Page) ([]conversationapp.ConversationItem, int, error) {
 	args := []any{studentID}
 	searchFilter := ""
-	if strings.TrimSpace(search) != "" {
-		searchFilter = ` AND (u.display_name ILIKE $2 OR u.username ILIKE $2 OR c.subject ILIKE $2)`
-		args = append(args, "%"+search+"%")
+	for _, term := range strings.Fields(search) {
+		idx := idxStr(len(args) + 1)
+		searchFilter += ` AND (
+			STRPOS(LOWER(COALESCE(u.display_name, u.username)), LOWER($` + idx + `)) > 0
+			OR STRPOS(LOWER(c.subject), LOWER($` + idx + `)) > 0
+		)`
+		args = append(args, term)
 	}
 
 	var total int
@@ -58,7 +62,7 @@ func (r ConversationRepository) listStudentConversations(ctx context.Context, st
 		SELECT COUNT(*)
 		FROM public.conversations c
 		JOIN public.users u ON u.id = c.teacher_id
-		WHERE c.student_id = $1 AND c.is_archived = false`+searchFilter,
+		WHERE c.student_id = $1 AND c.student_archived = false`+searchFilter,
 		args...,
 	).Scan(&total); err != nil {
 		return nil, 0, err
@@ -68,9 +72,9 @@ func (r ConversationRepository) listStudentConversations(ctx context.Context, st
 	args = append(args, page.Limit, page.Offset)
 
 	rows, err := r.DB().Query(ctx, `
-		SELECT c.id, c.teacher_id, u.display_name, u.username, c.subject, c.last_message_at, c.is_archived,
+		SELECT c.id, c.teacher_id, u.display_name, u.username, c.subject, c.last_message_at, c.student_archived,
 			COALESCE(cnv.unread_count, 0),
-			(SELECT text FROM public.conversation_messages WHERE conversation_id = c.id ORDER BY created_at DESC LIMIT 1)
+			(SELECT LEFT(text, 200) FROM public.conversation_messages WHERE conversation_id = c.id ORDER BY created_at DESC, id DESC LIMIT 1)
 		FROM public.conversations c
 		JOIN public.users u ON u.id = c.teacher_id
 		LEFT JOIN LATERAL (
@@ -78,8 +82,8 @@ func (r ConversationRepository) listStudentConversations(ctx context.Context, st
 			FROM public.conversation_messages cm
 			WHERE cm.conversation_id = c.id AND cm.sender_role = 'teacher' AND cm.read_at IS NULL
 		) cnv ON true
-		WHERE c.student_id = $1 AND c.is_archived = false`+searchFilter+`
-		ORDER BY c.last_message_at DESC
+		WHERE c.student_id = $1 AND c.student_archived = false`+searchFilter+`
+		ORDER BY c.last_message_at DESC, c.id DESC
 		LIMIT $`+pgIdx(countArgs+1)+` OFFSET $`+pgIdx(countArgs+2),
 		args...,
 	)
@@ -117,15 +121,34 @@ func (r ConversationRepository) listTeacherConversations(ctx context.Context, te
 	args := []any{teacherID}
 	whereIdx := 2
 	searchFilter := ""
-	if strings.TrimSpace(search) != "" {
-		searchFilter = ` AND (u.display_name ILIKE $` + idxStr(whereIdx) + ` OR u.username ILIKE $` + idxStr(whereIdx) + ` OR c.subject ILIKE $` + idxStr(whereIdx) + `)`
-		args = append(args, "%"+search+"%")
+	for _, term := range strings.Fields(search) {
+		idx := idxStr(whereIdx)
+		searchFilter += ` AND (
+			STRPOS(LOWER(COALESCE(u.display_name, u.username)), LOWER($` + idx + `)) > 0
+			OR STRPOS(LOWER(c.subject), LOWER($` + idx + `)) > 0
+		)`
+		args = append(args, term)
 		whereIdx++
 	}
 	if strings.TrimSpace(className) != "" {
-		searchFilter += ` AND c.subject ILIKE $` + idxStr(whereIdx)
-		args = append(args, "%"+className+"%")
+		searchFilter += ` AND STRPOS(LOWER(c.subject), LOWER($` + idxStr(whereIdx) + `)) > 0`
+		args = append(args, className)
 		whereIdx++
+	}
+	switch status {
+	case "未读":
+		searchFilter += ` AND EXISTS (
+			SELECT 1 FROM public.conversation_messages cm
+			WHERE cm.conversation_id = c.id AND cm.sender_role = 'student' AND cm.read_at IS NULL
+		)`
+	case "待回复":
+		searchFilter += ` AND (
+			SELECT cm.sender_role = 'student'
+			FROM public.conversation_messages cm
+			WHERE cm.conversation_id = c.id
+			ORDER BY cm.created_at DESC, cm.id DESC
+			LIMIT 1
+		)`
 	}
 
 	var total int
@@ -133,7 +156,7 @@ func (r ConversationRepository) listTeacherConversations(ctx context.Context, te
 		SELECT COUNT(*)
 		FROM public.conversations c
 		JOIN public.users u ON u.id = c.student_id
-		WHERE c.teacher_id = $1`+searchFilter,
+		WHERE c.teacher_id = $1 AND c.teacher_archived = false`+searchFilter,
 		args...,
 	).Scan(&total); err != nil {
 		return nil, 0, err
@@ -144,13 +167,13 @@ func (r ConversationRepository) listTeacherConversations(ctx context.Context, te
 
 	rows, err := r.DB().Query(ctx, `
 		SELECT c.id, c.student_id, u.display_name, u.username, c.subject, c.last_message_at,
-			(SELECT text FROM public.conversation_messages WHERE conversation_id = c.id ORDER BY created_at DESC LIMIT 1),
+			(SELECT LEFT(text, 200) FROM public.conversation_messages WHERE conversation_id = c.id ORDER BY created_at DESC, id DESC LIMIT 1),
 			EXISTS(SELECT 1 FROM public.conversation_messages cm WHERE cm.conversation_id = c.id AND cm.sender_role = 'student' AND cm.read_at IS NULL) AS unread,
-			(SELECT cm2.sender_role = 'student' FROM public.conversation_messages cm2 WHERE cm2.conversation_id = c.id ORDER BY cm2.created_at DESC LIMIT 1) AS pending_reply
+			COALESCE((SELECT cm2.sender_role = 'student' FROM public.conversation_messages cm2 WHERE cm2.conversation_id = c.id ORDER BY cm2.created_at DESC, cm2.id DESC LIMIT 1), false) AS pending_reply
 		FROM public.conversations c
 		JOIN public.users u ON u.id = c.student_id
-		WHERE c.teacher_id = $1`+searchFilter+`
-		ORDER BY c.last_message_at DESC
+		WHERE c.teacher_id = $1 AND c.teacher_archived = false`+searchFilter+`
+		ORDER BY c.last_message_at DESC, c.id DESC
 		LIMIT $`+idxStr(countArgs+1)+` OFFSET $`+idxStr(countArgs+2),
 		args...,
 	)
@@ -193,7 +216,8 @@ func (r ConversationRepository) GetConversation(ctx context.Context, conversatio
 	var teacherName, teacherUsername, studentName, studentUsername, subject string
 	var teacherDisplay, studentDisplay pgtype.Text
 	err := r.DB().QueryRow(ctx, `
-		SELECT c.id, c.subject, c.last_message_at, c.is_archived,
+		SELECT c.id, c.subject, c.last_message_at,
+			CASE WHEN c.student_id = $2 THEN c.student_archived ELSE c.teacher_archived END,
 			t.display_name, t.username,
 			s.display_name, s.username
 		FROM public.conversations c
@@ -225,9 +249,13 @@ func (r ConversationRepository) GetConversation(ctx context.Context, conversatio
 	detail.Scope = subject
 	detail.ClassName = subject
 
-	if page < 1 { page = 1 }
+	if page < 1 {
+		page = 1
+	}
 	pgPage, err := NewPage((page-1)*pageSize, pageSize)
-	if err != nil { return conversationapp.ConversationDetail{}, false, err }
+	if err != nil {
+		return conversationapp.ConversationDetail{}, false, err
+	}
 	if err := r.DB().QueryRow(ctx, `SELECT COUNT(*) FROM public.conversation_messages WHERE conversation_id = $1`, conversationID).Scan(&detail.MessagesTotal); err != nil {
 		return conversationapp.ConversationDetail{}, false, err
 	}
@@ -237,7 +265,7 @@ func (r ConversationRepository) GetConversation(ctx context.Context, conversatio
 		SELECT cm.id, cm.sender_role, cm.text, cm.created_at, cm.read_at
 		FROM public.conversation_messages cm
 		WHERE cm.conversation_id = $1
-		ORDER BY cm.created_at DESC
+		ORDER BY cm.created_at DESC, cm.id DESC
 		LIMIT $2 OFFSET $3`,
 		conversationID, pgPage.Limit, pgPage.Offset,
 	)
@@ -262,50 +290,52 @@ func (r ConversationRepository) GetConversation(ctx context.Context, conversatio
 	if err := msgRows.Err(); err != nil {
 		return conversationapp.ConversationDetail{}, false, err
 	}
-	for left, right := 0, len(detail.Messages)-1; left < right; left, right = left+1, right-1 { detail.Messages[left], detail.Messages[right] = detail.Messages[right], detail.Messages[left] }
+	for left, right := 0, len(detail.Messages)-1; left < right; left, right = left+1, right-1 {
+		detail.Messages[left], detail.Messages[right] = detail.Messages[right], detail.Messages[left]
+	}
+	if len(detail.Messages) > 0 {
+		detail.ReadThroughMessageID = detail.Messages[len(detail.Messages)-1].ID
+	}
 
 	return detail, true, nil
 }
 
-// MarkConversationRead marks messages from the other party as read.
-func (r ConversationRepository) MarkConversationRead(ctx context.Context, conversationID string, userID string) error {
-	_, err := r.DB().Exec(ctx, `
-		UPDATE public.conversation_messages
-		SET read_at = now()
-		WHERE conversation_id = $1
-		  AND sender_id != $2
-		  AND read_at IS NULL
-		  AND EXISTS (
-			  SELECT 1 FROM public.conversations c
-			  WHERE c.id = $1 AND (c.student_id = $2 OR c.teacher_id = $2)
-		  )`,
-		conversationID, userID,
-	)
-	return err
+// AcknowledgeConversationRead marks incoming messages no newer than a delivered cutoff.
+func (r ConversationRepository) AcknowledgeConversationRead(ctx context.Context, conversationID string, userID string, throughMessageID string) (bool, error) {
+	var valid bool
+	var updated int
+	err := r.DB().QueryRow(ctx, `
+		WITH authorized_cutoff AS (
+			SELECT cm.created_at, cm.id
+			FROM public.conversation_messages cm
+			JOIN public.conversations c ON c.id = cm.conversation_id
+			WHERE cm.conversation_id = $1
+			  AND cm.id = $3
+			  AND (c.student_id = $2 OR c.teacher_id = $2)
+		), updated AS (
+			UPDATE public.conversation_messages target
+			SET read_at = now()
+			FROM authorized_cutoff cutoff
+			WHERE target.conversation_id = $1
+			  AND target.sender_id != $2
+			  AND target.read_at IS NULL
+			  AND (target.created_at, target.id) <= (cutoff.created_at, cutoff.id)
+			RETURNING 1
+		)
+		SELECT EXISTS (SELECT 1 FROM authorized_cutoff), COUNT(*) FROM updated`,
+		conversationID, userID, throughMessageID,
+	).Scan(&valid, &updated)
+	return valid, err
 }
 
 // CreateConversation creates a conversation and its first message.
-func (r ConversationRepository) CreateConversation(ctx context.Context, creatorID string, creatorRole user.Role, targetID string, subject string, initialMessage string, now time.Time) (conversationapp.ConversationDetail, error) {
+func (r ConversationRepository) CreateConversation(ctx context.Context, creatorID string, creatorRole user.Role, targetID string, subject string, initialMessage string, _ time.Time) (conversationapp.ConversationDetail, error) {
 	if creatorRole != user.RoleStudent && creatorRole != user.RoleTeacher {
 		return conversationapp.ConversationDetail{}, conversationapp.ErrForbidden
 	}
 	studentID, teacherID := creatorID, targetID
 	if creatorRole != user.RoleStudent {
 		studentID, teacherID = targetID, creatorID
-	}
-	var permitted bool
-	targetRole := user.RoleStudent
-	if creatorRole == user.RoleStudent {
-		targetRole = user.RoleTeacher
-	}
-	if err := r.DB().QueryRow(ctx, `
-		SELECT EXISTS (
-			SELECT 1 FROM public.users u WHERE u.id = $1 AND u.role::text = $2
-		)`, targetID, targetRole.DBValue()).Scan(&permitted); err != nil {
-		return conversationapp.ConversationDetail{}, err
-	}
-	if !permitted {
-		return conversationapp.ConversationDetail{}, conversationapp.ErrForbidden
 	}
 	convID, err := newUUID()
 	if err != nil {
@@ -318,28 +348,126 @@ func (r ConversationRepository) CreateConversation(ctx context.Context, creatorI
 	}
 	defer tx.Rollback(ctx)
 
-	_, err = tx.Exec(ctx, `
-		INSERT INTO public.conversations (id, student_id, teacher_id, subject, last_message_at)
-		VALUES ($1, $2, $3, $4, $5)`,
-		convID, studentID, teacherID, subject, now,
-	)
+	var lockedUserCount int
+	err = tx.QueryRow(ctx, `
+		WITH locked_users AS MATERIALIZED (
+			SELECT u.id
+			FROM public.users u
+			WHERE u.is_active = true
+			  AND (
+				(u.id = $1 AND u.role::text = 'STUDENT')
+				OR (u.id = $2 AND u.role::text = 'TEACHER')
+			  )
+			ORDER BY u.id
+			FOR UPDATE
+		)
+		SELECT count(*) FROM locked_users`, studentID, teacherID).Scan(&lockedUserCount)
 	if err != nil {
-		if isUniqueViolation(err) {
-			return conversationapp.ConversationDetail{}, conversationapp.ErrConflict
-		}
 		return conversationapp.ConversationDetail{}, err
 	}
+	if lockedUserCount != 2 {
+		return conversationapp.ConversationDetail{}, conversationapp.ErrForbidden
+	}
 
-	if strings.TrimSpace(initialMessage) != "" {
+	hasInitialMessage := strings.TrimSpace(initialMessage) != ""
+	archiveColumn := "student_archived"
+	if creatorRole == user.RoleTeacher {
+		archiveColumn = "teacher_archived"
+	}
+
+	var parentLastMessageAt time.Time
+	var studentArchived bool
+	var teacherArchived bool
+	reopened := true
+	err = tx.QueryRow(ctx, `
+		SELECT c.id, c.last_message_at, c.student_archived, c.teacher_archived
+		FROM public.conversations c
+		WHERE c.student_id = $1 AND c.teacher_id = $2
+		FOR UPDATE`, studentID, teacherID).Scan(
+		&convID,
+		&parentLastMessageAt,
+		&studentArchived,
+		&teacherArchived,
+	)
+	if err == pgx.ErrNoRows {
+		reopened = false
+	} else if err != nil {
+		return conversationapp.ConversationDetail{}, err
+	}
+	if reopened {
+		creatorArchived := studentArchived
+		if creatorRole == user.RoleTeacher {
+			creatorArchived = teacherArchived
+		}
+		if !creatorArchived {
+			return conversationapp.ConversationDetail{}, conversationapp.ErrConflict
+		}
+	}
+
+	if !reopened {
+		err = tx.QueryRow(ctx, `
+			WITH stamped AS (
+				SELECT clock_timestamp()::timestamp without time zone AS created_at
+			)
+			INSERT INTO public.conversations (
+				id, student_id, teacher_id, subject,
+				last_message_at, created_at, updated_at
+			)
+			SELECT $1, $2, $3, $4, stamped.created_at, stamped.created_at, stamped.created_at
+			FROM stamped
+			RETURNING last_message_at`,
+			convID, studentID, teacherID, subject,
+		).Scan(&parentLastMessageAt)
+		if err != nil {
+			if isUniqueViolation(err) {
+				return conversationapp.ConversationDetail{}, conversationapp.ErrConflict
+			}
+			return conversationapp.ConversationDetail{}, err
+		}
+	}
+
+	if hasInitialMessage {
 		msgID, err := newUUID()
 		if err != nil {
 			return conversationapp.ConversationDetail{}, err
 		}
-		_, err = tx.Exec(ctx, `
+		var messageAt time.Time
+		err = tx.QueryRow(ctx, `
 			INSERT INTO public.conversation_messages (id, conversation_id, sender_id, sender_role, text, created_at)
-			VALUES ($1, $2, $3, $4, $5, $6)`,
-			msgID, convID, creatorID, string(creatorRole), initialMessage, now,
-		)
+			VALUES (
+				$1, $2, $3, $4, $5,
+				GREATEST(
+					clock_timestamp()::timestamp without time zone,
+					$6::timestamp without time zone + interval '1 microsecond'
+				)
+			)
+			RETURNING created_at`,
+			msgID, convID, creatorID, string(creatorRole), initialMessage, parentLastMessageAt,
+		).Scan(&messageAt)
+		if err != nil {
+			return conversationapp.ConversationDetail{}, err
+		}
+		_, err = tx.Exec(ctx, `
+			UPDATE public.conversations
+			SET student_archived = false,
+				teacher_archived = false,
+				subject = CASE WHEN $2 = '' THEN subject ELSE $2 END,
+				last_message_at = $3,
+				updated_at = $3
+			WHERE id = $1`, convID, subject, messageAt)
+		if err != nil {
+			return conversationapp.ConversationDetail{}, err
+		}
+	} else if reopened {
+		_, err = tx.Exec(ctx, `
+			UPDATE public.conversations
+			SET `+archiveColumn+` = false,
+				subject = CASE WHEN $2 = '' THEN subject ELSE $2 END,
+				updated_at = GREATEST(
+					clock_timestamp()::timestamp without time zone,
+					updated_at + interval '1 microsecond'
+				)
+			WHERE id = $1`, convID, subject)
 		if err != nil {
 			return conversationapp.ConversationDetail{}, err
 		}
@@ -350,14 +478,17 @@ func (r ConversationRepository) CreateConversation(ctx context.Context, creatorI
 	}
 
 	detail, found, err := r.GetConversation(ctx, convID, creatorID, 1, 50)
-	if err != nil || !found {
+	if err != nil {
 		return conversationapp.ConversationDetail{}, err
+	}
+	if !found {
+		return conversationapp.ConversationDetail{}, conversationapp.ErrNotFound
 	}
 	return detail, nil
 }
 
-// SendMessage adds a message and updates last_message_at.
-func (r ConversationRepository) SendMessage(ctx context.Context, conversationID string, senderID string, senderRole string, text string, now time.Time) (conversationapp.Message, error) {
+// SendMessage adds a message, restores visibility, and updates last_message_at.
+func (r ConversationRepository) SendMessage(ctx context.Context, conversationID string, senderID string, senderRole string, text string, _ time.Time) (conversationapp.Message, error) {
 	msgID, err := newUUID()
 	if err != nil {
 		return conversationapp.Message{}, err
@@ -369,24 +500,66 @@ func (r ConversationRepository) SendMessage(ctx context.Context, conversationID 
 	}
 	defer tx.Rollback(ctx)
 
-	tag, err := tx.Exec(ctx, `
-		INSERT INTO public.conversation_messages (id, conversation_id, sender_id, sender_role, text, created_at)
-		SELECT $1::character varying, c.id::character varying, $3::character varying, $4::character varying, $5, $6
-		FROM public.conversations c
-		WHERE c.id::text = $2::text
-		  AND ((c.student_id::text = $3::text AND $4 = 'student') OR (c.teacher_id::text = $3::text AND $4 = 'teacher'))`,
-		msgID, conversationID, senderID, senderRole, text, now,
-	)
+	var lockedSenderID string
+	err = tx.QueryRow(ctx, `
+		SELECT u.id
+		FROM public.users u
+		WHERE u.id = $1
+		  AND u.is_active = true
+		  AND (
+			($2 = 'student' AND u.role::text = 'STUDENT')
+			OR ($2 = 'teacher' AND u.role::text = 'TEACHER')
+		  )
+		FOR UPDATE`, senderID, senderRole).Scan(&lockedSenderID)
+	if err == pgx.ErrNoRows {
+		return conversationapp.Message{}, conversationapp.ErrNotFound
+	}
 	if err != nil {
 		return conversationapp.Message{}, err
 	}
-	if tag.RowsAffected() == 0 {
+
+	var parentLastMessageAt time.Time
+	err = tx.QueryRow(ctx, `
+		SELECT c.last_message_at
+		FROM public.conversations c
+		WHERE c.id = $1
+		  AND (
+			(c.student_id = $2 AND $3 = 'student')
+			OR (c.teacher_id = $2 AND $3 = 'teacher')
+		  )
+		FOR UPDATE`, conversationID, senderID, senderRole).Scan(&parentLastMessageAt)
+	if err == pgx.ErrNoRows {
 		return conversationapp.Message{}, conversationapp.ErrNotFound
+	}
+	if err != nil {
+		return conversationapp.Message{}, err
+	}
+
+	var messageAt time.Time
+	err = tx.QueryRow(ctx, `
+		INSERT INTO public.conversation_messages (id, conversation_id, sender_id, sender_role, text, created_at)
+		VALUES (
+			$1, $2, $3, $4, $5,
+			GREATEST(
+				clock_timestamp()::timestamp without time zone,
+				$6::timestamp without time zone + interval '1 microsecond'
+			)
+		)
+		RETURNING created_at`,
+		msgID, conversationID, senderID, senderRole, text, parentLastMessageAt,
+	).Scan(&messageAt)
+	if err != nil {
+		return conversationapp.Message{}, err
 	}
 
 	_, err = tx.Exec(ctx, `
-		UPDATE public.conversations SET last_message_at = $1, updated_at = $1 WHERE id = $2`,
-		now, conversationID,
+		UPDATE public.conversations
+		SET student_archived = false,
+			teacher_archived = false,
+			last_message_at = $1,
+			updated_at = $1
+		WHERE id = $2`,
+		messageAt, conversationID,
 	)
 	if err != nil {
 		return conversationapp.Message{}, err
@@ -400,28 +573,22 @@ func (r ConversationRepository) SendMessage(ctx context.Context, conversationID 
 		ID:   msgID,
 		From: senderRole,
 		Text: text,
-		Time: now,
+		Time: messageAt,
 	}, nil
 }
 
-// ArchiveConversation sets is_archived = true for a student-owned conversation.
-func (r ConversationRepository) ArchiveConversation(ctx context.Context, conversationID string, studentID string) (bool, error) {
-	tag, err := r.DB().Exec(ctx, `
-		UPDATE public.conversations SET is_archived = true, updated_at = now()
-		WHERE id = $1 AND student_id = $2`,
-		conversationID, studentID,
-	)
-	if err != nil {
-		return false, err
+// ArchiveConversation archives a conversation only for the requesting participant.
+func (r ConversationRepository) ArchiveConversation(ctx context.Context, conversationID string, userID string, role user.Role) (bool, error) {
+	archiveColumn := "student_archived"
+	participantColumn := "student_id"
+	if role == user.RoleTeacher {
+		archiveColumn = "teacher_archived"
+		participantColumn = "teacher_id"
 	}
-	return tag.RowsAffected() > 0, nil
-}
-
-// DeleteConversation removes a conversation (student only).
-func (r ConversationRepository) DeleteConversation(ctx context.Context, conversationID string, studentID string) (bool, error) {
 	tag, err := r.DB().Exec(ctx, `
-		DELETE FROM public.conversations WHERE id = $1 AND student_id = $2`,
-		conversationID, studentID,
+		UPDATE public.conversations SET `+archiveColumn+` = true, updated_at = now()
+		WHERE id = $1 AND `+participantColumn+` = $2`,
+		conversationID, userID,
 	)
 	if err != nil {
 		return false, err
@@ -436,7 +603,8 @@ func (r ConversationRepository) ListTeacherContacts(ctx context.Context, student
 		FROM public.users u
 		JOIN public.classes c ON c.teacher_id = u.id
 		JOIN public.class_enrollments ce ON ce.class_id = c.id
-		WHERE ce.student_id = $1`,
+		WHERE ce.student_id = $1 AND u.is_active = true
+		ORDER BY u.id, c.name`,
 		studentID,
 	)
 	if err != nil {
@@ -447,9 +615,10 @@ func (r ConversationRepository) ListTeacherContacts(ctx context.Context, student
 	contacts := make([]conversationapp.Contact, 0)
 	for rows.Next() {
 		var c conversationapp.Contact
-		if err := rows.Scan(&c.ID, &c.TeacherName, &c.Scope); err != nil {
+		if err := rows.Scan(&c.ID, &c.DisplayName, &c.Scope); err != nil {
 			return nil, err
 		}
+		c.TeacherName = c.DisplayName
 		contacts = append(contacts, c)
 	}
 	return contacts, rows.Err()
@@ -462,7 +631,8 @@ func (r ConversationRepository) ListStudentContacts(ctx context.Context, teacher
 		FROM public.users u
 		JOIN public.class_enrollments ce ON ce.student_id = u.id
 		JOIN public.classes c ON c.id = ce.class_id
-		WHERE c.teacher_id = $1`, teacherID)
+		WHERE c.teacher_id = $1 AND u.is_active = true
+		ORDER BY u.id, c.name`, teacherID)
 	if err != nil {
 		return nil, err
 	}
@@ -470,9 +640,10 @@ func (r ConversationRepository) ListStudentContacts(ctx context.Context, teacher
 	contacts := make([]conversationapp.Contact, 0)
 	for rows.Next() {
 		var c conversationapp.Contact
-		if err := rows.Scan(&c.ID, &c.TeacherName, &c.Scope); err != nil {
+		if err := rows.Scan(&c.ID, &c.DisplayName, &c.Scope); err != nil {
 			return nil, err
 		}
+		c.TeacherName = c.DisplayName
 		contacts = append(contacts, c)
 	}
 	return contacts, rows.Err()
@@ -488,9 +659,14 @@ func (r ConversationRepository) SearchContacts(ctx context.Context, query string
 		SELECT u.id, COALESCE(u.display_name, u.username), '' AS scope
 		FROM public.users u
 		WHERE u.role::text = $1
-		  AND (u.id ILIKE $2 OR u.display_name ILIKE $2 OR u.username ILIKE $2)
-		ORDER BY u.display_name
-		LIMIT 20`, targetRole, "%"+query+"%")
+		  AND u.is_active = true
+		  AND (
+			STRPOS(LOWER(u.id), LOWER($2)) > 0
+			OR STRPOS(LOWER(COALESCE(u.display_name, '')), LOWER($2)) > 0
+			OR STRPOS(LOWER(u.username), LOWER($2)) > 0
+		  )
+		ORDER BY COALESCE(u.display_name, u.username), u.id
+		LIMIT 20`, targetRole, query)
 	if err != nil {
 		return nil, err
 	}
@@ -498,9 +674,10 @@ func (r ConversationRepository) SearchContacts(ctx context.Context, query string
 	contacts := make([]conversationapp.Contact, 0)
 	for rows.Next() {
 		var c conversationapp.Contact
-		if err := rows.Scan(&c.ID, &c.TeacherName, &c.Scope); err != nil {
+		if err := rows.Scan(&c.ID, &c.DisplayName, &c.Scope); err != nil {
 			return nil, err
 		}
+		c.TeacherName = c.DisplayName
 		contacts = append(contacts, c)
 	}
 	return contacts, rows.Err()

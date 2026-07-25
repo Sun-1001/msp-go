@@ -10,6 +10,7 @@ import { getNavItemsByRole } from '@/modules/auth/constants/navigationConfig';
 import { useAuth } from '@/modules/auth/hooks/useAuth';
 import { animationCombos } from '@/libs/animations';
 import { ResponsiveNavigation } from '@/modules/auth/components/ResponsiveNavigation';
+import { MessagePreviewBell } from '@/modules/message-center/components/MessagePreviewBell';
 
 interface HeaderProps {
   variant?: 'default' | 'transparent' | 'dark';
@@ -29,6 +30,10 @@ export const Header: React.FC<HeaderProps> = ({ variant = 'default', onLoginClic
   const isAuthenticated = useAppSelector(selectIsAuthenticated);
   const user = useAppSelector(selectCurrentUser);
   const { handleLogin, handleRegister, handleLogout, isLoggingOut } = useAuth();
+  const [isUserMenuOpen, setIsUserMenuOpen] = React.useState(false);
+  const userMenuRootRef = React.useRef<HTMLDivElement | null>(null);
+  const userMenuTriggerRef = React.useRef<HTMLButtonElement | null>(null);
+  const userMenuId = React.useId();
 
   // 真正的登录状态：token 存在且 user 信息已加载
   const isLoggedIn = isAuthenticated && user !== null;
@@ -39,6 +44,26 @@ export const Header: React.FC<HeaderProps> = ({ variant = 'default', onLoginClic
   const homePath = user?.role === 'admin' ? '/admin/dashboard' : '/home';
 
   const isDark = variant === 'dark' || variant === 'transparent';
+
+  React.useEffect(() => {
+    if (!isUserMenuOpen) return;
+
+    const handlePointerDown = (event: PointerEvent) => {
+      if (!userMenuRootRef.current?.contains(event.target as Node)) setIsUserMenuOpen(false);
+    };
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key !== 'Escape') return;
+      setIsUserMenuOpen(false);
+      userMenuTriggerRef.current?.focus();
+    };
+
+    document.addEventListener('pointerdown', handlePointerDown);
+    document.addEventListener('keydown', handleKeyDown);
+    return () => {
+      document.removeEventListener('pointerdown', handlePointerDown);
+      document.removeEventListener('keydown', handleKeyDown);
+    };
+  }, [isUserMenuOpen]);
 
   return (
     <header className={cn(
@@ -61,7 +86,7 @@ export const Header: React.FC<HeaderProps> = ({ variant = 'default', onLoginClic
             <span className="font-bold text-lg">M</span>
           </div>
           <span className={cn(
-            "whitespace-nowrap font-bold text-xl bg-clip-text text-transparent bg-linear-to-r",
+            "hidden whitespace-nowrap font-bold text-xl bg-clip-text text-transparent bg-linear-to-r sm:inline",
             isDark ? "from-white to-surface-400" : "from-surface-900 to-surface-600 dark:from-white dark:to-surface-400"
           )}>
             高数智学
@@ -69,7 +94,7 @@ export const Header: React.FC<HeaderProps> = ({ variant = 'default', onLoginClic
           {/* 角色标识 */}
           {isLoggedIn && (
             <span className={cn(
-              "ml-1 shrink-0 whitespace-nowrap px-2 py-0.5 text-xs font-medium rounded-full",
+              "ml-1 hidden shrink-0 whitespace-nowrap px-2 py-0.5 text-xs font-medium rounded-full xl:inline-flex",
               isTeacher
                 ? "bg-emerald-100 text-emerald-700 dark:bg-emerald-900/50 dark:text-emerald-400"
                 : "bg-primary-100 text-primary-700 dark:bg-primary-900/50 dark:text-primary-400"
@@ -79,7 +104,7 @@ export const Header: React.FC<HeaderProps> = ({ variant = 'default', onLoginClic
           )}
         </Link>
 
-        {/* Desktop Navigation - Only show when authenticated */}
+        {/* Main navigation - only show when authenticated */}
         {isLoggedIn && (
           <ResponsiveNavigation items={navItems} isTeacher={isTeacher} />
         )}
@@ -91,21 +116,42 @@ export const Header: React.FC<HeaderProps> = ({ variant = 'default', onLoginClic
 
           {isLoggedIn ? (
             <div className="flex items-center space-x-3">
+              {(user?.role === 'student' || user?.role === 'teacher') && (
+                <MessagePreviewBell cacheKey={user.id} isTeacher={isTeacher} />
+              )}
               <span className={cn("hidden sm:inline-block text-sm font-medium", isDark ? "text-surface-300" : "text-surface-700 dark:text-surface-300")}>
                 你好，{user?.name || (isTeacher ? '老师' : '同学')}
               </span>
-              <div className={cn(
-                "h-9 w-9 rounded-full border shadow-sm flex items-center justify-center font-bold text-sm cursor-pointer transition-all group relative",
-                isTeacher
-                  ? "bg-linear-to-tr from-emerald-100 to-teal-100 dark:from-emerald-900 dark:to-teal-900 border-white dark:border-surface-700 text-emerald-700 dark:text-emerald-300 hover:ring-2 hover:ring-emerald-200 dark:hover:ring-emerald-700"
-                  : "bg-linear-to-tr from-primary-100 to-secondary-100 dark:from-primary-900 dark:to-secondary-900 border-white dark:border-surface-700 text-primary-700 dark:text-primary-300 hover:ring-2 hover:ring-primary-200 dark:hover:ring-primary-700"
-              )}>
-                <User className="w-5 h-5" />
-                {/* Quick Logout Dropdown (Simulated) */}
-                <div className="absolute top-full right-0 mt-2 w-36 py-2 bg-white dark:bg-surface-800 rounded-lg shadow-lg border border-surface-100 dark:border-surface-700 opacity-0 invisible group-hover:opacity-100 group-hover:visible transition-all duration-200 transform origin-top-right">
-                  {!isTeacher && (
+              <div ref={userMenuRootRef} className="relative shrink-0">
+                <button
+                  ref={userMenuTriggerRef}
+                  type="button"
+                  onClick={() => setIsUserMenuOpen((open) => !open)}
+                  aria-label="用户菜单"
+                  aria-haspopup="menu"
+                  aria-controls={isUserMenuOpen ? userMenuId : undefined}
+                  aria-expanded={isUserMenuOpen}
+                  className={cn(
+                    "flex h-9 w-9 items-center justify-center rounded-full border text-sm font-bold shadow-sm transition-all focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary-500",
+                    isTeacher
+                      ? "border-white bg-linear-to-tr from-emerald-100 to-teal-100 text-emerald-700 hover:ring-2 hover:ring-emerald-200 dark:border-surface-700 dark:from-emerald-900 dark:to-teal-900 dark:text-emerald-300 dark:hover:ring-emerald-700"
+                      : "border-white bg-linear-to-tr from-primary-100 to-secondary-100 text-primary-700 hover:ring-2 hover:ring-primary-200 dark:border-surface-700 dark:from-primary-900 dark:to-secondary-900 dark:text-primary-300 dark:hover:ring-primary-700"
+                  )}
+                >
+                  <User className="h-5 w-5" />
+                </button>
+                {isUserMenuOpen && (
+                  <div
+                    id={userMenuId}
+                    role="menu"
+                    aria-label="用户菜单"
+                    className="absolute right-0 top-full z-50 mt-2 w-36 origin-top-right rounded-lg border border-surface-100 bg-white py-2 shadow-lg dark:border-surface-700 dark:bg-surface-800"
+                  >
+                  {user?.role === 'student' && (
                     <Link
                       to="/my-class"
+                      role="menuitem"
+                      onClick={() => setIsUserMenuOpen(false)}
                       className="w-full px-4 py-2 text-left text-sm text-surface-700 dark:text-surface-300 hover:bg-surface-50 dark:hover:bg-surface-700 flex items-center"
                     >
                       <Users className="w-4 h-4 mr-2" />
@@ -114,14 +160,20 @@ export const Header: React.FC<HeaderProps> = ({ variant = 'default', onLoginClic
                   )}
                   <Link
                     to={isTeacher ? "/teacher/profile" : "/profile"}
+                    role="menuitem"
+                    onClick={() => setIsUserMenuOpen(false)}
                     className="w-full px-4 py-2 text-left text-sm text-surface-700 dark:text-surface-300 hover:bg-surface-50 dark:hover:bg-surface-700 flex items-center"
                   >
                     <User className="w-4 h-4 mr-2" />
                     个人中心
                   </Link>
                   <button
-                    onClick={handleLogout}
+                    onClick={() => {
+                      setIsUserMenuOpen(false);
+                      void handleLogout();
+                    }}
                     type="button"
+                    role="menuitem"
                     disabled={isLoggingOut}
                     className="w-full px-4 py-2 text-left text-sm text-surface-700 dark:text-surface-300 hover:bg-surface-50 dark:hover:bg-surface-700 flex items-center"
                   >
@@ -132,7 +184,8 @@ export const Header: React.FC<HeaderProps> = ({ variant = 'default', onLoginClic
                     )}
                     {isLoggingOut ? '退出中...' : '退出登录'}
                   </button>
-                </div>
+                  </div>
+                )}
               </div>
             </div>
           ) : (

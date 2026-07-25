@@ -23,13 +23,13 @@ func DecodeStrict(w http.ResponseWriter, r *http.Request, maxBytes int64, target
 	defer r.Body.Close()
 	decoder := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxBytes))
 	if err := decoder.Decode(target); err != nil {
-		return err
+		return normalizeRequestDecodeError(err)
 	}
 	if err := decoder.Decode(&struct{}{}); err != io.EOF {
 		if err == nil {
 			return ErrTrailingData
 		}
-		return err
+		return normalizeRequestDecodeError(err)
 	}
 	return nil
 }
@@ -37,6 +37,10 @@ func DecodeStrict(w http.ResponseWriter, r *http.Request, maxBytes int64, target
 // DecodeStrictOrDetailError decodes a strict JSON request body and writes the common 422 detail error on failure.
 func DecodeStrictOrDetailError(w http.ResponseWriter, r *http.Request, maxBytes int64, target any) bool {
 	if err := DecodeStrict(w, r, maxBytes, target); err != nil {
+		if errors.Is(err, ErrBodyTooLarge) {
+			WriteDetailError(w, http.StatusRequestEntityTooLarge, "PAYLOAD_TOO_LARGE", "请求体超过大小限制")
+			return false
+		}
 		WriteDetailError(w, http.StatusUnprocessableEntity, "VALIDATION_ERROR", "请求体格式错误")
 		return false
 	}
@@ -46,6 +50,10 @@ func DecodeStrictOrDetailError(w http.ResponseWriter, r *http.Request, maxBytes 
 // DecodeStrictOrBadRequest decodes a strict JSON request body and writes the common 400 bad JSON detail error on failure.
 func DecodeStrictOrBadRequest(w http.ResponseWriter, r *http.Request, maxBytes int64, target any) bool {
 	if err := DecodeStrict(w, r, maxBytes, target); err != nil {
+		if errors.Is(err, ErrBodyTooLarge) {
+			WriteDetailError(w, http.StatusRequestEntityTooLarge, "PAYLOAD_TOO_LARGE", "请求体超过大小限制")
+			return false
+		}
 		WriteDetailError(w, http.StatusBadRequest, "BAD_REQUEST", "请求体不是有效 JSON")
 		return false
 	}
@@ -74,6 +82,14 @@ func Write(w http.ResponseWriter, status int, payload any) {
 
 func WriteDetailError(w http.ResponseWriter, status int, code string, message string) {
 	Write(w, status, DetailError{Detail: message, Code: code, Message: message})
+}
+
+func normalizeRequestDecodeError(err error) error {
+	var maxBytesError *http.MaxBytesError
+	if errors.As(err, &maxBytesError) {
+		return ErrBodyTooLarge
+	}
+	return err
 }
 
 type limitedReader struct {

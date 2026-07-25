@@ -300,6 +300,24 @@ func (s *Service) DecodeAccessToken(token string) (Principal, bool) {
 	return Principal{UserID: claims.Subject, Role: claims.Role}, true
 }
 
+// DecodeActiveAccessToken verifies the token and the account's current active state.
+// Message-center routes use this method so account suspension takes effect before
+// an already-issued access token expires.
+func (s *Service) DecodeActiveAccessToken(ctx context.Context, token string) (Principal, bool, error) {
+	principal, ok := s.DecodeAccessToken(token)
+	if !ok {
+		return Principal{}, false, nil
+	}
+	account, found, err := s.users.GetByID(ctx, principal.UserID)
+	if err != nil {
+		return Principal{}, false, fmt.Errorf("get access-token user: %w", err)
+	}
+	if !found || !account.IsActive || account.Role != principal.Role {
+		return Principal{}, false, nil
+	}
+	return principal, true, nil
+}
+
 // DecodeRefreshToken returns context for a valid refresh token and a legacy-compatible failure detail.
 func (s *Service) DecodeRefreshToken(token string) (RefreshPrincipal, string, bool) {
 	claims, err := s.tokens.Decode(token)

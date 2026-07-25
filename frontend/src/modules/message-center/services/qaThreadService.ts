@@ -1,4 +1,5 @@
 import { apiClient } from '@/libs/http/apiClient';
+import { buildQueryString } from '@/modules/message-center/services/queryParams';
 
 export interface ThreadMessage {
   id: string;
@@ -13,21 +14,25 @@ export interface StudentThreadItem {
   teacher_id: string;
   teacher_name: string;
   source: string;
-  context: string;
+  context_preview: string;
   status: string;
+  class_id?: string;
+  class_name?: string;
+  unread: boolean;
   last_update: string;
 }
 
 export interface TeacherThreadItem {
   id: string;
   student_name: string;
+  class_id?: string;
   class_name: string;
   title: string;
   source: string;
   knowledge_point: string;
   resource_name?: string;
   status: string;
-  context: string;
+  context_preview: string;
   last_update: string;
 }
 
@@ -35,6 +40,7 @@ export interface ThreadDetail {
   id: string;
   student_name?: string;
   teacher_name?: string;
+  class_id?: string;
   class_name?: string;
   title: string;
   teacher_id?: string;
@@ -47,10 +53,11 @@ export interface ThreadDetail {
   messages_total: number;
   messages_page: number;
   messages_page_size: number;
+  read_through_message_id?: string;
 }
 
-export interface ListResponse {
-  items: (StudentThreadItem | TeacherThreadItem)[];
+export interface ListResponse<T extends StudentThreadItem | TeacherThreadItem = StudentThreadItem | TeacherThreadItem> {
+  items: T[];
   total: number;
   page: number;
   page_size: number;
@@ -58,25 +65,17 @@ export interface ListResponse {
 
 const BASE = '/qa-threads';
 
-const toParams = (params: Record<string, string | number | undefined>) => {
-  const searchParams = new URLSearchParams();
-  Object.entries(params).forEach(([k, v]) => {
-    if (v !== undefined && v !== '') searchParams.set(k, String(v));
-  });
-  return searchParams.toString();
-};
-
 export const qaThreadService = {
-  async list(params: {
+  async list<T extends StudentThreadItem | TeacherThreadItem = StudentThreadItem | TeacherThreadItem>(params: {
     search?: string;
     status?: string;
     class_name?: string;
     teacher_id?: string;
     page?: number;
     page_size?: number;
-  }, signal?: AbortSignal): Promise<ListResponse> {
-    const qs = toParams(params);
-    const { data } = await apiClient.get<ListResponse>(`${BASE}?${qs}`, { signal });
+  }, signal?: AbortSignal): Promise<ListResponse<T>> {
+    const qs = buildQueryString(params);
+    const { data } = await apiClient.get<ListResponse<T>>(`${BASE}?${qs}`, { signal });
     return data;
   },
 
@@ -87,6 +86,10 @@ export const qaThreadService = {
   ): Promise<ThreadDetail> {
     const { data } = await apiClient.get<ThreadDetail>(`${BASE}/${id}`, { params, signal });
     return data;
+  },
+
+  async acknowledgeRead(id: string, throughMessageId: string): Promise<void> {
+    await apiClient.put(`${BASE}/${id}/read`, { through_message_id: throughMessageId });
   },
 
   async create(body: {

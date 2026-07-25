@@ -6,6 +6,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
 
 	adminuserapp "mathstudy/backend-go/internal/application/adminuser"
@@ -107,12 +108,17 @@ func (r UserRepository) UpdateUserStatus(ctx context.Context, userID string, sta
 func (r UserRepository) DeleteUser(ctx context.Context, userID string) (bool, error) {
 	deleted := false
 	err := r.withTx(ctx, func(tx UserRepository) error {
-		exists, err := tx.Exists(ctx, `SELECT EXISTS(SELECT 1 FROM public.users WHERE id = $1)`, userID)
+		var lockedUserID string
+		err := tx.DB().QueryRow(ctx, `
+			SELECT id
+			FROM public.users
+			WHERE id = $1
+			FOR UPDATE`, userID).Scan(&lockedUserID)
+		if err == pgx.ErrNoRows {
+			return nil
+		}
 		if err != nil {
 			return err
-		}
-		if !exists {
-			return nil
 		}
 		statements := []string{
 			`DELETE FROM public.session_messages WHERE session_id IN (SELECT id FROM public.learning_sessions WHERE student_id = $1)`,
