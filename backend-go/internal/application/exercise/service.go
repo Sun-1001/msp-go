@@ -38,11 +38,15 @@ var (
 	ErrExerciseChanged         = errors.New("exercise changed while grading")
 	ErrAIGenerationUnavailable = errors.New("AI exercise generation is unavailable")
 	ErrAIGenerationTimeout     = errors.New("AI exercise generation timed out")
+	ErrGeneratedContentInvalid = errors.New("generated exercise content is invalid")
 )
 
 const (
-	ExerciseSourceClass       = "class"
-	ExerciseSourceAIGenerated = "ai_generated"
+	ExerciseSourceClass        = "class"
+	ExerciseSourceAIGenerated  = "ai_generated"
+	QuestionTypeMultipleChoice = "multiple_choice"
+	QuestionTypeShortAnswer    = "short_answer"
+	QuestionBlankMarker        = "＿＿＿＿"
 )
 
 // Repository is the persistence surface required by exercise use cases.
@@ -224,15 +228,17 @@ type SubmitRequest struct {
 
 // GenerateExerciseRequest stores a student's AI self-practice selection.
 type GenerateExerciseRequest struct {
-	ConceptID  string
-	Difficulty float64
+	ConceptID    string
+	Difficulty   float64
+	QuestionType string
 }
 
 // GenerationInput carries trusted knowledge context into the question generator.
 type GenerationInput struct {
-	Concept    KnowledgeConcept
-	Difficulty float64
-	Feedback   string // 首次生成为空；重试时携带上次验证失败原因
+	Concept      KnowledgeConcept
+	Difficulty   float64
+	QuestionType string
+	Feedback     string // 首次生成为空；重试时携带上次验证失败原因
 }
 
 // GeneratedQuestion stores a validated, persistable AI exercise candidate.
@@ -258,7 +264,7 @@ type QuestionGenerator interface {
 
 // verifiedGenerated 承载独立求解验证通过的产物。
 type verifiedGenerated struct {
-	Answer     string   // 四选一为经验证的选项文本（判题所需）
+	Answer     string   // 经验证的标准答案；四选一映射为选项文本
 	Steps      []string // solver 独立生成、经步骤验证的解析
 	MathAnswer string   // solver 返回的数学表达式
 }
@@ -701,7 +707,13 @@ func (s *Service) verifyGenerated(ctx context.Context, studentID string, generat
 // GenerateExercise creates and persists one student-owned AI self-practice question.
 func (s *Service) GenerateExercise(ctx context.Context, userID string, request GenerateExerciseRequest) (*ExerciseResponse, error) {
 	request.ConceptID = strings.TrimSpace(request.ConceptID)
-	if request.ConceptID == "" || len(request.ConceptID) > 36 || math.IsNaN(request.Difficulty) || math.IsInf(request.Difficulty, 0) || request.Difficulty < 0 || request.Difficulty > 1 {
+	request.QuestionType = strings.ToLower(strings.TrimSpace(request.QuestionType))
+	if request.QuestionType == "" {
+		request.QuestionType = QuestionTypeMultipleChoice
+	}
+	if request.ConceptID == "" || len(request.ConceptID) > 36 ||
+		(request.QuestionType != QuestionTypeMultipleChoice && request.QuestionType != QuestionTypeShortAnswer) ||
+		math.IsNaN(request.Difficulty) || math.IsInf(request.Difficulty, 0) || request.Difficulty < 0 || request.Difficulty > 1 {
 		return nil, ErrBadRequest
 	}
 	if s.questionGenerator == nil {
@@ -726,11 +738,19 @@ func (s *Service) GenerateExercise(ctx context.Context, userID string, request G
 		}
 
 		generated, err = s.questionGenerator.GenerateQuestion(ctx, GenerationInput{
-			Concept:    concept,
-			Difficulty: request.Difficulty,
-			Feedback:   feedback,
+			Concept:      concept,
+			Difficulty:   request.Difficulty,
+			QuestionType: request.QuestionType,
+			Feedback:     feedback,
 		})
 		if err != nil {
+			if errors.Is(err, ErrGeneratedContentInvalid) {
+				lastVerifyErr = generatedContentInvalid("生成题目 JSON 或格式不符合要求")
+				if attempt == maxAttempts {
+					return nil, ErrAIGenerationUnavailable
+				}
+				continue
+			}
 			return nil, normalizeQuestionGenerationError(err)
 		}
 
@@ -738,7 +758,7 @@ func (s *Service) GenerateExercise(ctx context.Context, userID string, request G
 		generated.ConceptIDs = []string{concept.ID}
 		generated.KnowledgePointNames = []string{concept.Name}
 		generated = normalizeGeneratedQuestion(generated)
-		if !validGeneratedQuestion(generated) {
+		if generated.Type != request.QuestionType || !validGeneratedQuestion(generated) {
 			lastVerifyErr = generatedContentInvalid("生成题目格式或内容不符合要求")
 			if attempt == maxAttempts {
 				return nil, ErrAIGenerationUnavailable
@@ -1911,10 +1931,19 @@ func validGeneratedQuestion(question GeneratedQuestion) bool {
 	if question.Title == "" || len(question.Title) > 500 || question.Body == "" || len(question.Body) > 20_000 {
 		return false
 	}
-	if question.Type != "multiple_choice" || question.AnswerType != "text" || question.Answer == "" || len(question.Answer) > 2_000 {
+	if question.Answer == "" || len(question.Answer) > 2_000 {
 		return false
 	}
-	if len(question.Options) != 4 || !slices.Contains(question.Options, question.Answer) {
+	switch question.Type {
+	case QuestionTypeMultipleChoice:
+		if question.AnswerType != "text" || len(question.Options) != 4 || !slices.Contains(question.Options, question.Answer) {
+			return false
+		}
+	case QuestionTypeShortAnswer:
+		if (question.AnswerType != "numeric" && question.AnswerType != "expression") || len(question.Options) != 0 || strings.Count(question.Body, QuestionBlankMarker) != 1 {
+			return false
+		}
+	default:
 		return false
 	}
 	for _, option := range question.Options {

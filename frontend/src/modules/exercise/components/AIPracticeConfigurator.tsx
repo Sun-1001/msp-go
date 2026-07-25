@@ -3,6 +3,7 @@ import { AlertCircle, RefreshCw, Sparkles } from 'lucide-react';
 import { Button } from '@/components/ui/Button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/Card';
 import { Select, type SelectOption } from '@/components/ui/Select';
+import type { GenerateQuestionType } from '@/modules/exercise/services/exerciseService';
 
 const difficultyOptions: SelectOption[] = [
   { value: '0.15', label: '简单' },
@@ -10,10 +11,16 @@ const difficultyOptions: SelectOption[] = [
   { value: '0.85', label: '困难' },
 ];
 
+const questionTypeOptions: SelectOption[] = [
+  { value: 'multiple_choice', label: '选择题' },
+  { value: 'short_answer', label: '填空题' },
+];
+
 export interface AIPracticeConfiguratorProps {
   knowledgeOptions: SelectOption[];
   selectedConceptId: string;
   difficulty: number;
+  questionType: GenerateQuestionType;
   isLoadingKnowledge: boolean;
   isGenerating: boolean;
   isSubmitting: boolean;
@@ -21,6 +28,7 @@ export interface AIPracticeConfiguratorProps {
   hasQuestion: boolean;
   onConceptChange: (conceptId: string) => void;
   onDifficultyChange: (difficulty: number) => void;
+  onQuestionTypeChange: (questionType: GenerateQuestionType) => void;
   onGenerate: () => void | Promise<void>;
   onRetryKnowledge?: () => void | Promise<void>;
 }
@@ -29,6 +37,7 @@ export const AIPracticeConfigurator: FC<AIPracticeConfiguratorProps> = ({
   knowledgeOptions,
   selectedConceptId,
   difficulty,
+  questionType,
   isLoadingKnowledge,
   isGenerating,
   isSubmitting,
@@ -36,6 +45,7 @@ export const AIPracticeConfigurator: FC<AIPracticeConfiguratorProps> = ({
   hasQuestion,
   onConceptChange,
   onDifficultyChange,
+  onQuestionTypeChange,
   onGenerate,
   onRetryKnowledge,
 }) => {
@@ -55,7 +65,7 @@ export const AIPracticeConfigurator: FC<AIPracticeConfiguratorProps> = ({
           AI 自主练习
         </CardTitle>
       </CardHeader>
-      <CardContent className="grid gap-4 p-5 sm:grid-cols-[minmax(0,1fr)_10rem_auto] sm:items-end">
+      <CardContent className="grid gap-4 p-5 sm:grid-cols-[minmax(0,1fr)_8rem_8rem_auto] sm:items-end">
         <div className="min-w-0 space-y-1.5">
           <label
             htmlFor="ai-practice-concept"
@@ -71,6 +81,22 @@ export const AIPracticeConfigurator: FC<AIPracticeConfiguratorProps> = ({
             onChange={onConceptChange}
             disabled={isLoadingKnowledge || !hasKnowledgeOptions}
             aria-describedby={error ? 'ai-practice-error' : undefined}
+          />
+        </div>
+
+        <div className="space-y-1.5">
+          <label
+            htmlFor="ai-practice-question-type"
+            className="text-sm font-medium text-surface-700 dark:text-surface-300"
+          >
+            题型
+          </label>
+          <Select
+            id="ai-practice-question-type"
+            options={questionTypeOptions}
+            value={questionType}
+            onChange={(value) => onQuestionTypeChange(value as GenerateQuestionType)}
+            disabled={isLoadingKnowledge || isGenerating}
           />
         </div>
 
@@ -116,7 +142,7 @@ export const AIPracticeConfigurator: FC<AIPracticeConfiguratorProps> = ({
           <div
             id="ai-practice-error"
             role="alert"
-            className="flex items-start gap-2 text-sm text-red-600 dark:text-red-400 sm:col-span-3"
+            className="flex items-start gap-2 text-sm text-red-600 dark:text-red-400 sm:col-span-4"
           >
             <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" aria-hidden="true" />
             <span>{error}</span>
