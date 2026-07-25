@@ -147,8 +147,9 @@ type submitRequest struct {
 }
 
 type generateRequest struct {
-	ConceptID  string   `json:"concept_id"`
-	Difficulty *float64 `json:"difficulty"`
+	ConceptID    string   `json:"concept_id"`
+	Difficulty   *float64 `json:"difficulty"`
+	QuestionType string   `json:"question_type"`
 }
 
 func (h *Handler) next(w http.ResponseWriter, r *http.Request) {
@@ -186,6 +187,14 @@ func (h *Handler) generate(w http.ResponseWriter, r *http.Request) {
 		writeExerciseError(w, http.StatusUnprocessableEntity, "VALIDATION_ERROR", "difficulty 必须在 0 到 1 之间")
 		return
 	}
+	request.QuestionType = strings.ToLower(strings.TrimSpace(request.QuestionType))
+	if request.QuestionType == "" {
+		request.QuestionType = exerciseapp.QuestionTypeMultipleChoice
+	}
+	if request.QuestionType != exerciseapp.QuestionTypeMultipleChoice && request.QuestionType != exerciseapp.QuestionTypeShortAnswer {
+		writeExerciseError(w, http.StatusUnprocessableEntity, "VALIDATION_ERROR", "question_type 必须是 multiple_choice 或 short_answer")
+		return
+	}
 	lease, ok := h.acquireAILease(w, r, principal.UserID, "exercise_generate", "")
 	if !ok {
 		return
@@ -196,8 +205,9 @@ func (h *Handler) generate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	response, err := h.service.GenerateExercise(r.Context(), principal.UserID, exerciseapp.GenerateExerciseRequest{
-		ConceptID:  request.ConceptID,
-		Difficulty: *request.Difficulty,
+		ConceptID:    request.ConceptID,
+		Difficulty:   *request.Difficulty,
+		QuestionType: request.QuestionType,
 	})
 	if err != nil {
 		switch {
