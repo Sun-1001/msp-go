@@ -1,4 +1,5 @@
 import { apiClient } from '@/libs/http/apiClient';
+import { buildQueryString } from '@/modules/message-center/services/queryParams';
 
 export interface Message {
   id: string;
@@ -28,6 +29,7 @@ export interface ConversationDetail extends ConversationItem {
   messages_total: number;
   messages_page: number;
   messages_page_size: number;
+  read_through_message_id?: string;
 }
 
 export interface ListResponse {
@@ -39,19 +41,11 @@ export interface ListResponse {
 
 export interface Contact {
   id: string;
-  teacher_name: string;
+  display_name: string;
   scope: string;
 }
 
 const BASE = '/conversations';
-
-const toParams = (params: Record<string, string | number | undefined>) => {
-  const searchParams = new URLSearchParams();
-  Object.entries(params).forEach(([k, v]) => {
-    if (v !== undefined && v !== '') searchParams.set(k, String(v));
-  });
-  return searchParams.toString();
-};
 
 export const conversationService = {
   async list(params: {
@@ -60,15 +54,19 @@ export const conversationService = {
     class_name?: string;
     page?: number;
     page_size?: number;
-  }): Promise<ListResponse> {
-    const qs = toParams(params);
-    const { data } = await apiClient.get<ListResponse>(`${BASE}?${qs}`);
+  }, signal?: AbortSignal): Promise<ListResponse> {
+    const qs = buildQueryString(params);
+    const { data } = await apiClient.get<ListResponse>(`${BASE}?${qs}`, { signal });
     return data;
   },
 
-  async get(id: string, params?: { messages_page?: number; messages_page_size?: number }): Promise<ConversationDetail> {
-    const { data } = await apiClient.get<ConversationDetail>(`${BASE}/${id}`, { params });
+  async get(id: string, params?: { messages_page?: number; messages_page_size?: number }, signal?: AbortSignal): Promise<ConversationDetail> {
+    const { data } = await apiClient.get<ConversationDetail>(`${BASE}/${id}`, { params, signal });
     return data;
+  },
+
+  async acknowledgeRead(id: string, throughMessageId: string): Promise<void> {
+    await apiClient.put(`${BASE}/${id}/read`, { through_message_id: throughMessageId });
   },
 
   async create(body: {
@@ -97,10 +95,6 @@ export const conversationService = {
 
   async archive(id: string): Promise<void> {
     await apiClient.put(`${BASE}/${id}/archive`);
-  },
-
-  async delete(id: string): Promise<void> {
-    await apiClient.delete(`${BASE}/${id}`);
   },
 
   async contacts(): Promise<{ contacts: Contact[] }> {

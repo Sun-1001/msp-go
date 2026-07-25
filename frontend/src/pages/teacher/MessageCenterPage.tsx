@@ -1,4 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useLocation, useSearchParams } from 'react-router-dom';
 import { MainLayout } from '@/components/layout/MainLayout';
 import { Badge } from '@/components/ui/Badge';
 import { Button } from '@/components/ui/Button';
@@ -9,6 +10,8 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/Tabs';
 import { useToast } from '@/components/ui/Toast';
 import {
   Bell,
+  Archive,
+  ArrowLeft,
   CheckCircle2,
   HelpCircle,
   Loader2,
@@ -18,9 +21,11 @@ import {
   Search,
   Send,
   Users,
+  UserRound,
 } from 'lucide-react';
 import { cn } from '@/libs/utils/cn';
 import { formatRelativeTime } from '@/libs/utils/dateFormat';
+import { useSerialPolling } from '@/hooks/useSerialPolling';
 import { classService } from '@/modules/classroom/services/classService';
 import {
   conversationService,
@@ -30,26 +35,45 @@ import {
 import {
   noticeService,
   type TeacherNoticeItem,
+  type TeacherNoticeListItem,
 } from '@/modules/message-center/services/noticeService';
 import {
   qaThreadService,
   type TeacherThreadItem,
   type ThreadDetail,
 } from '@/modules/message-center/services/qaThreadService';
+import {
+  refreshMessageCenterSummaryAfterMutation,
+  useMessageCenterSummary,
+} from '@/modules/message-center/components/useMessageCenterSummary';
+import {
+  useObservedVisibility,
+  usePageVisibility,
+} from '@/modules/message-center/components/useObservedVisibility';
+import {
+  fetchLoadedPageRange,
+  fetchStableOffsetMessageWindow,
+  hasMinimumGlobalSearchCharacters,
+  latestPageChanged,
+  mergeByID,
+  mergeLatestPageByID,
+  mergeMessagesByID,
+  selectListItemID,
+} from '@/modules/message-center/pageUtils';
+import { TabCount } from '@/modules/message-center/TabCount';
 
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
-function matchKeywords(haystack: string, search: string): boolean {
-  if (!search.trim()) return true;
-  const keywords = search.trim().toLowerCase().split(/\s+/);
-  const lower = haystack.toLowerCase();
-  return keywords.every((kw) => lower.includes(kw));
-}
-
 const privateStatuses = ['全部', '未读', '待回复'];
 const noticeStatuses = ['全部', '有未确认', '全部确认'];
 const answerStatuses = ['全部', '待回复', '已回复', '已解决', '需跟进'];
+const listPageSize = 50;
+
+interface ListLoadOptions {
+  refreshLoadedPages?: boolean;
+  signal?: AbortSignal;
+}
 const threadStatusVariant: Record<string, 'warning' | 'default' | 'success' | 'secondary'> = {
   '待回复': 'warning',
   '已回复': 'default',
@@ -57,14 +81,11 @@ const threadStatusVariant: Record<string, 'warning' | 'default' | 'success' | 's
   '需跟进': 'secondary',
 };
 
-const renderTabCount = (count: number) => {
-  if (count <= 0) return null;
-  return (
-    <span className="ml-2 inline-flex h-5 min-w-5 items-center justify-center rounded-full bg-red-500 px-1.5 text-xs font-semibold leading-none text-white">
-      {count > 99 ? '99+' : count}
-    </span>
-  );
-};
+const teacherTabs = new Set(['private', 'notices', 'answers']);
+
+function parseTeacherTab(value: string | null): string {
+  return value && teacherTabs.has(value) ? value : 'private';
+}
 
 interface ConvItem {
   id: string;
@@ -76,23 +97,42 @@ interface ConvItem {
   pendingReply: boolean;
 }
 
-function mergeMessages<T extends { id: string }>(current: T[], incoming: T[]): T[] {
-  const byID = new Map(current.map((item) => [item.id, item]));
-  incoming.forEach((item) => byID.set(item.id, item));
-  return [...byID.values()];
-}
-
 // ---------------------------------------------------------------------------
 // Page
 // ---------------------------------------------------------------------------
 export const MessageCenterPage: React.FC = () => {
+  const location = useLocation();
+  const [searchParams, setSearchParams] = useSearchParams();
+  const initialTab = parseTeacherTab(searchParams.get('tab'));
+  const initialItemID = searchParams.get('id') ?? '';
   const conversationRequest = useRef(0);
+  const noticeRequest = useRef(0);
   const threadRequest = useRef(0);
+  const conversationListRequest = useRef(0);
+  const noticeListRequest = useRef(0);
+  const threadListRequest = useRef(0);
+  const reloadRequest = useRef(0);
+  const initialLoadStarted = useRef(false);
+  const lastListQuery = useRef(`${initialTab}\u0000\u0000全部\u0000全部\u0000全部`);
+  const handledLocationKey = useRef(location.key);
+  const pendingDeepLink = useRef(initialItemID ? { tab: initialTab, id: initialItemID } : null);
+  const contactSearchRequest = useRef(0);
+  const threadStatusUpdateRef = useRef('');
+  const acknowledgedConversationCutoff = useRef('');
+  const acknowledgingConversationCutoff = useRef('');
   const { toast } = useToast();
+  const {
+    summary,
+    error: summaryError,
+    isRefreshing: summaryRefreshing,
+    refresh: refreshSummary,
+  } = useMessageCenterSummary();
+  const pageVisible = usePageVisibility();
+  const { ref: conversationDetailRef, isVisible: conversationDetailVisible } = useObservedVisibility<HTMLDivElement>();
   // ---- state ---------------------------------------------------------
   const [searchTerm, setSearchTerm] = useState('');
   const [serverSearch, setServerSearch] = useState('');
-  const [activeTab, setActiveTab] = useState('private');
+  const [activeTab, setActiveTab] = useState(initialTab);
   const [initialLoad, setInitialLoad] = useState(true);
   const [loading, setLoading] = useState(false);
   const [loadError, setLoadError] = useState('');
@@ -100,10 +140,17 @@ export const MessageCenterPage: React.FC = () => {
   // conversations
   const [convItems, setConvItems] = useState<ConvItem[]>([]);
   const [activeConv, setActiveConv] = useState<ConversationDetail | null>(null);
-  const [activeConvId, setActiveConvId] = useState('');
-  const [messageDraft, setMessageDraft] = useState('');
+  const [activeConvId, setActiveConvId] = useState(initialTab === 'private' ? initialItemID : '');
+  const activeConvIDRef = useRef(activeConvId);
+  const conversationListModeRef = useRef(false);
+  const conversationDetailLoadingRef = useRef(Boolean(activeConvId));
+  const [conversationDetailLoading, setConversationDetailLoading] = useState(Boolean(activeConvId));
+  const [conversationDetailError, setConversationDetailError] = useState('');
+  const [messageDrafts, setMessageDrafts] = useState<Record<string, string>>({});
+  const messageDraft = activeConvId ? messageDrafts[activeConvId] ?? '' : '';
   const [sendingMsg, setSendingMsg] = useState(false);
   const [loadingOlderMessages, setLoadingOlderMessages] = useState(false);
+  const loadingOlderMessagesRef = useRef(false);
   const [conversationPage, setConversationPage] = useState(1);
   const [conversationTotal, setConversationTotal] = useState(0);
   const [privateStatus, setPrivateStatus] = useState('全部');
@@ -118,8 +165,13 @@ export const MessageCenterPage: React.FC = () => {
   const [creatingConv, setCreatingConv] = useState(false);
 
   // notices
-  const [notices, setNotices] = useState<TeacherNoticeItem[]>([]);
-  const [activeNoticeId, setActiveNoticeId] = useState('');
+  const [notices, setNotices] = useState<TeacherNoticeListItem[]>([]);
+  const [activeNotice, setActiveNotice] = useState<TeacherNoticeItem | null>(null);
+  const [activeNoticeId, setActiveNoticeId] = useState(initialTab === 'notices' ? initialItemID : '');
+  const activeNoticeIDRef = useRef(activeNoticeId);
+  const noticeDetailLoadingRef = useRef(Boolean(activeNoticeId));
+  const [noticeDetailLoading, setNoticeDetailLoading] = useState(false);
+  const [noticeDetailError, setNoticeDetailError] = useState('');
   const [noticeStatus, setNoticeStatus] = useState('全部');
   const [noticeModalOpen, setNoticeModalOpen] = useState(false);
   const [noticeTitle, setNoticeTitle] = useState('');
@@ -132,16 +184,121 @@ export const MessageCenterPage: React.FC = () => {
   // threads
   const [threads, setThreads] = useState<TeacherThreadItem[]>([]);
   const [activeThread, setActiveThread] = useState<ThreadDetail | null>(null);
-  const [activeThreadId, setActiveThreadId] = useState('');
+  const [activeThreadId, setActiveThreadId] = useState(initialTab === 'answers' ? initialItemID : '');
+  const activeThreadIDRef = useRef(activeThreadId);
+  const threadDetailLoadingRef = useRef(Boolean(activeThreadId));
+  const [threadDetailLoading, setThreadDetailLoading] = useState(Boolean(activeThreadId));
+  const [threadDetailError, setThreadDetailError] = useState('');
   const [answerStatus, setAnswerStatus] = useState('全部');
-  const [answerDraft, setAnswerDraft] = useState('');
+  const [answerDrafts, setAnswerDrafts] = useState<Record<string, string>>({});
+  const answerDraft = activeThreadId ? answerDrafts[activeThreadId] ?? '' : '';
   const [sendingAnswer, setSendingAnswer] = useState(false);
+  const [updatingThreadStatusId, setUpdatingThreadStatusId] = useState('');
   const [loadingOlderThreadMessages, setLoadingOlderThreadMessages] = useState(false);
+  const loadingOlderThreadMessagesRef = useRef(false);
   const [threadPage, setThreadPage] = useState(1);
   const [threadTotal, setThreadTotal] = useState(0);
   const [loadingMoreList, setLoadingMoreList] = useState('');
+  const loadingMoreListRef = useRef(false);
+  const [listLoadError, setListLoadError] = useState('');
+  const convItemsRef = useRef(convItems);
+  const noticesRef = useRef(notices);
+  const threadsRef = useRef(threads);
+  const conversationTotalRef = useRef(conversationTotal);
+  const noticeTotalRef = useRef(noticeTotal);
+  const threadTotalRef = useRef(threadTotal);
+  const conversationQueryRef = useRef(`${serverSearch}\u0000${privateStatus}`);
+  const noticeQueryRef = useRef(`${serverSearch}\u0000${noticeStatus}`);
+  const threadQueryRef = useRef(`${serverSearch}\u0000${answerStatus}`);
+  conversationQueryRef.current = `${serverSearch}\u0000${privateStatus}`;
+  noticeQueryRef.current = `${serverSearch}\u0000${noticeStatus}`;
+  threadQueryRef.current = `${serverSearch}\u0000${answerStatus}`;
+  convItemsRef.current = convItems;
+  noticesRef.current = notices;
+  threadsRef.current = threads;
+  conversationTotalRef.current = conversationTotal;
+  noticeTotalRef.current = noticeTotal;
+  threadTotalRef.current = threadTotal;
+  const tabCounts = {
+    private: summary?.conversation_count ?? 0,
+    notices: summary?.notice_count ?? 0,
+    answers: summary?.thread_count ?? 0,
+  };
 
   const [noticeClasses, setNoticeClasses] = useState<Array<{ id: string; name: string }>>([]);
+
+  const resetNewConversationForm = useCallback(() => {
+    contactSearchRequest.current++;
+    setSelectedStudentId('');
+    setContactSearch('');
+    setGlobalSearchResults([]);
+    setNewConvDraft('');
+  }, []);
+
+  const closeNewConversationModal = useCallback(() => {
+    setNewConvOpen(false);
+    resetNewConversationForm();
+  }, [resetNewConversationForm]);
+
+  const consumePendingDeepLink = useCallback((tab: string): string => {
+    const pending = pendingDeepLink.current;
+    if (!pending || pending.tab !== tab) return '';
+    pendingDeepLink.current = null;
+    return pending.id;
+  }, []);
+
+  const activateConversation = useCallback((id: string): boolean => {
+    if (id) conversationListModeRef.current = false;
+    if (activeConvIDRef.current === id) return false;
+    activeConvIDRef.current = id;
+    conversationRequest.current++;
+    loadingOlderMessagesRef.current = false;
+    setActiveConvId(id);
+    setActiveConv(null);
+    setLoadingOlderMessages(false);
+    conversationDetailLoadingRef.current = Boolean(id);
+    setConversationDetailLoading(Boolean(id));
+    setConversationDetailError('');
+    return true;
+  }, []);
+
+  const activateThread = useCallback((id: string): boolean => {
+    if (activeThreadIDRef.current === id) return false;
+    activeThreadIDRef.current = id;
+    threadRequest.current++;
+    loadingOlderThreadMessagesRef.current = false;
+    setActiveThreadId(id);
+    setActiveThread(null);
+    setLoadingOlderThreadMessages(false);
+    threadDetailLoadingRef.current = Boolean(id);
+    setThreadDetailLoading(Boolean(id));
+    setThreadDetailError('');
+    return true;
+  }, []);
+
+  const activateNotice = useCallback((id: string): boolean => {
+    if (activeNoticeIDRef.current === id) return false;
+    activeNoticeIDRef.current = id;
+    noticeRequest.current++;
+    setActiveNoticeId(id);
+    setActiveNotice(null);
+    noticeDetailLoadingRef.current = Boolean(id);
+    setNoticeDetailLoading(Boolean(id));
+    setNoticeDetailError('');
+    return true;
+  }, []);
+
+  const clearItemDeepLink = useCallback((tab: string) => {
+    pendingDeepLink.current = null;
+    if (!searchParams.has('id')) return;
+    setSearchParams({ tab }, { replace: true });
+  }, [searchParams, setSearchParams]);
+
+  const showConversationList = useCallback(() => {
+    conversationListModeRef.current = true;
+    clearItemDeepLink('private');
+    activateConversation('');
+  }, [activateConversation, clearItemDeepLink]);
 
   useEffect(() => {
     const timer = window.setTimeout(() => setServerSearch(searchTerm.trim()), 300);
@@ -164,10 +321,25 @@ export const MessageCenterPage: React.FC = () => {
   }, [toast]);
 
   // ---- load data ------------------------------------------------------
-  const loadConversations = useCallback(async (page = 1, append = false) => {
+  const loadConversations = useCallback(async (page = 1, append = false, preserveLoadedPages = false, options: ListLoadOptions = {}) => {
+    const queryKey = `${serverSearch}\u0000${privateStatus}`;
+    if (queryKey !== conversationQueryRef.current) return true;
+    const request = ++conversationListRequest.current;
     try {
       const status = privateStatus === '全部' ? '' : privateStatus;
-      const response = await conversationService.list({ search: serverSearch, status, page, page_size: 50 });
+      let response = options.refreshLoadedPages
+        ? await fetchLoadedPageRange(conversationPage, listPageSize, (loadedPage) => conversationService.list({ search: serverSearch, status, page: loadedPage, page_size: listPageSize }, options.signal))
+        : await conversationService.list({ search: serverSearch, status, page, page_size: listPageSize }, options.signal);
+      if (options.signal?.aborted || request !== conversationListRequest.current || queryKey !== conversationQueryRef.current) return true;
+      const refreshShiftedWindow = !options.refreshLoadedPages
+        && preserveLoadedPages
+        && conversationPage > 1
+        && latestPageChanged(convItemsRef.current, response.items, conversationTotalRef.current, response.total);
+      if (refreshShiftedWindow) {
+        response = await fetchLoadedPageRange(conversationPage, listPageSize, (loadedPage) => conversationService.list({ search: serverSearch, status, page: loadedPage, page_size: listPageSize }, options.signal));
+        if (options.signal?.aborted || request !== conversationListRequest.current || queryKey !== conversationQueryRef.current) return true;
+      }
+      const replaceLoadedPages = options.refreshLoadedPages || refreshShiftedWindow;
       const items = response.items.map((c) => ({
         id: c.id,
         studentName: c.student_name ?? '',
@@ -177,27 +349,62 @@ export const MessageCenterPage: React.FC = () => {
         unread: c.unread > 0,
         pendingReply: c.pending_reply ?? false,
       }));
-      setConvItems((current) => append ? [...current, ...items] : items);
-      setConversationPage(page);
+      setConvItems((current) => append
+        ? mergeByID(current, items)
+        : preserveLoadedPages && !replaceLoadedPages
+          ? mergeLatestPageByID(current, items, response.total)
+          : items);
+      if (replaceLoadedPages) {
+        setConversationPage(Math.max(1, Math.min(conversationPage, Math.ceil(response.total / listPageSize) || 1)));
+      } else if (!preserveLoadedPages) {
+        setConversationPage(page);
+      }
       setConversationTotal(response.total);
+      if (!append) {
+        const deepLinkID = consumePendingDeepLink('private');
+        if (deepLinkID) activateConversation(deepLinkID);
+        else if (!conversationListModeRef.current) {
+          if (!preserveLoadedPages && !replaceLoadedPages) activateConversation(selectListItemID(activeConvIDRef.current, items.map((item) => item.id), ''));
+          else if (!activeConvIDRef.current) activateConversation(items[0]?.id ?? '');
+        }
+      }
       return true;
-    } catch { return false; }
-  }, [serverSearch, privateStatus]);
+    } catch { return options.signal?.aborted || request !== conversationListRequest.current || queryKey !== conversationQueryRef.current; }
+  }, [activateConversation, consumePendingDeepLink, conversationPage, serverSearch, privateStatus]);
 
-	const loadConvDetail = useCallback(async (id: string) => {
-		const request = ++conversationRequest.current;
-		try {
-			const d = await conversationService.get(id);
-			if (request === conversationRequest.current) setActiveConv(d);
+	const loadConvDetail = useCallback(async (id: string, preserveLoadedMessages = false) => {
+			const request = ++conversationRequest.current;
+			conversationDetailLoadingRef.current = true;
+			setConversationDetailLoading(true);
+			setConversationDetailError('');
+			try {
+				const d = await conversationService.get(id);
+				if (request === conversationRequest.current && activeConvIDRef.current === id) {
+					setActiveConv((current) => preserveLoadedMessages && current?.id === d.id ? {
+						...d,
+						messages: mergeMessagesByID(current.messages, d.messages),
+						messages_page: current.messages_page,
+						messages_page_size: current.messages_page_size,
+					} : d);
+					conversationDetailLoadingRef.current = false;
+					setConversationDetailLoading(false);
+				}
       return true;
-    } catch { return false; }
+    } catch {
+      if (request === conversationRequest.current && activeConvIDRef.current === id) {
+        setActiveConv(null);
+        setConversationDetailError('私信详情加载失败，请稍后重试。');
+        conversationDetailLoadingRef.current = false;
+        setConversationDetailLoading(false);
+      }
+      return false;
+    }
   }, []);
 
   const loadStudentContacts = useCallback(async () => {
     try {
       const { contacts: list } = await conversationService.studentContacts();
       setStudentContacts(list);
-      if (list.length > 0) setSelectedStudentId(list[0].id);
       return true;
     } catch { return false; }
   }, []);
@@ -208,7 +415,7 @@ export const MessageCenterPage: React.FC = () => {
       const kw = contactSearch.trim().toLowerCase();
       return studentContacts.filter((c) =>
         c.id.toLowerCase().includes(kw) ||
-        c.teacher_name.toLowerCase().includes(kw) ||
+        c.display_name.toLowerCase().includes(kw) ||
         c.scope.toLowerCase().includes(kw),
       );
     },
@@ -216,13 +423,18 @@ export const MessageCenterPage: React.FC = () => {
   );
 
   useEffect(() => {
+    const request = ++contactSearchRequest.current;
     const q = contactSearch.trim();
-    if (!q) { setGlobalSearchResults([]); return; }
+    if (!hasMinimumGlobalSearchCharacters(q)) { setGlobalSearchResults([]); return; }
     const timer = setTimeout(async () => {
       try {
         const { contacts: list } = await conversationService.searchUsers(q);
-        setGlobalSearchResults(list.filter((c) => !studentContacts.some((s) => s.id === c.id)));
-      } catch { setGlobalSearchResults([]); }
+        if (request === contactSearchRequest.current) {
+          setGlobalSearchResults(list.filter((c) => !studentContacts.some((s) => s.id === c.id)));
+        }
+      } catch {
+        if (request === contactSearchRequest.current) setGlobalSearchResults([]);
+      }
     }, 300);
     return () => clearTimeout(timer);
   }, [contactSearch, studentContacts]);
@@ -235,6 +447,7 @@ export const MessageCenterPage: React.FC = () => {
 
   const createConversation = useCallback(async () => {
     if (!selectedStudentId || creatingConv) return;
+    conversationListRequest.current++;
     setCreatingConv(true);
     try {
       const student = studentContacts.find((s) => s.id === selectedStudentId);
@@ -243,168 +456,442 @@ export const MessageCenterPage: React.FC = () => {
         subject: student?.scope ?? '',
         initial_message: newConvDraft.trim(),
       });
-      setNewConvDraft('');
-      setNewConvOpen(false);
-      setContactSearch('');
+      closeNewConversationModal();
       await loadConversations();
-      setActiveConvId(detail.id);
-      setActiveConv(detail);
+      activateConversation(detail.id);
+      refreshMessageCenterSummaryAfterMutation();
     } catch {
       toast({ type: 'error', title: '创建私信失败，请稍后重试' });
     }
     finally { setCreatingConv(false); }
-  }, [selectedStudentId, studentContacts, newConvDraft, creatingConv, loadConversations, toast]);
+  }, [activateConversation, closeNewConversationModal, selectedStudentId, studentContacts, newConvDraft, creatingConv, loadConversations, toast]);
 
-  const loadNotices = useCallback(async (page = 1, append = false) => {
+  const loadNoticeDetail = useCallback(async (id: string): Promise<boolean> => {
+    const request = ++noticeRequest.current;
+    noticeDetailLoadingRef.current = true;
+    setNoticeDetailLoading(true);
+    setNoticeDetailError('');
     try {
-      const status = noticeStatus === '全部' ? '' : noticeStatus === '有未确认' ? '有未确认' : '全部确认';
-      const response = await noticeService.list({ search: serverSearch, status, page, page_size: 50 });
-      const items = response.items as TeacherNoticeItem[];
-      setNotices((current) => append ? [...current, ...items] : items);
-      setNoticePage(page);
-      setNoticeTotal(response.total);
-      if (items.length > 0 && !activeNoticeId) setActiveNoticeId(items[0].id);
+      const detail = await noticeService.get(id);
+      if (!('confirmed_count' in detail)) throw new Error('unexpected student notice detail');
+      if (request === noticeRequest.current && activeNoticeIDRef.current === id) {
+        setActiveNotice(detail);
+        noticeDetailLoadingRef.current = false;
+        setNoticeDetailLoading(false);
+      }
       return true;
-    } catch { return false; }
-  }, [serverSearch, noticeStatus, activeNoticeId]);
-
-  const loadThreads = useCallback(async (page = 1, append = false) => {
-    try {
-      const status = answerStatus === '全部' ? '' : answerStatus;
-      const response = await qaThreadService.list({ search: serverSearch, status, page, page_size: 50 });
-      const items = response.items as TeacherThreadItem[];
-      setThreads((current) => append ? [...current, ...items] : items);
-      setThreadPage(page);
-      setThreadTotal(response.total);
-      if (items.length > 0 && !activeThreadId) setActiveThreadId(items[0].id);
-      return true;
-    } catch { return false; }
-  }, [serverSearch, answerStatus, activeThreadId]);
-
-	const loadThreadDetail = useCallback(async (id: string) => {
-		const request = ++threadRequest.current;
-		try {
-			const d = await qaThreadService.get(id);
-			if (request === threadRequest.current) setActiveThread(d);
-    } catch { /* silent */ }
+    } catch {
+      if (request === noticeRequest.current && activeNoticeIDRef.current === id) {
+        setActiveNotice(null);
+        setNoticeDetailError('通知详情加载失败，请稍后重试。');
+        noticeDetailLoadingRef.current = false;
+        setNoticeDetailLoading(false);
+      }
+      return false;
+    }
   }, []);
 
-  const reloadInitialData = useCallback(async () => {
+  const loadNotices = useCallback(async (page = 1, append = false, preserveLoadedPages = false, options: ListLoadOptions = {}) => {
+    const queryKey = `${serverSearch}\u0000${noticeStatus}`;
+    if (queryKey !== noticeQueryRef.current) return true;
+    const request = ++noticeListRequest.current;
+    try {
+      const status = noticeStatus === '全部' ? '' : noticeStatus === '有未确认' ? '有未确认' : '全部确认';
+      let response = options.refreshLoadedPages
+        ? await fetchLoadedPageRange(noticePage, listPageSize, (loadedPage) => noticeService.list<TeacherNoticeListItem>({ search: serverSearch, status, page: loadedPage, page_size: listPageSize }, options.signal))
+        : await noticeService.list<TeacherNoticeListItem>({ search: serverSearch, status, page, page_size: listPageSize }, options.signal);
+      if (options.signal?.aborted || request !== noticeListRequest.current || queryKey !== noticeQueryRef.current) return true;
+      const refreshShiftedWindow = !options.refreshLoadedPages
+        && preserveLoadedPages
+        && noticePage > 1
+        && latestPageChanged(noticesRef.current, response.items, noticeTotalRef.current, response.total);
+      if (refreshShiftedWindow) {
+        response = await fetchLoadedPageRange(noticePage, listPageSize, (loadedPage) => noticeService.list<TeacherNoticeListItem>({ search: serverSearch, status, page: loadedPage, page_size: listPageSize }, options.signal));
+        if (options.signal?.aborted || request !== noticeListRequest.current || queryKey !== noticeQueryRef.current) return true;
+      }
+      const replaceLoadedPages = options.refreshLoadedPages || refreshShiftedWindow;
+      const items = response.items;
+      setNotices((current) => append
+        ? mergeByID(current, items)
+        : preserveLoadedPages && !replaceLoadedPages
+          ? mergeLatestPageByID(current, items, response.total)
+          : items);
+      if (replaceLoadedPages) {
+        setNoticePage(Math.max(1, Math.min(noticePage, Math.ceil(response.total / listPageSize) || 1)));
+      } else if (!preserveLoadedPages) {
+        setNoticePage(page);
+      }
+      setNoticeTotal(response.total);
+      if (!append) {
+        const deepLinkID = consumePendingDeepLink('notices');
+        if (deepLinkID) activateNotice(deepLinkID);
+        else if (!preserveLoadedPages && !replaceLoadedPages) activateNotice(selectListItemID(activeNoticeIDRef.current, items.map((item) => item.id), ''));
+        else if (!activeNoticeIDRef.current) activateNotice(items[0]?.id ?? '');
+      }
+      return true;
+    } catch { return options.signal?.aborted || request !== noticeListRequest.current || queryKey !== noticeQueryRef.current; }
+  }, [activateNotice, consumePendingDeepLink, noticePage, serverSearch, noticeStatus]);
+
+  const loadThreads = useCallback(async (page = 1, append = false, preserveLoadedPages = false, options: ListLoadOptions = {}) => {
+    const queryKey = `${serverSearch}\u0000${answerStatus}`;
+    if (queryKey !== threadQueryRef.current) return true;
+    const request = ++threadListRequest.current;
+    try {
+      const status = answerStatus === '全部' ? '' : answerStatus;
+      let response = options.refreshLoadedPages
+        ? await fetchLoadedPageRange(threadPage, listPageSize, (loadedPage) => qaThreadService.list<TeacherThreadItem>({ search: serverSearch, status, page: loadedPage, page_size: listPageSize }, options.signal))
+        : await qaThreadService.list<TeacherThreadItem>({ search: serverSearch, status, page, page_size: listPageSize }, options.signal);
+      if (options.signal?.aborted || request !== threadListRequest.current || queryKey !== threadQueryRef.current) return true;
+      const refreshShiftedWindow = !options.refreshLoadedPages
+        && preserveLoadedPages
+        && threadPage > 1
+        && latestPageChanged(threadsRef.current, response.items, threadTotalRef.current, response.total);
+      if (refreshShiftedWindow) {
+        response = await fetchLoadedPageRange(threadPage, listPageSize, (loadedPage) => qaThreadService.list<TeacherThreadItem>({ search: serverSearch, status, page: loadedPage, page_size: listPageSize }, options.signal));
+        if (options.signal?.aborted || request !== threadListRequest.current || queryKey !== threadQueryRef.current) return true;
+      }
+      const replaceLoadedPages = options.refreshLoadedPages || refreshShiftedWindow;
+      const items = response.items;
+      setThreads((current) => append
+        ? mergeByID(current, items)
+        : preserveLoadedPages && !replaceLoadedPages
+          ? mergeLatestPageByID(current, items, response.total)
+          : items);
+      if (replaceLoadedPages) {
+        setThreadPage(Math.max(1, Math.min(threadPage, Math.ceil(response.total / listPageSize) || 1)));
+      } else if (!preserveLoadedPages) {
+        setThreadPage(page);
+      }
+      setThreadTotal(response.total);
+      if (!append) {
+        const deepLinkID = consumePendingDeepLink('answers');
+        if (deepLinkID) activateThread(deepLinkID);
+        else if (!preserveLoadedPages && !replaceLoadedPages) activateThread(selectListItemID(activeThreadIDRef.current, items.map((item) => item.id), ''));
+        else if (!activeThreadIDRef.current) activateThread(items[0]?.id ?? '');
+      }
+      return true;
+    } catch { return options.signal?.aborted || request !== threadListRequest.current || queryKey !== threadQueryRef.current; }
+  }, [activateThread, answerStatus, consumePendingDeepLink, serverSearch, threadPage]);
+
+	const loadThreadDetail = useCallback(async (id: string, preserveLoadedMessages = false): Promise<boolean> => {
+				const request = ++threadRequest.current;
+				threadDetailLoadingRef.current = true;
+				setThreadDetailLoading(true);
+				setThreadDetailError('');
+				try {
+					const d = await qaThreadService.get(id);
+					if (request === threadRequest.current && activeThreadIDRef.current === id) {
+						setActiveThread((current) => preserveLoadedMessages && current?.id === d.id ? {
+							...d,
+							messages: mergeMessagesByID(current.messages, d.messages),
+							messages_page: current.messages_page,
+							messages_page_size: current.messages_page_size,
+						} : d);
+						threadDetailLoadingRef.current = false;
+						setThreadDetailLoading(false);
+					}
+      return true;
+    } catch {
+      if (request === threadRequest.current && activeThreadIDRef.current === id) {
+        setActiveThread(null);
+        setThreadDetailError('答疑详情加载失败，请稍后重试。');
+        threadDetailLoadingRef.current = false;
+        setThreadDetailLoading(false);
+      }
+      return false;
+    }
+  }, []);
+
+  useEffect(() => {
+    if (activeTab !== 'private') {
+      conversationRequest.current++;
+      conversationDetailLoadingRef.current = false;
+      setConversationDetailLoading(false);
+      return;
+    }
+    if (!activeConvId) {
+      conversationRequest.current++;
+      setActiveConv(null);
+      conversationDetailLoadingRef.current = false;
+      setConversationDetailLoading(false);
+      setConversationDetailError('');
+      return;
+    }
+    setActiveConv(null);
+    void loadConvDetail(activeConvId);
+  }, [activeConvId, activeTab, loadConvDetail]);
+
+  useEffect(() => {
+    const throughMessageID = activeConv?.read_through_message_id;
+    const cutoffKey = activeConv && throughMessageID ? `${activeConv.id}:${throughMessageID}` : '';
+    if (!pageVisible || !conversationDetailVisible || activeTab !== 'private' || !activeConv || !throughMessageID || activeConv.id !== activeConvId || acknowledgedConversationCutoff.current === cutoffKey || acknowledgingConversationCutoff.current === cutoffKey) return;
+    const conversationID = activeConv.id;
+    acknowledgingConversationCutoff.current = cutoffKey;
+    conversationListRequest.current++;
+    void conversationService.acknowledgeRead(conversationID, throughMessageID).then(async () => {
+      acknowledgedConversationCutoff.current = cutoffKey;
+      const loaded = await loadConversations(1, false, false, { refreshLoadedPages: true });
+      if (!loaded) setListLoadError('私信列表刷新失败，请稍后重试。');
+      refreshMessageCenterSummaryAfterMutation();
+    }).catch(() => {
+      toast({ type: 'error', title: '私信已显示，但同步已读状态失败' });
+    }).finally(() => {
+      if (acknowledgingConversationCutoff.current === cutoffKey) acknowledgingConversationCutoff.current = '';
+    });
+  }, [activeConv, activeConvId, activeTab, conversationDetailVisible, loadConversations, pageVisible, toast]);
+
+  useEffect(() => {
+    if (activeTab !== 'answers') {
+      threadRequest.current++;
+      threadDetailLoadingRef.current = false;
+      setThreadDetailLoading(false);
+      return;
+    }
+    if (!activeThreadId) {
+      threadRequest.current++;
+      setActiveThread(null);
+      threadDetailLoadingRef.current = false;
+      setThreadDetailLoading(false);
+      setThreadDetailError('');
+      return;
+    }
+    setActiveThread(null);
+    void loadThreadDetail(activeThreadId);
+  }, [activeTab, activeThreadId, loadThreadDetail]);
+
+  const reloadInitialData = useCallback(async (preserveCurrent = false) => {
+    const request = ++reloadRequest.current;
     setLoading(true);
     setLoadError('');
-    const results = await Promise.all([loadConversations(), loadNotices(), loadThreads()]);
+    const refreshOptions: ListLoadOptions = preserveCurrent ? { refreshLoadedPages: true } : {};
+    const results = await Promise.all([
+      loadConversations(1, false, false, refreshOptions),
+      loadNotices(1, false, false, refreshOptions),
+      loadThreads(1, false, false, refreshOptions),
+    ]);
+    if (request !== reloadRequest.current) return;
     if (results.some((success) => !success)) setLoadError('部分消息中心数据加载失败，请检查网络后重试。');
+    else setListLoadError('');
     setLoading(false);
     setInitialLoad(false);
   }, [loadConversations, loadNotices, loadThreads]);
 
   // initial load — only shows full-page spinner on first mount
-  useEffect(() => { void reloadInitialData(); }, [reloadInitialData]);
+  useEffect(() => {
+    if (initialLoadStarted.current) return;
+    initialLoadStarted.current = true;
+    void reloadInitialData();
+  }, [reloadInitialData]);
 
   useEffect(() => {
-    const refresh = async () => {
-      if (document.hidden) return;
-      await Promise.all([
-        conversationPage === 1 ? loadConversations() : Promise.resolve(),
-        noticePage === 1 ? loadNotices() : Promise.resolve(),
-        threadPage === 1 ? loadThreads() : Promise.resolve(),
-      ]);
-      if (activeConvId) {
-        try {
-          const detail = await conversationService.get(activeConvId);
-          setActiveConv((current) => current?.id === detail.id ? {
-            ...detail,
-            messages: mergeMessages(current.messages, detail.messages),
-            messages_page: current.messages_page,
-            messages_page_size: current.messages_page_size,
-          } : current);
-        } catch { /* retain the last successfully loaded detail */ }
-      }
-      if (activeThreadId) {
-        try {
-          const detail = await qaThreadService.get(activeThreadId);
-          setActiveThread((current) => current?.id === detail.id ? {
-            ...detail,
-            messages: mergeMessages(current.messages, detail.messages),
-            messages_page: current.messages_page,
-            messages_page_size: current.messages_page_size,
-          } : current);
-        } catch { /* retain the last successfully loaded detail */ }
-      }
+    if (initialLoad) return;
+    const queryKey = `${activeTab}\u0000${serverSearch}\u0000${privateStatus}\u0000${noticeStatus}\u0000${answerStatus}`;
+    if (lastListQuery.current === queryKey) return;
+    lastListQuery.current = queryKey;
+    let active = true;
+    const load = async () => {
+      let loaded = true;
+      if (activeTab === 'private') loaded = await loadConversations();
+      if (activeTab === 'notices') loaded = await loadNotices();
+      if (activeTab === 'answers') loaded = await loadThreads();
+      if (active) setListLoadError(loaded ? '' : '当前筛选结果加载失败，正在显示上次结果。');
     };
-    const interval = window.setInterval(() => { void refresh(); }, 30_000);
-    return () => window.clearInterval(interval);
-  }, [loadConversations, loadNotices, loadThreads, conversationPage, noticePage, threadPage, activeConvId, activeThreadId]);
+    void load();
+    return () => { active = false; };
+  }, [activeTab, answerStatus, initialLoad, loadConversations, loadNotices, loadThreads, noticeStatus, privateStatus, serverSearch]);
+
+  const pollMessageCenter = useCallback(async (signal: AbortSignal) => {
+    if (signal.aborted || initialLoad || document.hidden || loadingMoreListRef.current || loadingOlderMessagesRef.current || loadingOlderThreadMessagesRef.current || conversationDetailLoadingRef.current || noticeDetailLoadingRef.current || threadDetailLoadingRef.current || threadStatusUpdateRef.current) return;
+    if (activeTab === 'private') await loadConversations(1, false, true, { signal });
+    if (activeTab === 'notices') await loadNotices(1, false, true, { signal });
+    if (activeTab === 'answers') await loadThreads(1, false, true, { signal });
+    if (signal.aborted || noticeDetailLoadingRef.current) return;
+    if (document.hidden || loadingMoreListRef.current || loadingOlderMessagesRef.current || loadingOlderThreadMessagesRef.current || conversationDetailLoadingRef.current || threadDetailLoadingRef.current || threadStatusUpdateRef.current) return;
+    const currentConversationID = activeConvIDRef.current;
+    const currentNoticeID = activeNoticeIDRef.current;
+    const currentThreadID = activeThreadIDRef.current;
+    if (activeTab === 'private' && currentConversationID) {
+      const request = ++conversationRequest.current;
+      try {
+        const detail = await conversationService.get(currentConversationID, undefined, signal);
+        if (signal.aborted || document.hidden || request !== conversationRequest.current || activeConvIDRef.current !== currentConversationID) return;
+        setActiveConv((current) => current?.id === detail.id ? {
+          ...detail,
+          messages: mergeMessagesByID(current.messages, detail.messages),
+          messages_page: current.messages_page,
+          messages_page_size: current.messages_page_size,
+        } : current);
+      } catch { /* retain the last successfully loaded detail */ }
+    }
+    if (activeTab === 'notices' && currentNoticeID) {
+      const request = ++noticeRequest.current;
+      try {
+        const detail = await noticeService.get(currentNoticeID, signal);
+        if (!('confirmed_count' in detail)) return;
+        if (signal.aborted || document.hidden || request !== noticeRequest.current || activeNoticeIDRef.current !== currentNoticeID) return;
+        setActiveNotice(detail);
+        noticeDetailLoadingRef.current = false;
+        setNoticeDetailLoading(false);
+        setNoticeDetailError('');
+      } catch { /* retain the last successfully loaded detail */ }
+    }
+    if (activeTab === 'answers' && currentThreadID) {
+      const request = ++threadRequest.current;
+      try {
+        const detail = await qaThreadService.get(currentThreadID, undefined, signal);
+        if (signal.aborted || document.hidden || request !== threadRequest.current || activeThreadIDRef.current !== currentThreadID) return;
+        setActiveThread((current) => current?.id === detail.id ? {
+          ...detail,
+          messages: mergeMessagesByID(current.messages, detail.messages),
+          messages_page: current.messages_page,
+          messages_page_size: current.messages_page_size,
+        } : current);
+      } catch { /* retain the last successfully loaded detail */ }
+    }
+  }, [activeTab, initialLoad, loadConversations, loadNotices, loadThreads]);
+
+  useSerialPolling(pollMessageCenter, 30_000);
 
   // ---- derived --------------------------------------------------------
-  const activeNotice = useMemo(() => notices.find((n) => n.id === activeNoticeId) ?? notices[0], [notices, activeNoticeId]);
-
-  const filteredConversations = useMemo(
-    () => convItems.filter((c) =>
-      matchKeywords(`${c.studentName} ${c.className} ${c.lastMessage}`, searchTerm),
-    ),
-    [convItems, searchTerm],
-  );
-
-  const filteredNotices = useMemo(
-    () => notices.filter((n) => {
-      const matchesSearch = matchKeywords(`${n.class_name} ${n.title} ${n.body}`, searchTerm);
-      const matchesStatus = noticeStatus === '全部' ||
-        (noticeStatus === '有未确认' && n.confirmed_count < n.total_count) ||
-        (noticeStatus === '全部确认' && n.confirmed_count >= n.total_count);
-      return matchesSearch && matchesStatus;
-    }),
-    [notices, noticeStatus, searchTerm],
-  );
-
-  const filteredThreads = useMemo(
-    () => threads.filter((t) => {
-      const matchesSearch = matchKeywords(`${t.student_name} ${t.class_name} ${t.title} ${t.source} ${t.knowledge_point} ${t.resource_name ?? ''}`, searchTerm);
-      const matchesStatus = answerStatus === '全部' || t.status === answerStatus;
-      return matchesSearch && matchesStatus;
-    }),
-    [threads, answerStatus, searchTerm],
-  );
-
-  const privatePendingCount = convItems.filter((c) => c.unread || c.pendingReply).length;
-  const noticePendingCount = notices.filter((n) => n.confirmed_count < n.total_count).length;
-  const answerPendingCount = threads.filter((t) => t.status === '待回复' || t.status === '需跟进').length;
-
   // ---- actions: conversations -----------------------------------------
-  const openConversation = useCallback(async (id: string) => {
-    setActiveConvId(id);
-    setActiveConv(null);
-    await loadConvDetail(id);
-  }, [loadConvDetail]);
+  const openConversation = useCallback((id: string) => {
+    clearItemDeepLink('private');
+    if (!activateConversation(id)) {
+      setActiveConv(null);
+      void loadConvDetail(id);
+    }
+  }, [activateConversation, clearItemDeepLink, loadConvDetail]);
+
+  useEffect(() => {
+    if (activeTab !== 'notices') {
+      noticeRequest.current++;
+      noticeDetailLoadingRef.current = false;
+      setNoticeDetailLoading(false);
+      return;
+    }
+    if (!activeNoticeId) {
+      noticeRequest.current++;
+      setActiveNotice(null);
+      noticeDetailLoadingRef.current = false;
+      setNoticeDetailLoading(false);
+      setNoticeDetailError('');
+      return;
+    }
+    setActiveNotice(null);
+    void loadNoticeDetail(activeNoticeId);
+  }, [activeNoticeId, activeTab, loadNoticeDetail]);
 
   const sendPrivateMessage = useCallback(async (e?: React.FormEvent<HTMLFormElement>) => {
     e?.preventDefault();
-    if (!activeConvId || !messageDraft.trim() || sendingMsg) return;
+    if (!activeConv || activeConv.id !== activeConvId || !messageDraft.trim() || sendingMsg) return;
+    const conversationID = activeConv.id;
+    const submittedDraft = messageDraft;
+    conversationRequest.current++;
+    conversationListRequest.current++;
     setSendingMsg(true);
     try {
-      await conversationService.sendMessage(activeConvId, messageDraft.trim());
-      setMessageDraft('');
-      await loadConvDetail(activeConvId);
-      await loadConversations();
-    } catch { /* silent */ }
+      await conversationService.sendMessage(conversationID, submittedDraft.trim());
+      setMessageDrafts((current) => {
+        if ((current[conversationID] ?? '') !== submittedDraft) return current;
+        const next = { ...current };
+        delete next[conversationID];
+        return next;
+      });
+      if (activeConvIDRef.current === conversationID) await loadConvDetail(conversationID, true);
+      await loadConversations(1, false, false, { refreshLoadedPages: true });
+      refreshMessageCenterSummaryAfterMutation();
+    } catch {
+      toast({ type: 'error', title: '发送私信失败，请稍后重试' });
+    }
     finally { setSendingMsg(false); }
-  }, [activeConvId, messageDraft, sendingMsg, loadConvDetail, loadConversations]);
+  }, [activeConv, activeConvId, messageDraft, sendingMsg, loadConvDetail, loadConversations, toast]);
 
   const loadOlderConversationMessages = useCallback(async () => {
-    if (!activeConv || loadingOlderMessages || activeConv.messages.length >= activeConv.messages_total) return;
+    if (!activeConv || activeConv.id !== activeConvIDRef.current || loadingOlderMessagesRef.current || activeConv.messages.length >= activeConv.messages_total) return;
+    const conversationID = activeConv.id;
+    const request = ++conversationRequest.current;
+    loadingOlderMessagesRef.current = true;
     setLoadingOlderMessages(true);
     try {
-      const detail = await conversationService.get(activeConv.id, { messages_page: activeConv.messages_page + 1, messages_page_size: activeConv.messages_page_size });
-      setActiveConv((current) => current?.id === detail.id ? { ...detail, messages: [...detail.messages, ...current.messages] } : current);
-    } catch { toast({ type: 'error', title: '加载更早私信失败，请稍后重试' }); } finally { setLoadingOlderMessages(false); }
-  }, [activeConv, loadingOlderMessages, toast]);
+      const nextPage = activeConv.messages_page + 1;
+      const detail = await conversationService.get(conversationID, { messages_page: nextPage, messages_page_size: activeConv.messages_page_size });
+      if (request !== conversationRequest.current) return;
+      let messages = mergeMessagesByID(activeConv.messages, detail.messages);
+      let messagesTotal = detail.messages_total;
+      const headDetail = await conversationService.get(conversationID, { messages_page: 1, messages_page_size: activeConv.messages_page_size });
+      if (request !== conversationRequest.current) return;
+      const currentHeadID = activeConv.messages.at(-1)?.id ?? '';
+      const serverHeadID = headDetail.messages.at(-1)?.id ?? '';
+      const headShifted = currentHeadID !== serverHeadID
+        || activeConv.messages_total !== headDetail.messages_total
+        || detail.messages_total !== headDetail.messages_total;
+      const loadedWindowDrifted = activeConv.messages.length < headDetail.messages_total
+        && activeConv.messages.length !== Math.min(
+          headDetail.messages_total,
+          activeConv.messages_page * activeConv.messages_page_size,
+        );
+      if (headShifted || loadedWindowDrifted || messages.length < Math.min(messagesTotal, nextPage * activeConv.messages_page_size)) {
+        const stableWindow = await fetchStableOffsetMessageWindow(nextPage, activeConv.messages_page_size, async (messagesPage) => {
+          const pageDetail = await conversationService.get(conversationID, { messages_page: messagesPage, messages_page_size: activeConv.messages_page_size });
+          return { messages: pageDetail.messages, messages_total: pageDetail.messages_total };
+        });
+        if (request !== conversationRequest.current) return;
+        messages = stableWindow.messages;
+        messagesTotal = stableWindow.total;
+      }
+      setActiveConv((current) => current?.id === detail.id ? {
+        ...detail,
+        read_through_message_id: current.read_through_message_id,
+        messages,
+        messages_total: messagesTotal,
+        messages_page: nextPage,
+      } : current);
+    } catch {
+      if (request === conversationRequest.current && activeConvIDRef.current === conversationID) toast({ type: 'error', title: '加载更早私信失败，请稍后重试' });
+    } finally {
+      if (activeConvIDRef.current === conversationID) {
+        loadingOlderMessagesRef.current = false;
+        setLoadingOlderMessages(false);
+      }
+    }
+  }, [activeConv, toast]);
 
   const loadMoreConversations = useCallback(async () => {
-    if (loadingMoreList || convItems.length >= conversationTotal) return;
+    if (loadingMoreListRef.current || convItems.length >= conversationTotal) return;
+    loadingMoreListRef.current = true;
     setLoadingMoreList('conversations');
-    await loadConversations(conversationPage + 1, true);
-    setLoadingMoreList('');
-  }, [loadingMoreList, convItems.length, conversationTotal, loadConversations, conversationPage]);
+    try {
+      const loaded = await loadConversations(conversationPage + 1, true);
+      if (!loaded) toast({ type: 'error', title: '加载更多私信失败，请稍后重试' });
+    } finally {
+      loadingMoreListRef.current = false;
+      setLoadingMoreList('');
+    }
+  }, [convItems.length, conversationTotal, loadConversations, conversationPage, toast]);
+
+  const archiveConversation = useCallback(async (id: string) => {
+    conversationListRequest.current++;
+    try {
+      await conversationService.archive(id);
+      setMessageDrafts((current) => {
+        if (!(id in current)) return current;
+        const nextDrafts = { ...current };
+        delete nextDrafts[id];
+        return nextDrafts;
+      });
+      clearItemDeepLink('private');
+      const next = convItems.find((conversation) => conversation.id !== id);
+      await loadConversations();
+      if (next) {
+        activateConversation(next.id);
+      } else {
+        activateConversation('');
+      }
+      refreshMessageCenterSummaryAfterMutation();
+    } catch {
+      toast({ type: 'error', title: '归档私信失败，请稍后重试' });
+    }
+  }, [activateConversation, clearItemDeepLink, convItems, loadConversations, toast]);
 
   // ---- actions: notices -----------------------------------------------
   const publishNotice = useCallback(async () => {
@@ -413,13 +900,15 @@ export const MessageCenterPage: React.FC = () => {
       return;
     }
     if (!noticeTitle.trim() || publishing) return;
+    noticeListRequest.current++;
     setPublishing(true);
     try {
       await noticeService.create({ class_id: noticeClassID, title: noticeTitle.trim(), body: noticeBody.trim() });
       setNoticeTitle('');
       setNoticeBody('');
       setNoticeModalOpen(false);
-      await loadNotices();
+      await loadNotices(1, false, false, { refreshLoadedPages: true });
+      refreshMessageCenterSummaryAfterMutation();
     } catch {
       toast({ type: 'error', title: '发布通知失败，请稍后重试' });
     }
@@ -428,57 +917,178 @@ export const MessageCenterPage: React.FC = () => {
 
   // ---- actions: threads -----------------------------------------------
   const replyThread = useCallback(async () => {
-    if (!answerDraft.trim() || !activeThreadId || sendingAnswer) return;
+    if (!answerDraft.trim() || !activeThread || activeThread.id !== activeThreadId || sendingAnswer) return;
+    const threadID = activeThread.id;
+    const submittedDraft = answerDraft;
+    threadRequest.current++;
+    threadListRequest.current++;
     setSendingAnswer(true);
     try {
-      await qaThreadService.sendMessage(activeThreadId, answerDraft.trim());
-      setAnswerDraft('');
-      await loadThreadDetail(activeThreadId);
-      await loadThreads();
+      await qaThreadService.sendMessage(threadID, submittedDraft.trim());
+      setAnswerDrafts((current) => {
+        if ((current[threadID] ?? '') !== submittedDraft) return current;
+        const next = { ...current };
+        delete next[threadID];
+        return next;
+      });
+      if (activeThreadIDRef.current === threadID) await loadThreadDetail(threadID, true);
+      await loadThreads(1, false, false, { refreshLoadedPages: true });
+      refreshMessageCenterSummaryAfterMutation();
     } catch {
       toast({ type: 'error', title: '发送答复失败，请稍后重试' });
     }
     finally { setSendingAnswer(false); }
-  }, [answerDraft, activeThreadId, sendingAnswer, loadThreadDetail, loadThreads, toast]);
+  }, [activeThread, answerDraft, activeThreadId, sendingAnswer, loadThreadDetail, loadThreads, toast]);
 
   const loadOlderThreadMessages = useCallback(async () => {
-    if (!activeThread || loadingOlderThreadMessages || activeThread.messages.length >= activeThread.messages_total) return;
+    if (!activeThread || activeThread.id !== activeThreadIDRef.current || loadingOlderThreadMessagesRef.current || activeThread.messages.length >= activeThread.messages_total) return;
+    const threadID = activeThread.id;
+    const request = ++threadRequest.current;
+    loadingOlderThreadMessagesRef.current = true;
     setLoadingOlderThreadMessages(true);
     try {
-      const detail = await qaThreadService.get(activeThread.id, { messages_page: activeThread.messages_page + 1, messages_page_size: activeThread.messages_page_size });
-      setActiveThread((current) => current?.id === detail.id ? { ...detail, messages: [...detail.messages, ...current.messages] } : current);
-    } catch { toast({ type: 'error', title: '加载更早答疑消息失败，请稍后重试' }); } finally { setLoadingOlderThreadMessages(false); }
-  }, [activeThread, loadingOlderThreadMessages, toast]);
+      const nextPage = activeThread.messages_page + 1;
+      const detail = await qaThreadService.get(threadID, { messages_page: nextPage, messages_page_size: activeThread.messages_page_size });
+      if (request !== threadRequest.current) return;
+      let messages = mergeMessagesByID(activeThread.messages, detail.messages);
+      let messagesTotal = detail.messages_total;
+      const headDetail = await qaThreadService.get(threadID, { messages_page: 1, messages_page_size: activeThread.messages_page_size });
+      if (request !== threadRequest.current) return;
+      const currentHeadID = activeThread.messages.at(-1)?.id ?? '';
+      const serverHeadID = headDetail.messages.at(-1)?.id ?? '';
+      const headShifted = currentHeadID !== serverHeadID
+        || activeThread.messages_total !== headDetail.messages_total
+        || detail.messages_total !== headDetail.messages_total;
+      const loadedWindowDrifted = activeThread.messages.length < headDetail.messages_total
+        && activeThread.messages.length !== Math.min(
+          headDetail.messages_total,
+          activeThread.messages_page * activeThread.messages_page_size,
+        );
+      if (headShifted || loadedWindowDrifted || messages.length < Math.min(messagesTotal, nextPage * activeThread.messages_page_size)) {
+        const stableWindow = await fetchStableOffsetMessageWindow(nextPage, activeThread.messages_page_size, async (messagesPage) => {
+          const pageDetail = await qaThreadService.get(threadID, { messages_page: messagesPage, messages_page_size: activeThread.messages_page_size });
+          return { messages: pageDetail.messages, messages_total: pageDetail.messages_total };
+        });
+        if (request !== threadRequest.current) return;
+        messages = stableWindow.messages;
+        messagesTotal = stableWindow.total;
+      }
+      setActiveThread((current) => current?.id === detail.id ? {
+        ...detail,
+        read_through_message_id: current.read_through_message_id,
+        messages,
+        messages_total: messagesTotal,
+        messages_page: nextPage,
+      } : current);
+    } catch {
+      if (request === threadRequest.current && activeThreadIDRef.current === threadID) toast({ type: 'error', title: '加载更早答疑消息失败，请稍后重试' });
+    } finally {
+      if (activeThreadIDRef.current === threadID) {
+        loadingOlderThreadMessagesRef.current = false;
+        setLoadingOlderThreadMessages(false);
+      }
+    }
+  }, [activeThread, toast]);
 
   const loadMoreNotices = useCallback(async () => {
-    if (loadingMoreList || notices.length >= noticeTotal) return;
+    if (loadingMoreListRef.current || notices.length >= noticeTotal) return;
+    loadingMoreListRef.current = true;
     setLoadingMoreList('notices');
-    await loadNotices(noticePage + 1, true);
-    setLoadingMoreList('');
-  }, [loadingMoreList, notices.length, noticeTotal, loadNotices, noticePage]);
+    try {
+      const loaded = await loadNotices(noticePage + 1, true);
+      if (!loaded) toast({ type: 'error', title: '加载更多通知失败，请稍后重试' });
+    } finally {
+      loadingMoreListRef.current = false;
+      setLoadingMoreList('');
+    }
+  }, [notices.length, noticeTotal, loadNotices, noticePage, toast]);
 
   const loadMoreThreads = useCallback(async () => {
-    if (loadingMoreList || threads.length >= threadTotal) return;
+    if (loadingMoreListRef.current || threads.length >= threadTotal) return;
+    loadingMoreListRef.current = true;
     setLoadingMoreList('threads');
-    await loadThreads(threadPage + 1, true);
-    setLoadingMoreList('');
-  }, [loadingMoreList, threads.length, threadTotal, loadThreads, threadPage]);
+    try {
+      const loaded = await loadThreads(threadPage + 1, true);
+      if (!loaded) toast({ type: 'error', title: '加载更多答疑失败，请稍后重试' });
+    } finally {
+      loadingMoreListRef.current = false;
+      setLoadingMoreList('');
+    }
+  }, [threads.length, threadTotal, loadThreads, threadPage, toast]);
 
   const updateThreadStatus = useCallback(async (id: string, status: string) => {
+    if (threadStatusUpdateRef.current) return;
+    const previousStatus = activeThread?.id === id
+      ? activeThread.status
+      : threadsRef.current.find((thread) => thread.id === id)?.status;
+    if (!previousStatus || previousStatus === status) return;
+    threadStatusUpdateRef.current = id;
+    setUpdatingThreadStatusId(id);
+    threadRequest.current++;
+    threadListRequest.current++;
+    setActiveThread((current) => current?.id === id ? { ...current, status } : current);
+    setThreads((current) => current.map((thread) => thread.id === id ? { ...thread, status } : thread));
     try {
       await qaThreadService.updateStatus(id, status);
-      setThreads((prev) => prev.map((t) => (t.id === id ? { ...t, status } : t)));
-      setActiveThread((prev) => prev?.id === id ? { ...prev, status } : prev);
+      const loaded = await loadThreads(1, false, false, { refreshLoadedPages: true });
+      if (!loaded) setListLoadError('答疑列表刷新失败，请稍后重试。');
+      refreshMessageCenterSummaryAfterMutation();
     } catch {
+      setActiveThread((current) => current?.id === id && current.status === status
+        ? { ...current, status: previousStatus }
+        : current);
+      setThreads((current) => current.map((thread) => thread.id === id && thread.status === status
+        ? { ...thread, status: previousStatus }
+        : thread));
       toast({ type: 'error', title: '更新答疑状态失败，请稍后重试' });
+    } finally {
+      if (threadStatusUpdateRef.current === id) threadStatusUpdateRef.current = '';
+      setUpdatingThreadStatusId((current) => current === id ? '' : current);
     }
-  }, [toast]);
+  }, [activeThread, loadThreads, toast]);
 
-  const selectThread = useCallback(async (id: string) => {
-    setActiveThreadId(id);
-    setActiveThread(null);
-    await loadThreadDetail(id);
-  }, [loadThreadDetail]);
+  const selectThread = useCallback((id: string) => {
+    clearItemDeepLink('answers');
+    if (!activateThread(id)) {
+      setActiveThread(null);
+      void loadThreadDetail(id);
+    }
+  }, [activateThread, clearItemDeepLink, loadThreadDetail]);
+
+  useEffect(() => {
+    if (handledLocationKey.current === location.key) return;
+    handledLocationKey.current = location.key;
+    const tab = parseTeacherTab(searchParams.get('tab'));
+    const id = searchParams.get('id') ?? '';
+    setActiveTab(tab);
+    if (!id) {
+      pendingDeepLink.current = null;
+      return;
+    }
+    pendingDeepLink.current = { tab, id };
+    if (tab === 'private' && !activateConversation(id)) {
+      setActiveConv(null);
+      void loadConvDetail(id);
+    }
+    if (tab === 'notices') {
+      if (!activateNotice(id)) {
+        setActiveNotice(null);
+        void loadNoticeDetail(id);
+      }
+    }
+    if (tab === 'answers' && !activateThread(id)) {
+      setActiveThread(null);
+      void loadThreadDetail(id);
+    }
+  }, [activateConversation, activateNotice, activateThread, loadConvDetail, loadNoticeDetail, loadThreadDetail, location.key, searchParams]);
+
+  const retryActiveList = useCallback(async () => {
+    let loaded = true;
+    if (activeTab === 'private') loaded = await loadConversations(1, false, false, { refreshLoadedPages: true });
+    if (activeTab === 'notices') loaded = await loadNotices(1, false, false, { refreshLoadedPages: true });
+    if (activeTab === 'answers') loaded = await loadThreads(1, false, false, { refreshLoadedPages: true });
+    setListLoadError(loaded ? '' : '当前列表加载失败，请稍后重试。');
+  }, [activeTab, loadConversations, loadNotices, loadThreads]);
 
   // ---- render ---------------------------------------------------------
   if (initialLoad && loading) {
@@ -493,8 +1103,8 @@ export const MessageCenterPage: React.FC = () => {
 
   return (
     <MainLayout>
-      <div className="container mx-auto max-w-7xl px-4 py-8">
-        <div className="mb-6 flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
+      <div className="container mx-auto max-w-7xl px-4 py-5 sm:py-8">
+        <div className="mb-5 flex flex-col gap-4 rounded-2xl border border-surface-200/80 bg-white/85 px-5 py-4 shadow-sm backdrop-blur dark:border-surface-700 dark:bg-surface-900/85 lg:flex-row lg:items-center lg:justify-between">
           <div>
             <h1 className="text-2xl font-bold text-surface-900 dark:text-surface-100">消息中心</h1>
             <p className="mt-1 text-sm text-surface-500 dark:text-surface-400">管理学生私信、班级通知与答疑</p>
@@ -505,13 +1115,25 @@ export const MessageCenterPage: React.FC = () => {
           </div>
         </div>
 
-        {loadError && <div className="mb-4 flex items-center justify-between gap-3 rounded-md border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700 dark:border-red-900 dark:bg-red-950/30 dark:text-red-200"><span>{loadError}</span><Button variant="outline" size="sm" onClick={() => void reloadInitialData()} disabled={loading}>重新加载</Button></div>}
+        {loadError && <div className="mb-4 flex items-center justify-between gap-3 rounded-md border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700 dark:border-red-900 dark:bg-red-950/30 dark:text-red-200"><span>{loadError}</span><Button variant="outline" size="sm" onClick={() => void reloadInitialData(true)} disabled={loading}>重新加载</Button></div>}
+        {listLoadError && <div className="mb-4 flex items-center justify-between gap-3 rounded-md border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700 dark:border-red-900 dark:bg-red-950/30 dark:text-red-200"><span>{listLoadError}</span><Button variant="outline" size="sm" onClick={() => void retryActiveList()}>重试</Button></div>}
+        {summaryError && <div className="mb-4 flex items-center justify-between gap-3 rounded-md border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800 dark:border-amber-900 dark:bg-amber-950/30 dark:text-amber-200"><span>{summary ? '消息计数刷新失败，当前显示上次结果。' : '消息计数加载失败，页签角标暂不可用。'}</span><Button variant="outline" size="sm" onClick={() => void refreshSummary().catch(() => undefined)} disabled={summaryRefreshing}>重试</Button></div>}
 
-        <Tabs defaultValue="private" keepMounted={false} onValueChange={(v) => { setActiveTab(v); setSearchTerm(''); }}>
-          <TabsList className="mb-4">
-            <TabsTrigger value="private"><MessageSquare className="mr-2 h-4 w-4" />私信{renderTabCount(privatePendingCount)}</TabsTrigger>
-            <TabsTrigger value="notices"><Bell className="mr-2 h-4 w-4" />通知{renderTabCount(noticePendingCount)}</TabsTrigger>
-            <TabsTrigger value="answers"><HelpCircle className="mr-2 h-4 w-4" />答疑{renderTabCount(answerPendingCount)}</TabsTrigger>
+        <Tabs
+          defaultValue="private"
+          value={activeTab}
+          keepMounted={false}
+          onValueChange={(value) => {
+            setActiveTab(value);
+            setSearchTerm('');
+            setServerSearch('');
+            setSearchParams({ tab: value });
+          }}
+        >
+          <TabsList className="mb-5 h-auto rounded-xl border border-surface-200 bg-white p-1.5 shadow-sm dark:border-surface-700 dark:bg-surface-900">
+            <TabsTrigger value="private" className="rounded-lg px-4 py-2"><MessageSquare className="mr-2 h-4 w-4" />私信<TabCount count={tabCounts.private} /></TabsTrigger>
+            <TabsTrigger value="notices" className="rounded-lg px-4 py-2"><Bell className="mr-2 h-4 w-4" />通知<TabCount count={tabCounts.notices} /></TabsTrigger>
+            <TabsTrigger value="answers" className="rounded-lg px-4 py-2"><HelpCircle className="mr-2 h-4 w-4" />答疑<TabCount count={tabCounts.answers} /></TabsTrigger>
           </TabsList>
 
           {/* ============================================================ PRIVATE */}
@@ -521,47 +1143,54 @@ export const MessageCenterPage: React.FC = () => {
                 <Button key={s} variant={privateStatus === s ? 'primary' : 'outline'} size="sm" onClick={() => setPrivateStatus(s)}>{s}</Button>
               ))}
             </div>
-            <div className="grid min-h-[620px] grid-cols-1 gap-4 lg:grid-cols-[340px_1fr]">
-              <Card>
+            <div className="grid min-h-[620px] grid-cols-1 gap-4 lg:grid-cols-[300px_1fr]">
+              <Card className={cn('overflow-hidden rounded-2xl border-surface-200/80 shadow-sm dark:border-surface-700', activeConvId ? 'hidden lg:block' : '')}>
                 <CardContent className="p-0">
-                  <div className="border-b border-surface-100 p-4 dark:border-surface-800">
-                    <Button className="w-full" onClick={() => { loadStudentContacts(); setContactSearch(''); setSelectedStudentId(''); setNewConvOpen(true); }}>
+                  <div className="border-b border-surface-100 p-3 dark:border-surface-800">
+                    <Button className="w-full" onClick={() => { resetNewConversationForm(); void loadStudentContacts(); setNewConvOpen(true); }}>
                       <Plus className="mr-2 h-4 w-4" />新建对话
                     </Button>
                   </div>
-                  {filteredConversations.map((c) => (
+                  {convItems.map((c) => (
                     <button key={c.id} type="button" onClick={() => openConversation(c.id)}
                       className={cn(
-                        'w-full border-b border-surface-100 p-4 text-left last:border-b-0 hover:bg-surface-50 dark:border-surface-800 dark:hover:bg-surface-800',
+                        'w-full border-b border-surface-100 px-3 py-2 text-left last:border-b-0 hover:bg-surface-50 dark:border-surface-800 dark:hover:bg-surface-800',
                         activeConvId === c.id && 'bg-primary-50 dark:bg-primary-950/30',
                       )}>
-                      <div className="flex items-start justify-between gap-3">
-                        <div>
-                          <div className="font-medium text-surface-900 dark:text-surface-100">{c.studentName}</div>
-                          <div className="text-xs text-surface-500 dark:text-surface-400">{c.className}</div>
-                        </div>
-                        <Badge variant={c.pendingReply ? 'warning' : c.unread ? 'warning' : 'secondary'}>
-                          {c.pendingReply ? '待回复' : c.unread ? '未读' : '已回复'}
-                        </Badge>
-                      </div>
-                      <p className="mt-2 line-clamp-2 text-sm text-surface-600 dark:text-surface-300">{c.lastMessage}</p>
-                      <div className="mt-2 text-xs text-surface-400">{c.lastTime}</div>
+                      <div className="flex items-center gap-3"><span className="grid h-10 w-10 shrink-0 place-items-center rounded-full border border-surface-300 bg-white text-surface-800 shadow-sm dark:border-surface-600 dark:bg-surface-900 dark:text-surface-100"><UserRound className="h-5 w-5" /></span><div className="min-w-0 flex-1"><div className="truncate text-sm font-medium text-surface-900 dark:text-surface-100">{c.studentName}</div><div className="mt-0.5 truncate text-xs text-surface-500 dark:text-surface-400">{c.lastMessage || c.className}</div></div><div className="flex shrink-0 flex-col items-end gap-1 text-xs"><span className="text-surface-400">{c.lastTime}</span><span className={c.unread ? 'text-red-500' : c.pendingReply ? 'text-amber-600 dark:text-amber-400' : 'text-emerald-600 dark:text-emerald-400'}>{c.unread ? '未读' : c.pendingReply ? '未回复' : '已回复'}</span></div></div>
                     </button>
                   ))}
                   {convItems.length < conversationTotal && <Button variant="outline" size="sm" className="m-3 w-[calc(100%-1.5rem)]" onClick={loadMoreConversations} disabled={loadingMoreList !== ''}>{loadingMoreList === 'conversations' ? '加载中…' : '加载更多对话'}</Button>}
                 </CardContent>
               </Card>
 
-              <Card>
+              <Card className={cn('overflow-hidden rounded-2xl border-surface-200/80 shadow-sm dark:border-surface-700', !activeConvId ? 'hidden lg:block' : '')}>
                 <CardContent className="flex h-full flex-col p-0">
-                  {activeConv ? (
+                  {conversationDetailLoading ? (
+                    <div className="flex min-h-64 flex-col items-center justify-center gap-3 p-6">
+                      <Loader2 className="h-6 w-6 animate-spin text-primary-500" />
+                      <Button variant="ghost" size="sm" className="lg:hidden" onClick={showConversationList}><ArrowLeft className="mr-1 h-4 w-4" />返回列表</Button>
+                    </div>
+                  ) : conversationDetailError ? (
+                    <div className="flex min-h-64 flex-col items-center justify-center gap-3 p-6 text-center text-sm text-surface-500 dark:text-surface-400">
+                      <span>{conversationDetailError}</span>
+                      <div className="flex gap-2">
+                        <Button variant="outline" size="sm" onClick={() => activeConvId && void loadConvDetail(activeConvId)}>重新加载</Button>
+                        <Button variant="ghost" size="sm" className="lg:hidden" onClick={showConversationList}><ArrowLeft className="mr-1 h-4 w-4" />返回列表</Button>
+                      </div>
+                    </div>
+                  ) : activeConv && activeConv.id === activeConvId ? (
                     <>
-                      <div className="border-b border-surface-100 p-5 dark:border-surface-800">
-                        <div className="flex items-start justify-between">
+                      <div ref={conversationDetailRef} className="border-b border-surface-100 p-3 sm:p-4 dark:border-surface-800">
+                        <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
                           <div>
+                            <Button variant="ghost" size="sm" className="mb-2 -ml-2 lg:hidden" onClick={showConversationList}><ArrowLeft className="mr-1 h-4 w-4" />返回列表</Button>
                             <div className="text-lg font-semibold text-surface-900 dark:text-surface-100">{activeConv.student_name}</div>
                             <div className="text-sm text-surface-500 dark:text-surface-400">{activeConv.class_name}</div>
                           </div>
+                          <Button variant="outline" size="sm" onClick={() => archiveConversation(activeConv.id)}>
+                            <Archive className="mr-2 h-4 w-4" />归档
+                          </Button>
                         </div>
                       </div>
                       <div className="flex-1 space-y-4 overflow-y-auto p-5">
@@ -583,7 +1212,16 @@ export const MessageCenterPage: React.FC = () => {
                       </div>
                       <div className="border-t border-surface-100 p-4 dark:border-surface-800">
                         <form className="flex gap-2" onSubmit={sendPrivateMessage}>
-                          <Input value={messageDraft} onChange={(e) => setMessageDraft(e.target.value)} placeholder="输入给学生的回复" />
+                          <Input
+                            value={messageDraft}
+                            onChange={(e) => {
+                              const conversationID = activeConvIDRef.current;
+                              if (!conversationID) return;
+                              const value = e.target.value;
+                              setMessageDrafts((current) => ({ ...current, [conversationID]: value }));
+                            }}
+                            placeholder="输入给学生的回复"
+                          />
                           <Button type="submit" size="icon" aria-label="发送" disabled={sendingMsg}>
                             {sendingMsg ? <Loader2 className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />}
                           </Button>
@@ -611,33 +1249,39 @@ export const MessageCenterPage: React.FC = () => {
               </Button>
             </div>
             <div className="grid min-h-[620px] grid-cols-1 gap-4 lg:grid-cols-[360px_1fr]">
-              <Card>
+              <Card className="overflow-hidden rounded-2xl border-surface-200/80 shadow-sm dark:border-surface-700">
                 <CardContent className="p-0">
-                  {filteredNotices.map((n) => (
-                    <button key={n.id} type="button" onClick={() => setActiveNoticeId(n.id)}
+                  {notices.map((n) => (
+                    <button key={n.id} type="button" onClick={() => {
+                      clearItemDeepLink('notices');
+                      if (!activateNotice(n.id)) {
+                        setActiveNotice(null);
+                        void loadNoticeDetail(n.id);
+                      }
+                    }}
                       className={cn(
-                        'w-full border-b border-surface-100 p-4 text-left last:border-b-0 hover:bg-surface-50 dark:border-surface-800 dark:hover:bg-surface-800',
-                        activeNotice?.id === n.id && 'bg-primary-50 dark:bg-primary-950/30',
+                        'w-full border-b border-surface-100 px-3 py-2 text-left last:border-b-0 hover:bg-surface-50 dark:border-surface-800 dark:hover:bg-surface-800',
+                        activeNoticeId === n.id && 'bg-primary-50 dark:bg-primary-950/30',
                       )}>
-                      <div className="flex items-start justify-between gap-3">
-                        <div>
-                          <div className="font-medium text-surface-900 dark:text-surface-100">{n.title}</div>
-                          <div className="mt-1 text-xs text-surface-500 dark:text-surface-400">{n.class_name}</div>
-                        </div>
-                        <Badge variant={n.confirmed_count >= n.total_count ? 'success' : 'warning'}>
-                          {n.confirmed_count}/{n.total_count}
-                        </Badge>
-                      </div>
-                      <div className="mt-2 text-xs text-surface-400">{formatRelativeTime(n.published_at)}</div>
+                      <div className="flex items-center gap-3"><span className="grid h-10 w-10 shrink-0 place-items-center rounded-full border border-surface-300 bg-white text-surface-800 dark:border-surface-600 dark:bg-surface-900 dark:text-surface-100"><Bell className="h-5 w-5" /></span><div className="min-w-0 flex-1"><div className="truncate text-sm font-medium text-surface-900 dark:text-surface-100">{n.title}</div><div className="mt-0.5 truncate text-xs text-surface-500 dark:text-surface-400">通知 · {n.class_name}</div></div><div className="flex shrink-0 flex-col items-end gap-1 text-xs"><span className="text-surface-400">{formatRelativeTime(n.published_at)}</span><span className={n.confirmed_count >= n.total_count ? 'text-emerald-600 dark:text-emerald-400' : 'text-amber-600 dark:text-amber-400'}>{n.confirmed_count}/{n.total_count} 已确认</span></div></div>
                     </button>
                   ))}
                   {notices.length < noticeTotal && <Button variant="outline" size="sm" className="m-3 w-[calc(100%-1.5rem)]" onClick={loadMoreNotices} disabled={loadingMoreList !== ''}>{loadingMoreList === 'notices' ? '加载中…' : '加载更多通知'}</Button>}
                 </CardContent>
               </Card>
 
-              <Card>
+              <Card className="rounded-2xl border-surface-200/80 shadow-sm dark:border-surface-700">
                 <CardContent className="p-6">
-                  {activeNotice && (
+                  {noticeDetailLoading ? (
+                    <div className="flex min-h-48 items-center justify-center">
+                      <Loader2 className="h-6 w-6 animate-spin text-primary-500" />
+                    </div>
+                  ) : noticeDetailError ? (
+                    <div className="flex min-h-48 flex-col items-center justify-center gap-3 text-center text-sm text-surface-500 dark:text-surface-400">
+                      <span>{noticeDetailError}</span>
+                      <Button variant="outline" size="sm" onClick={() => activeNoticeId && loadNoticeDetail(activeNoticeId)}>重新加载</Button>
+                    </div>
+                  ) : activeNotice ? (
                     <div className="space-y-5">
                       <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
                         <div>
@@ -662,6 +1306,8 @@ export const MessageCenterPage: React.FC = () => {
                         </div>
                       )}
                     </div>
+                  ) : (
+                    <div className="flex min-h-48 items-center justify-center text-sm text-surface-500 dark:text-surface-400">暂无通知详情</div>
                   )}
                 </CardContent>
               </Card>
@@ -676,30 +1322,33 @@ export const MessageCenterPage: React.FC = () => {
               ))}
             </div>
             <div className="grid min-h-[620px] grid-cols-1 gap-4 lg:grid-cols-[360px_1fr]">
-              <Card>
+              <Card className="overflow-hidden rounded-2xl border-surface-200/80 shadow-sm dark:border-surface-700">
                 <CardContent className="p-0">
-                  {filteredThreads.map((t) => (
+                  {threads.map((t) => (
                     <button key={t.id} type="button" onClick={() => selectThread(t.id)}
                       className={cn(
-                        'w-full border-b border-surface-100 p-4 text-left last:border-b-0 hover:bg-surface-50 dark:border-surface-800 dark:hover:bg-surface-800',
+                        'w-full border-b border-surface-100 px-3 py-2 text-left last:border-b-0 hover:bg-surface-50 dark:border-surface-800 dark:hover:bg-surface-800',
                         activeThreadId === t.id && 'bg-primary-50 dark:bg-primary-950/30',
                       )}>
-                      <div className="flex items-start justify-between gap-3">
-                        <div>
-                          <div className="font-medium text-surface-900 dark:text-surface-100">{t.title}</div>
-                          <div className="mt-1 text-xs text-surface-500 dark:text-surface-400">{t.student_name} · {t.class_name} · {t.source}</div>
-                        </div>
-                        <Badge variant={threadStatusVariant[t.status] ?? 'secondary'}>{t.status}</Badge>
-                      </div>
+                      <div className="flex items-center gap-3"><span className="grid h-10 w-10 shrink-0 place-items-center rounded-full border border-surface-300 bg-white text-surface-800 dark:border-surface-600 dark:bg-surface-900 dark:text-surface-100"><HelpCircle className="h-5 w-5" /></span><div className="min-w-0 flex-1"><div className="truncate text-sm font-medium text-surface-900 dark:text-surface-100">{t.title}</div><div className="mt-0.5 truncate text-xs text-surface-500 dark:text-surface-400">{t.student_name} · {t.source}</div></div><div className="flex shrink-0 flex-col items-end gap-1 text-xs"><span className="text-surface-400">{formatRelativeTime(t.last_update)}</span><span className={t.status === '待回复' ? 'text-red-500' : t.status === '已回复' || t.status === '已解决' ? 'text-emerald-600 dark:text-emerald-400' : 'text-amber-600 dark:text-amber-400'}>{t.status}</span></div></div>
                     </button>
                   ))}
                   {threads.length < threadTotal && <Button variant="outline" size="sm" className="m-3 w-[calc(100%-1.5rem)]" onClick={loadMoreThreads} disabled={loadingMoreList !== ''}>{loadingMoreList === 'threads' ? '加载中…' : '加载更多答疑'}</Button>}
                 </CardContent>
               </Card>
 
-              <Card>
+              <Card className="rounded-2xl border-surface-200/80 shadow-sm dark:border-surface-700">
                 <CardContent className="p-6">
-                  {activeThread ? (
+                  {threadDetailLoading ? (
+                    <div className="flex min-h-48 items-center justify-center">
+                      <Loader2 className="h-6 w-6 animate-spin text-primary-500" />
+                    </div>
+                  ) : threadDetailError ? (
+                    <div className="flex min-h-48 flex-col items-center justify-center gap-3 text-center text-sm text-surface-500 dark:text-surface-400">
+                      <span>{threadDetailError}</span>
+                      <Button variant="outline" size="sm" onClick={() => activeThreadId && void loadThreadDetail(activeThreadId)}>重新加载</Button>
+                    </div>
+                  ) : activeThread && activeThread.id === activeThreadId ? (
                     <div className="space-y-5">
                       <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
                         <div>
@@ -711,9 +1360,12 @@ export const MessageCenterPage: React.FC = () => {
                         </div>
                         <div className="flex items-center gap-2">
                           <Badge variant={threadStatusVariant[activeThread.status] ?? 'secondary'}>{activeThread.status}</Badge>
+                          {updatingThreadStatusId && <Loader2 className="h-4 w-4 animate-spin text-surface-500" aria-label="状态更新中" />}
                           <select
                             value={activeThread.status}
                             onChange={(e) => updateThreadStatus(activeThread.id, e.target.value)}
+                            disabled={Boolean(updatingThreadStatusId)}
+                            aria-busy={Boolean(updatingThreadStatusId)}
                             className="h-8 rounded-md border border-surface-200 bg-white px-2 text-xs dark:border-surface-700 dark:bg-surface-800 dark:text-surface-100"
                           >
                             <option value="待回复">待回复</option>
@@ -741,7 +1393,14 @@ export const MessageCenterPage: React.FC = () => {
                         ))}
                       </div>
                       <div className="space-y-2 border-t border-surface-100 pt-4 dark:border-surface-800">
-                        <textarea value={answerDraft} onChange={(e) => setAnswerDraft(e.target.value)}
+                        <textarea
+                          value={answerDraft}
+                          onChange={(e) => {
+                            const threadID = activeThreadIDRef.current;
+                            if (!threadID) return;
+                            const value = e.target.value;
+                            setAnswerDrafts((current) => ({ ...current, [threadID]: value }));
+                          }}
                           placeholder="回复这位同学"
                           className="min-h-24 w-full rounded-md border border-surface-200 bg-white px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary-500 dark:border-surface-700 dark:bg-surface-800 dark:text-surface-100"
                         />
@@ -763,19 +1422,32 @@ export const MessageCenterPage: React.FC = () => {
         </Tabs>
 
         {/* New conversation modal */}
-        <Modal isOpen={newConvOpen} onClose={() => { setNewConvOpen(false); setContactSearch(''); }} title="新建私信对话" className="max-w-lg">
+        <Modal isOpen={newConvOpen} onClose={closeNewConversationModal} title="新建私信对话" className="max-w-lg">
           <div className="space-y-4">
             <label className="block text-sm font-medium text-surface-700 dark:text-surface-300">选择学生</label>
-            <Input value={contactSearch} onChange={(e) => { setContactSearch(e.target.value); if (!e.target.value.trim()) setSelectedStudentId(''); }}
+            <Input value={contactSearch} onChange={(e) => {
+              contactSearchRequest.current++;
+              setContactSearch(e.target.value);
+              setGlobalSearchResults([]);
+              if (selectedStudentId) {
+                setSelectedStudentId('');
+                setNewConvDraft('');
+              }
+            }}
               placeholder="搜索学生姓名或 ID…" />
             {allStudentSearchResults.length > 0 ? (
               <div className="max-h-48 space-y-0.5 overflow-y-auto rounded-md border border-surface-200 dark:border-surface-700">
                 {allStudentSearchResults.map((c) => (
                   <button key={c.id} type="button"
-                    onClick={() => { setSelectedStudentId(c.id); setContactSearch(''); setGlobalSearchResults([]); }}
+                    onClick={() => {
+                      if (selectedStudentId && selectedStudentId !== c.id) setNewConvDraft('');
+                      setSelectedStudentId(c.id);
+                      setContactSearch('');
+                      setGlobalSearchResults([]);
+                    }}
                     className={cn('w-full px-4 py-2.5 text-left text-sm hover:bg-surface-50 dark:hover:bg-surface-800',
                       selectedStudentId === c.id && 'bg-primary-50 ring-1 ring-inset ring-primary-200 dark:bg-primary-950/30 dark:ring-primary-800')}>
-                    <div className="font-medium text-surface-900 dark:text-surface-100">{c.teacher_name}</div>
+                    <div className="font-medium text-surface-900 dark:text-surface-100">{c.display_name}</div>
                     <div className="flex items-center justify-between text-xs text-surface-500 dark:text-surface-400">
                       <span>{c.scope || '全校'}</span>
                       <span className="font-mono text-surface-400">{c.id}</span>
@@ -793,7 +1465,7 @@ export const MessageCenterPage: React.FC = () => {
               className="min-h-28 w-full rounded-md border border-surface-200 bg-white px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary-500 dark:border-surface-700 dark:bg-surface-800 dark:text-surface-100"
             />
             <div className="flex justify-end gap-2">
-              <Button variant="outline" onClick={() => { setNewConvOpen(false); setContactSearch(''); }}>取消</Button>
+              <Button variant="outline" onClick={closeNewConversationModal}>取消</Button>
               <Button onClick={createConversation} disabled={!selectedStudentId || creatingConv}>
                 {creatingConv ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}创建对话
               </Button>

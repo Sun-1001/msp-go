@@ -5,10 +5,11 @@ export type SerialPollingTask = (signal: AbortSignal) => Promise<void>;
 /** Runs one task immediately, then schedules the next run after it settles. */
 export function useSerialPolling(task: SerialPollingTask, intervalMs: number): void {
   const taskRef = useRef(task);
-  const inFlightRef = useRef<Promise<void> | null>(null);
+  const inFlightRef = useRef<{ promise: Promise<void>; controller: AbortController } | null>(null);
 
   useEffect(() => {
     taskRef.current = task;
+    inFlightRef.current?.controller.abort();
   }, [task]);
 
   useEffect(() => {
@@ -16,12 +17,9 @@ export function useSerialPolling(task: SerialPollingTask, intervalMs: number): v
 
     let active = true;
     let timerId: ReturnType<typeof setTimeout> | undefined;
-    let controller: AbortController | null = null;
-
     const poll = async () => {
       if (!active) return;
       const currentController = new AbortController();
-      controller = currentController;
       const run = (async () => {
         try {
           await taskRef.current(currentController.signal);
@@ -29,13 +27,11 @@ export function useSerialPolling(task: SerialPollingTask, intervalMs: number): v
           // Polling tasks own their user-facing error state.
         }
       })();
-      inFlightRef.current = run;
+      const inFlight = { promise: run, controller: currentController };
+      inFlightRef.current = inFlight;
       await run;
-      if (inFlightRef.current === run) {
+      if (inFlightRef.current === inFlight) {
         inFlightRef.current = null;
-      }
-      if (controller === currentController) {
-        controller = null;
       }
       if (active) {
         timerId = setTimeout(poll, intervalMs);
@@ -45,7 +41,7 @@ export function useSerialPolling(task: SerialPollingTask, intervalMs: number): v
     queueMicrotask(() => {
       const previous = inFlightRef.current;
       if (previous) {
-        void previous.finally(() => {
+        void previous.promise.finally(() => {
           if (active) void poll();
         });
       } else {
@@ -55,9 +51,7 @@ export function useSerialPolling(task: SerialPollingTask, intervalMs: number): v
 
     return () => {
       active = false;
-      const currentController = controller;
-      controller = null;
-      currentController?.abort();
+      inFlightRef.current?.controller.abort();
       if (timerId !== undefined) {
         clearTimeout(timerId);
       }

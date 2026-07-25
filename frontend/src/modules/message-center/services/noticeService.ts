@@ -1,28 +1,35 @@
 import { apiClient } from '@/libs/http/apiClient';
+import { buildQueryString } from '@/modules/message-center/services/queryParams';
 
-export interface StudentNoticeItem {
+export interface StudentNoticeListItem {
   id: string;
   class_name: string;
   title: string;
-  body: string;
   published_at: string;
   confirmed: boolean;
+}
+
+export interface StudentNoticeItem extends StudentNoticeListItem {
+  body: string;
   attachments: string[];
 }
 
-export interface TeacherNoticeItem {
+export interface TeacherNoticeListItem {
   id: string;
   class_name: string;
   title: string;
-  body: string;
   published_at: string;
   confirmed_count: number;
   total_count: number;
+}
+
+export interface TeacherNoticeItem extends TeacherNoticeListItem {
+  body: string;
   unconfirmed_students: string[];
 }
 
-export interface ListResponse {
-  items: (StudentNoticeItem | TeacherNoticeItem)[];
+export interface ListResponse<T extends StudentNoticeListItem | TeacherNoticeListItem = StudentNoticeListItem | TeacherNoticeListItem> {
+  items: T[];
   total: number;
   page: number;
   page_size: number;
@@ -30,29 +37,21 @@ export interface ListResponse {
 
 const BASE = '/notices';
 
-const toParams = (params: Record<string, string | number | undefined>) => {
-  const searchParams = new URLSearchParams();
-  Object.entries(params).forEach(([k, v]) => {
-    if (v !== undefined && v !== '') searchParams.set(k, String(v));
-  });
-  return searchParams.toString();
-};
-
 export const noticeService = {
-  async list(params: {
+  async list<T extends StudentNoticeListItem | TeacherNoticeListItem = StudentNoticeListItem | TeacherNoticeListItem>(params: {
     search?: string;
     status?: string;
     class_name?: string;
     page?: number;
     page_size?: number;
-  }): Promise<ListResponse> {
-    const qs = toParams(params);
-    const { data } = await apiClient.get<ListResponse>(`${BASE}?${qs}`);
+  }, signal?: AbortSignal): Promise<ListResponse<T>> {
+    const qs = buildQueryString(params);
+    const { data } = await apiClient.get<ListResponse<T>>(`${BASE}?${qs}`, { signal });
     return data;
   },
 
-  async get(id: string): Promise<StudentNoticeItem | TeacherNoticeItem> {
-    const { data } = await apiClient.get<StudentNoticeItem | TeacherNoticeItem>(`${BASE}/${id}`);
+  async get(id: string, signal?: AbortSignal): Promise<StudentNoticeItem | TeacherNoticeItem> {
+    const { data } = await apiClient.get<StudentNoticeItem | TeacherNoticeItem>(`${BASE}/${id}`, { signal });
     return data;
   },
 
@@ -69,8 +68,4 @@ export const noticeService = {
     await apiClient.post(`${BASE}/${id}/confirm`);
   },
 
-  async remind(id: string): Promise<{ unconfirmed_students: string[]; count: number }> {
-    const { data } = await apiClient.post<{ unconfirmed_students: string[]; count: number }>(`${BASE}/${id}/remind`);
-    return data;
-  },
 };

@@ -24,6 +24,7 @@ import (
 	conversationhttp "mathstudy/backend-go/internal/adapter/http/conversation"
 	exercisehttp "mathstudy/backend-go/internal/adapter/http/exercise"
 	knowledgehttp "mathstudy/backend-go/internal/adapter/http/knowledge"
+	messagecenterhttp "mathstudy/backend-go/internal/adapter/http/messagecenter"
 	mistakehttp "mathstudy/backend-go/internal/adapter/http/mistake"
 	noticehttp "mathstudy/backend-go/internal/adapter/http/notice"
 	portraithttp "mathstudy/backend-go/internal/adapter/http/portrait"
@@ -55,6 +56,7 @@ import (
 	conversationapp "mathstudy/backend-go/internal/application/conversation"
 	exerciseapp "mathstudy/backend-go/internal/application/exercise"
 	knowledgeapp "mathstudy/backend-go/internal/application/knowledge"
+	messagecenterapp "mathstudy/backend-go/internal/application/messagecenter"
 	mistakeapp "mathstudy/backend-go/internal/application/mistake"
 	noticeapp "mathstudy/backend-go/internal/application/notice"
 	portraitapp "mathstudy/backend-go/internal/application/portrait"
@@ -74,8 +76,15 @@ import (
 	"mathstudy/backend-go/internal/platform/metrics"
 	"mathstudy/backend-go/internal/platform/outbound"
 	platformpostgres "mathstudy/backend-go/internal/platform/postgres"
+	"mathstudy/backend-go/internal/platform/ratelimit"
 	platformredis "mathstudy/backend-go/internal/platform/redis"
 	"mathstudy/backend-go/internal/platform/secret"
+)
+
+const (
+	messageCenterWriteRateLimitMax  = 60
+	messageCenterSearchRateLimitMax = 30
+	messageCenterRateLimitWindow    = time.Minute
 )
 
 func main() {
@@ -483,6 +492,30 @@ func main() {
 		logger.Error("configure teacher handler", "error", err)
 		os.Exit(1)
 	}
+	messageCenterWriteLimiter, err := ratelimit.New(
+		redisClient,
+		"msp:message_center:write",
+		messageCenterWriteRateLimitMax,
+		messageCenterRateLimitWindow,
+		cfg.RedisFallbackCacheMaxSize,
+		logger,
+	)
+	if err != nil {
+		logger.Error("configure message center write rate limit", "error", err)
+		os.Exit(1)
+	}
+	messageCenterSearchLimiter, err := ratelimit.New(
+		redisClient,
+		"msp:message_center:search",
+		messageCenterSearchRateLimitMax,
+		messageCenterRateLimitWindow,
+		cfg.RedisFallbackCacheMaxSize,
+		logger,
+	)
+	if err != nil {
+		logger.Error("configure message center search rate limit", "error", err)
+		os.Exit(1)
+	}
 	// Message center: conversations
 	conversationRepo, err := adapterpostgres.NewConversationRepository(dbPool)
 	if err != nil {
@@ -494,7 +527,12 @@ func main() {
 		logger.Error("configure conversation service", "error", err)
 		os.Exit(1)
 	}
-	conversationHandler, err := conversationhttp.NewHandler(logger, conversationService, authService)
+	conversationHandler, err := conversationhttp.NewHandler(
+		logger,
+		conversationService,
+		authService,
+		conversationhttp.WithRateLimits(messageCenterWriteLimiter, messageCenterSearchLimiter),
+	)
 	if err != nil {
 		logger.Error("configure conversation handler", "error", err)
 		os.Exit(1)
@@ -511,7 +549,13 @@ func main() {
 		logger.Error("configure notice service", "error", err)
 		os.Exit(1)
 	}
-	noticeHandler, err := noticehttp.NewHandler(logger, noticeService, authService)
+	noticeHandler, err := noticehttp.NewHandler(
+		logger,
+		noticeService,
+		authService,
+		noticehttp.WithWriteRateLimit(messageCenterWriteLimiter),
+		noticehttp.WithSearchRateLimit(messageCenterSearchLimiter),
+	)
 	if err != nil {
 		logger.Error("configure notice handler", "error", err)
 		os.Exit(1)
@@ -528,9 +572,31 @@ func main() {
 		logger.Error("configure qathread service", "error", err)
 		os.Exit(1)
 	}
-	qaThreadHandler, err := qathreadhttp.NewHandler(logger, qaThreadService, authService)
+	qaThreadHandler, err := qathreadhttp.NewHandler(
+		logger,
+		qaThreadService,
+		authService,
+		qathreadhttp.WithWriteRateLimit(messageCenterWriteLimiter),
+		qathreadhttp.WithSearchRateLimit(messageCenterSearchLimiter),
+	)
 	if err != nil {
 		logger.Error("configure qathread handler", "error", err)
+		os.Exit(1)
+	}
+
+	messageCenterRepo, err := adapterpostgres.NewMessageCenterRepository(dbPool)
+	if err != nil {
+		logger.Error("configure message center repository", "error", err)
+		os.Exit(1)
+	}
+	messageCenterService, err := messagecenterapp.NewService(messageCenterRepo)
+	if err != nil {
+		logger.Error("configure message center service", "error", err)
+		os.Exit(1)
+	}
+	messageCenterHandler, err := messagecenterhttp.NewHandler(logger, messageCenterService, authService)
+	if err != nil {
+		logger.Error("configure message center handler", "error", err)
 		os.Exit(1)
 	}
 
@@ -712,6 +778,7 @@ func main() {
 			conversationHandler.Register(mux, cfg.APIV1Prefix+"/conversations")
 			noticeHandler.Register(mux, cfg.APIV1Prefix+"/notices")
 			qaThreadHandler.Register(mux, cfg.APIV1Prefix+"/qa-threads")
+			messageCenterHandler.Register(mux, cfg.APIV1Prefix+"/message-center")
 			adminUserHandler.Register(mux, cfg.APIV1Prefix+"/admin/users")
 			aiRiskHandler.Register(mux, cfg.APIV1Prefix+"/admin/risk-control")
 			adminInboxHandler.Register(mux, cfg.APIV1Prefix+"/admin/inbox")
