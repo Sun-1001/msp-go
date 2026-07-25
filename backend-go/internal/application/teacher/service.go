@@ -30,6 +30,7 @@ var dayLabels = []string{"周日", "周一", "周二", "周三", "周四", "周�
 
 // Repository is the persistence surface required by teacher analytics use cases.
 type Repository interface {
+	ListAnalyticsStudents(context.Context, string, string, time.Time, time.Time) ([]AnalyticsStudentReadModel, bool, error)
 	ListTeacherClassIDs(context.Context, string) ([]string, error)
 	ListStudentsInClasses(context.Context, []string) ([]string, error)
 	ListTeacherStudents(context.Context, string, StudentListFilter) ([]StudentListItem, int, error)
@@ -72,6 +73,21 @@ type StudentProfile struct {
 type StudentScore struct {
 	StudentID string
 	AvgScore  float64
+}
+
+// AnalyticsStudentReadModel combines the per-student inputs shared by teacher analytics views.
+type AnalyticsStudentReadModel struct {
+	StudentID          string
+	DisplayName        string
+	HasProfile         bool
+	Profile            StudentProfile
+	RangeScoreSum      float64
+	RangeAttemptCount  int
+	RangeSeconds       int
+	AllScoreSum        float64
+	AllAttemptCount    int
+	WeeklySeconds      int
+	WeeklySessionDates []string
 }
 
 // CommonErrorAggregate stores grouped diagnosis errors for a class.
@@ -406,51 +422,43 @@ func (s *Service) GetAnalytics(ctx context.Context, teacherID string, timeRange 
 	if !ok {
 		return AnalyticsResponse{}, ErrBadRequest
 	}
-	studentIDs, err := s.teacherStudentIDs(ctx, teacherID)
+	now := s.now()
+	students, _, err := s.repo.ListAnalyticsStudents(ctx, teacherID, "", rangeStart, now.AddDate(0, 0, -7))
 	if err != nil {
 		return AnalyticsResponse{}, err
 	}
-	total := len(studentIDs)
+	total := len(students)
 	if total == 0 {
 		return emptyAnalytics(), nil
 	}
 
-	avgScore, scoreOK, err := s.repo.AverageAttemptScore(ctx, teacherID, studentIDs, &rangeStart)
-	if err != nil {
-		return AnalyticsResponse{}, err
-	}
-	if !scoreOK {
-		avgScore = 0
-	}
-	totalSeconds, err := s.repo.SumAttemptSeconds(ctx, teacherID, studentIDs, &rangeStart)
-	if err != nil {
-		return AnalyticsResponse{}, err
-	}
-	activeStudents, err := s.repo.CountDistinctAttemptStudentsSince(ctx, teacherID, studentIDs, rangeStart)
-	if err != nil {
-		return AnalyticsResponse{}, err
-	}
-	profiles, err := s.repo.ListProfiles(ctx, studentIDs)
-	if err != nil {
-		return AnalyticsResponse{}, err
+	profiles := make([]StudentProfile, 0, total)
+	var scoreSum float64
+	var scoreCount int
+	var totalSeconds int
+	var activeStudents int
+	for _, student := range students {
+		if student.HasProfile {
+			profiles = append(profiles, student.Profile)
+		}
+		scoreSum += student.RangeScoreSum
+		scoreCount += student.RangeAttemptCount
+		totalSeconds += student.RangeSeconds
+		if student.RangeAttemptCount > 0 {
+			activeStudents++
+		}
 	}
 	knowledgePoints, err := s.analyticsKnowledgePoints(ctx, profiles)
 	if err != nil {
 		return AnalyticsResponse{}, err
 	}
-	weekly, err := s.weeklyActivity(ctx, studentIDs, total)
-	if err != nil {
-		return AnalyticsResponse{}, err
-	}
-	topStudents, err := s.topStudents(ctx, teacherID, studentIDs, 5)
-	if err != nil {
-		return AnalyticsResponse{}, err
-	}
+	weekly := weeklyActivityFromAnalyticsStudents(students, total, now)
+	topStudents := topStudentsFromAnalyticsStudents(students, 5)
 	return AnalyticsResponse{
 		Overview: AnalyticsOverview{
 			TotalStudents:     total,
 			AvgCompletionRate: numutil.RoundPlaces(float64(activeStudents)/float64(total)*100, 1),
-			AvgScore:          numutil.RoundPlaces(avgScore, 1),
+			AvgScore:          numutil.RoundPlaces(averageScore(scoreSum, scoreCount), 1),
 			AvgStudyHours:     numutil.RoundPlaces(float64(totalSeconds)/float64(max(total, 1))/3600, 1),
 		},
 		KnowledgePoints: knowledgePoints,
@@ -461,36 +469,33 @@ func (s *Service) GetAnalytics(ctx context.Context, teacherID string, timeRange 
 
 // GetClassAnalytics returns analytics for a teacher-owned class.
 func (s *Service) GetClassAnalytics(ctx context.Context, teacherID string, classID string) (ClassAnalyticsResponse, error) {
-	owned, err := s.repo.ClassOwnedByTeacher(ctx, teacherID, strings.TrimSpace(classID))
+	classID = strings.TrimSpace(classID)
+	now := s.now()
+	weekStart := now.AddDate(0, 0, -7)
+	students, owned, err := s.repo.ListAnalyticsStudents(ctx, teacherID, classID, now, weekStart)
 	if err != nil {
 		return ClassAnalyticsResponse{}, err
 	}
 	if !owned {
 		return ClassAnalyticsResponse{}, ErrNotFound
 	}
-	studentIDs, err := s.repo.ListStudentsInClasses(ctx, []string{classID})
-	if err != nil {
-		return ClassAnalyticsResponse{}, err
-	}
-	total := len(studentIDs)
+	total := len(students)
 	if total == 0 {
 		return emptyClassAnalytics(), nil
 	}
-	profiles, err := s.repo.ListProfiles(ctx, studentIDs)
-	if err != nil {
-		return ClassAnalyticsResponse{}, err
-	}
-	avgScore, scoreOK, err := s.repo.AverageAttemptScore(ctx, teacherID, studentIDs, nil)
-	if err != nil {
-		return ClassAnalyticsResponse{}, err
-	}
-	if !scoreOK {
-		avgScore = 0
-	}
-	weekStart := s.now().AddDate(0, 0, -7)
-	seconds, err := s.repo.SumAttemptSeconds(ctx, teacherID, studentIDs, &weekStart)
-	if err != nil {
-		return ClassAnalyticsResponse{}, err
+	studentIDs := make([]string, 0, total)
+	profiles := make([]StudentProfile, 0, total)
+	var scoreSum float64
+	var scoreCount int
+	var seconds int
+	for _, student := range students {
+		studentIDs = append(studentIDs, student.StudentID)
+		if student.HasProfile {
+			profiles = append(profiles, student.Profile)
+		}
+		scoreSum += student.AllScoreSum
+		scoreCount += student.AllAttemptCount
+		seconds += student.WeeklySeconds
 	}
 	topicMastery, err := s.classTopicMastery(ctx, profiles)
 	if err != nil {
@@ -500,18 +505,15 @@ func (s *Service) GetClassAnalytics(ctx context.Context, teacherID string, class
 	if err != nil {
 		return ClassAnalyticsResponse{}, err
 	}
-	alerts, err := s.classAlerts(ctx, teacherID, studentIDs, weekStart)
+	alerts, err := s.classAlertsFromAnalyticsStudents(students)
 	if err != nil {
 		return ClassAnalyticsResponse{}, err
 	}
-	rankings, err := s.classRankings(ctx, teacherID, studentIDs, 5)
-	if err != nil {
-		return ClassAnalyticsResponse{}, err
-	}
+	rankings := classRankingsFromAnalyticsStudents(students, 5)
 	return ClassAnalyticsResponse{
 		Stats: ClassAnalyticsStats{
 			AverageMastery:   averageProfileMastery(profiles),
-			AverageScore:     numutil.RoundPlaces(avgScore, 1),
+			AverageScore:     numutil.RoundPlaces(averageScore(scoreSum, scoreCount), 1),
 			WeeklyStudyHours: numutil.RoundPlaces(float64(seconds)/float64(max(total, 1))/3600, 1),
 		},
 		TopicMastery:    topicMastery,
@@ -697,6 +699,138 @@ func (s *Service) classTopicMastery(ctx context.Context, profiles []StudentProfi
 		})
 	}
 	return items, nil
+}
+
+func averageScore(sum float64, count int) float64 {
+	if count == 0 {
+		return 0
+	}
+	return sum / float64(count)
+}
+
+func weeklyActivityFromAnalyticsStudents(students []AnalyticsStudentReadModel, total int, now time.Time) []WeeklyActivityItem {
+	activity := make(map[string]int, 7)
+	for _, student := range students {
+		for _, date := range student.WeeklySessionDates {
+			activity[date]++
+		}
+	}
+	today := timefmt.StartOfDay(now)
+	items := make([]WeeklyActivityItem, 0, 7)
+	for offset := 6; offset >= 0; offset-- {
+		day := today.AddDate(0, 0, -offset)
+		count := activity[timefmt.Date(day)]
+		rate := 0.0
+		if total > 0 {
+			rate = numutil.RoundPlaces(numutil.Percent(total, count), 1)
+		}
+		items = append(items, WeeklyActivityItem{
+			Date:       timefmt.Date(day),
+			DayLabel:   dayLabels[int(day.Weekday())],
+			ActiveRate: rate,
+		})
+	}
+	return items
+}
+
+func sortedAnalyticsStudentsByScore(students []AnalyticsStudentReadModel, limit int) []AnalyticsStudentReadModel {
+	items := make([]AnalyticsStudentReadModel, 0, len(students))
+	for _, student := range students {
+		if student.AllAttemptCount > 0 {
+			items = append(items, student)
+		}
+	}
+	sort.Slice(items, func(i int, j int) bool {
+		left := averageScore(items[i].AllScoreSum, items[i].AllAttemptCount)
+		right := averageScore(items[j].AllScoreSum, items[j].AllAttemptCount)
+		if left == right {
+			return items[i].StudentID < items[j].StudentID
+		}
+		return left > right
+	})
+	return items[:min(limit, len(items))]
+}
+
+func topStudentsFromAnalyticsStudents(students []AnalyticsStudentReadModel, limit int) []TopStudentItem {
+	ranked := sortedAnalyticsStudentsByScore(students, limit)
+	items := make([]TopStudentItem, 0, len(ranked))
+	for index, student := range ranked {
+		items = append(items, TopStudentItem{
+			Rank:      index + 1,
+			StudentID: student.StudentID,
+			Name:      stringutil.NonBlankOr(student.DisplayName, "未知"),
+			AvgScore:  numutil.RoundPlaces(averageScore(student.AllScoreSum, student.AllAttemptCount), 1),
+		})
+	}
+	return items
+}
+
+func classRankingsFromAnalyticsStudents(students []AnalyticsStudentReadModel, limit int) []ClassStudentRank {
+	ranked := sortedAnalyticsStudentsByScore(students, limit)
+	items := make([]ClassStudentRank, 0, len(ranked))
+	for _, student := range ranked {
+		items = append(items, ClassStudentRank{
+			StudentID: student.StudentID,
+			Name:      stringutil.NonBlankOr(student.DisplayName, "未知"),
+			AvgScore:  numutil.RoundPlaces(averageScore(student.AllScoreSum, student.AllAttemptCount), 1),
+		})
+	}
+	return items
+}
+
+func (s *Service) classAlertsFromAnalyticsStudents(students []AnalyticsStudentReadModel) ([]ClassAlert, error) {
+	lowScoreStudents := map[string]float64{}
+	activeStudents := map[string]struct{}{}
+	names := make(map[string]string, len(students))
+	for _, student := range students {
+		names[student.StudentID] = student.DisplayName
+		if student.AllAttemptCount > 0 {
+			avgScore := averageScore(student.AllScoreSum, student.AllAttemptCount)
+			if avgScore < 60 {
+				lowScoreStudents[student.StudentID] = avgScore
+			}
+		}
+		if len(student.WeeklySessionDates) > 0 {
+			activeStudents[student.StudentID] = struct{}{}
+		}
+	}
+
+	alerts := []ClassAlert{}
+	for _, id := range maputil.SortedFloatKeys(lowScoreStudents) {
+		alertID, err := s.idFactory()
+		if err != nil {
+			return nil, err
+		}
+		alerts = append(alerts, ClassAlert{
+			ID:          alertID,
+			StudentID:   id,
+			StudentName: stringutil.NonBlankOr(names[id], "未知"),
+			Type:        "low_score",
+			Message:     "平均成绩 " + formatScore(lowScoreStudents[id]) + " 分，低于及格线",
+			Severity:    "high",
+		})
+	}
+	for _, student := range students {
+		if _, low := lowScoreStudents[student.StudentID]; low {
+			continue
+		}
+		if _, active := activeStudents[student.StudentID]; active {
+			continue
+		}
+		alertID, err := s.idFactory()
+		if err != nil {
+			return nil, err
+		}
+		alerts = append(alerts, ClassAlert{
+			ID:          alertID,
+			StudentID:   student.StudentID,
+			StudentName: stringutil.NonBlankOr(student.DisplayName, "未知"),
+			Type:        "inactive",
+			Message:     "超过 7 天未学习",
+			Severity:    "medium",
+		})
+	}
+	return alerts, nil
 }
 
 func (s *Service) weeklyActivity(ctx context.Context, studentIDs []string, total int) ([]WeeklyActivityItem, error) {

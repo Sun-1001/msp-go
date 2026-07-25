@@ -3,7 +3,7 @@
 > 文档定位：本文是仓库规则要求保留的迁移阶段跟踪与验证证据，不作为通用路线图。当前跨模块未完成事项统一维护在 [项目待办](TODO.md)；任何迁移阶段的开始、阻塞、恢复或完成仍必须同步更新本文。
 
 **Document status**: P4 in progress; P5 done; P6 AI/Agent in progress (Eino Tutor/Portrait/Diagnostician/Math Solver/Question Parser/Question Generator/OCR/Content Moderator Agents, admin LLM/Agent config loop, and uniform student AI risk center wired; unified channel scheduling/model catalog slice in progress; OCR, general-math, student AI risk-control, model-moderation, and multi-key channel-management slices delivered, token streaming and live external-provider quality acceptance pending); P7 in progress; P8 static contract handoff done; P9 Python backend removed by user confirmation; repository-wide quality cleanup batch done 2026-07-12
-**Last updated**: 2026-07-24
+**Last updated**: 2026-07-25
 **适用范围**：原 `backend/` Python FastAPI 后端整体迁移到 Go 后端；`backend/` 已从当前工作区删除
 **重构原则**：接口兼容、数据连续、分阶段验收、每阶段完成必须更新本文档
 
@@ -1488,3 +1488,16 @@ backend-go/
 - 验证结果：学习目标相关临时 Go 测试和知识星图相关临时 Vitest 全部通过，新增模块覆盖率分别约 82% 和 85%，达到 80% 目标；Go 全仓测试、vet、build 与前端 lint、TypeScript/Vite 生产构建通过。version 11 首次迁移 `applied_count=1`，再次执行 `applied_count=0`。Playwright 23/23 通过：桌面自动启用 3D，Canvas 像素方差确认非空，节点拾取与镜头聚焦生效；全屏、详情、目标保存/路径、练习/错题参数联动正常；移动端自动使用 2D，键盘列表和底部 Sheet 可用且无横向溢出；WebGL 禁用和减少动画均降级到 2D；300 节点约 1.39 秒可交互，交互采样约 224 FPS；控制台和 page error 为 0。生产构建生成独立 2D、列表和 3D 懒加载 chunk，非图谱入口不加载 3D 依赖。
 - 交付物：`backend-go/migrations/0011_student_learning_goals.up.sql`、progress application/HTTP/PostgreSQL adapter 的学习目标读写能力、`frontend/src/modules/knowledge/components/KnowledgeGraph.tsx`、`KnowledgeGraphRenderer3D.tsx`、`KnowledgeGraphRenderer2D.tsx`、`KnowledgeGraphListView.tsx`、`KnowledgeGraphInspector.tsx`、统一渲染器类型和视图模式 hook，以及练习、错题、学习路径页面的知识点/目标路由联动和本迁移追踪记录。
 - 残余风险：3D 懒加载 chunk 约 1.39 MB，仍有进一步拆分和压缩空间；未执行 Safari/Firefox、真实低端设备 GPU 或生产多实例压力测试；`npm audit` 仍报告开发工具链 `brace-expansion` 8 个 high，当前无可用兼容修复且不进入生产运行包；永久测试源码按仓库策略不保留，后续回归需重建临时用例。自动模式可通过将默认视图切回 2D 快速回滚，G6 渲染器和已保存学习目标继续保留。
+
+### 2026-07-25
+
+- 数据读取与前端请求性能优化切片（P4/P5/P7 横切）启动状态：`IN_PROGRESS`；启动日期：2026-07-25。P4、P7 总体保持 `IN_PROGRESS`，P5 总体保持 `DONE`。
+- 本切片范围：在不改变既有 HTTP API 响应结构和认证边界的前提下，收敛题目批量导入知识点匹配、教师分析和学生学习概览的数据库往返；按筛选节点集合读取知识关系；拆分师生消息中心初始化与条件刷新并改用串行轮询；按需加载管理端知识图谱资源和全量节点；统一 Go 工具链补丁版本。前导通配搜索索引仅在生产规模 `EXPLAIN (ANALYZE, BUFFERS)` 证据确认热点后实施，本切片先提供可复用的分析入口与决策记录，不盲目修改生产 schema。
+- 最终状态：`DONE`；完成日期：2026-07-25。题目批量导入先按规范化标题去重，再用数组展开关键词执行一次知识点匹配，最坏约 200 次额外查询降为 1 次；教师总览以共享的每生 read model 将固定约 10 次查询降为 2 次，班级分析由约 11 次降为 3 次；学习概览将画像回退、累计/今日统计和最近作答合并后由约 7-8 次降为 3 次；筛选图谱只查询源端和目标端均属于展示节点集合的关系。成功响应字段、排序口径、空值语义、认证边界和数据库 schema 均未改变。
+- 前端结果：学生联系人初始化与搜索/筛选刷新已拆分，教师端同类列表刷新一并收敛；`createConversation` 补齐联系人依赖。师生消息轮询复用 `useSerialPolling`，每轮完成后等待 30 秒再调度下一轮，并通过 `AbortSignal` 在卸载时取消列表和详情请求；六类列表均以请求版本和查询键拒绝过期响应，加载更多期间暂停侧栏列表轮询，避免筛选结果或分页追加被旧请求覆盖。管理端全量节点仅在图谱 tab 或关系表单首次需要时请求，具备独立 loading/error/retry 状态；`KnowledgeGraphEditor` 改为动态 import。生产构建生成独立 `KnowledgeGraphEditor` 19.08 kB / gzip 6.32 kB 和 `adminGraphConfig` 1,411.05 kB / gzip 408.81 kB 异步块，初始管理页 chunk 不再静态包含图谱链路。
+- 搜索索引实测：新增只读 `scripts/explain-search-hotspots.sql`，覆盖用户、知识节点、资源和题目仓储的真实前导通配表达式，并输出表规模、扩展和索引现状。当前开发库估算 `users=1`、`knowledge_nodes=0`、`contents=0`（实际用户 6、知识节点 8），四类计划执行时间约 0.013-0.239 ms，`pg_trgm` 未安装；数据量不足以支持新增索引，因此本切片不修改 schema，生产规模复测保留在 TODO。
+- 临时测试与覆盖结果：创建后删除 4 个临时 Go 测试文件，覆盖批量标题去重与结果回填、学习概览聚合、教师总览/班级分析的加权平均/排名/告警、空输入、无画像学生、无权限班级，并连接当前 PostgreSQL 执行所有新增 SQL。`BatchImport`、`GetOverview`、`GetAnalytics`、`GetClassAnalytics` 函数覆盖率分别为 86.2%、83.3%、86.2%、85.3%；教师新增纯聚合辅助函数为 81.5%-100%。PostgreSQL 集成测试首次识别并修复 `json`/`jsonb` 回退类型不匹配，修复后全部通过。
+- 最终验证命令：后端 `go test ./... -count=1`、`go vet ./...`、`go build ./...`；前端 `vitest run --passWithNoTests`、`pnpm.cmd run lint`、`pnpm.cmd run build`；当前 PostgreSQL 执行 `psql -v search_term=calculus -f scripts/explain-search-hotspots.sql`；临时 application 覆盖率测试和 PostgreSQL repository 集成测试；`git diff --check` 与测试源码残留扫描。
+- 最终验证结果：Go 全包编译测试、vet 和 build 通过；Vitest 确认无保留测试源码并以 code 0 退出，ESLint 0 error，TypeScript 与 Vite 生产构建通过；应用内浏览器访问本地 `/welcome` 返回有效页面，未出现框架错误覆盖层，明暗主题切换交互正确。只读搜索计划脚本和全部新增 PostgreSQL SQL 通过真实 schema 执行。Docker builder、README、开发指南与 `go.mod` toolchain 已统一为 Go 1.25.12。
+- 交付物：question、progress、teacher application service 与 PostgreSQL repository；师生 `MessageCenterPage`、三项消息 service；管理端知识页、关系表单、knowledge slice/selectors；`backend-go/Dockerfile`、`README.md`、开发指南、TODO、`scripts/explain-search-hotspots.sql` 和本迁移跟踪记录。
+- 残余风险：开发数据库数据稀疏，尚未在生产规模数据上记录查询 P95、buffer hit/read、连接池等待或验证 trigram 收益；生产应用索引前必须重复脚本并用代表性教师范围、短词和高/低选择性词比较候选索引。`adminGraphConfig` 异步块本身仍约 408.81 kB gzip，但只在进入图谱时加载；本切片未执行真实登录态的师生 30 秒长轮询观察或浏览器端 API 计数，取消、串行和过期响应拒绝边界由现有 hook、请求版本校验、类型检查、lint 和构建验证。永久测试源码按仓库政策不保留。

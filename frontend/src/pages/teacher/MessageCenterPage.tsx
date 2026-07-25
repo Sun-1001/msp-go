@@ -405,6 +405,7 @@ export const MessageCenterPage: React.FC = () => {
     try {
       const { contacts: list } = await conversationService.studentContacts();
       setStudentContacts(list);
+      setSelectedStudentId((current) => list.some((contact) => contact.id === current) ? current : '');
       return true;
     } catch { return false; }
   }, []);
@@ -690,11 +691,12 @@ export const MessageCenterPage: React.FC = () => {
     lastListQuery.current = queryKey;
     let active = true;
     const load = async () => {
-      let loaded = true;
-      if (activeTab === 'private') loaded = await loadConversations();
-      if (activeTab === 'notices') loaded = await loadNotices();
-      if (activeTab === 'answers') loaded = await loadThreads();
-      if (active) setListLoadError(loaded ? '' : '当前筛选结果加载失败，正在显示上次结果。');
+      const results = await Promise.all([
+        loadConversations(),
+        loadNotices(),
+        loadThreads(),
+      ]);
+      if (active) setListLoadError(results.every(Boolean) ? '' : '当前筛选结果加载失败，正在显示上次结果。');
     };
     void load();
     return () => { active = false; };
@@ -702,9 +704,11 @@ export const MessageCenterPage: React.FC = () => {
 
   const pollMessageCenter = useCallback(async (signal: AbortSignal) => {
     if (signal.aborted || initialLoad || document.hidden || loadingMoreListRef.current || loadingOlderMessagesRef.current || loadingOlderThreadMessagesRef.current || conversationDetailLoadingRef.current || noticeDetailLoadingRef.current || threadDetailLoadingRef.current || threadStatusUpdateRef.current) return;
-    if (activeTab === 'private') await loadConversations(1, false, true, { signal });
-    if (activeTab === 'notices') await loadNotices(1, false, true, { signal });
-    if (activeTab === 'answers') await loadThreads(1, false, true, { signal });
+    await Promise.all([
+      loadConversations(1, false, true, { signal }),
+      loadNotices(1, false, true, { signal }),
+      loadThreads(1, false, true, { signal }),
+    ]);
     if (signal.aborted || noticeDetailLoadingRef.current) return;
     if (document.hidden || loadingMoreListRef.current || loadingOlderMessagesRef.current || loadingOlderThreadMessagesRef.current || conversationDetailLoadingRef.current || threadDetailLoadingRef.current || threadStatusUpdateRef.current) return;
     const currentConversationID = activeConvIDRef.current;

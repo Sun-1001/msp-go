@@ -42,6 +42,7 @@ export interface ListResponse {
 export interface Contact {
   id: string;
   display_name: string;
+  teacher_name: string;
   scope: string;
 }
 
@@ -60,7 +61,11 @@ export const conversationService = {
     return data;
   },
 
-  async get(id: string, params?: { messages_page?: number; messages_page_size?: number }, signal?: AbortSignal): Promise<ConversationDetail> {
+  async get(
+    id: string,
+    params?: { messages_page?: number; messages_page_size?: number },
+    signal?: AbortSignal,
+  ): Promise<ConversationDetail> {
     const { data } = await apiClient.get<ConversationDetail>(`${BASE}/${id}`, { params, signal });
     return data;
   },
@@ -95,6 +100,10 @@ export const conversationService = {
 
   async archive(id: string): Promise<void> {
     await apiClient.put(`${BASE}/${id}/archive`);
+  },
+
+  async delete(id: string): Promise<void> {
+    await apiClient.delete(`${BASE}/${id}`);
   },
 
   async contacts(): Promise<{ contacts: Contact[] }> {

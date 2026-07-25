@@ -79,7 +79,11 @@ export const qaThreadService = {
     return data;
   },
 
-  async get(id: string, params?: { messages_page?: number; messages_page_size?: number }, signal?: AbortSignal): Promise<ThreadDetail> {
+  async get(
+    id: string,
+    params?: { messages_page?: number; messages_page_size?: number },
+    signal?: AbortSignal,
+  ): Promise<ThreadDetail> {
     const { data } = await apiClient.get<ThreadDetail>(`${BASE}/${id}`, { params, signal });
     return data;
   },
@@ -113,5 +117,9 @@ export const qaThreadService = {
 
   async updateStatus(id: string, status: string): Promise<void> {
     await apiClient.put(`${BASE}/${id}/status`, { status });
+  },
+
+  async delete(id: string): Promise<void> {
+    await apiClient.delete(`${BASE}/${id}`);
   },
 };

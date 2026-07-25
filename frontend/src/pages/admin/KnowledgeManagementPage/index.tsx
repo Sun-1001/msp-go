@@ -1,8 +1,8 @@
-import React, { useEffect, useCallback, useMemo } from 'react';
+import React, { useEffect, useCallback, useMemo, useRef } from 'react';
 import { AdminLayout } from '@/modules/admin/components/AdminLayout';
 import { Card, CardContent, CardHeader } from '@/components/ui/Card';
 import { Button } from '@/components/ui/Button';
-import { RefreshCw } from 'lucide-react';
+import { Loader2, RefreshCw } from 'lucide-react';
 import { useAppDispatch, useAppSelector } from '@/store';
 import {
   fetchStats,
@@ -48,7 +48,10 @@ import { RelationsTable } from './components/RelationsTable';
 import { NodeFormModal } from './components/NodeFormModal';
 import { RelationFormModal } from './components/RelationFormModal';
 import { ConfirmDialog } from '@/components/ui/ConfirmDialog';
-import { KnowledgeGraphEditor } from './components/KnowledgeGraphEditor';
+
+const KnowledgeGraphEditor = React.lazy(() =>
+  import('./components/KnowledgeGraphEditor').then((module) => ({ default: module.KnowledgeGraphEditor })),
+);
 
 /**
  * 知识点管理页面
@@ -74,15 +77,15 @@ export const KnowledgeManagementPage: React.FC = () => {
   const {
     nodeModalOpen, editingNode,
     relationModalOpen, editingRelation,
-    deleteConfirm, saving, allNodes,
+    deleteConfirm, saving, allNodes, allNodesLoading, allNodesError,
   } = useAppSelector(selectModalState);
   const nodeFilterParams = useAppSelector(selectNodeFilterParams);
+  const allNodesRequested = useRef(allNodes.length > 0);
 
   // ========== 初始化数据加载 ==========
   useEffect(() => {
     dispatch(fetchStats());
     dispatch(fetchChapters());
-    dispatch(fetchAllNodesSimple());
   }, [dispatch]);
 
   // ========== 节点列表加载 (依赖筛选条件) ==========
@@ -96,6 +99,13 @@ export const KnowledgeManagementPage: React.FC = () => {
       dispatch(fetchRelations());
     }
   }, [dispatch, activeTab]);
+
+  const needsAllNodes = activeTab === 'graph' || relationModalOpen;
+  useEffect(() => {
+    if (!needsAllNodes || allNodesRequested.current) return;
+    allNodesRequested.current = true;
+    dispatch(fetchAllNodesSimple());
+  }, [dispatch, needsAllNodes]);
 
   // ========== 节点类型映射 (图谱视图用) ==========
   const nodeTypeMap = useMemo(() => {
@@ -120,9 +130,15 @@ export const KnowledgeManagementPage: React.FC = () => {
   const handleRefreshAll = useCallback(() => {
     dispatch(fetchStats());
     dispatch(fetchNodes(nodeFilterParams));
-    dispatch(fetchRelations());
     dispatch(fetchChapters());
-  }, [dispatch, nodeFilterParams]);
+    if (activeTab === 'relations' || activeTab === 'graph') dispatch(fetchRelations());
+    if (allNodesRequested.current) dispatch(fetchAllNodesSimple());
+  }, [activeTab, dispatch, nodeFilterParams]);
+
+  const handleRetryAllNodes = useCallback(() => {
+    allNodesRequested.current = true;
+    dispatch(fetchAllNodesSimple());
+  }, [dispatch]);
 
   // ========== 节点操作 ==========
   const handleAddNode = useCallback(() => {
@@ -154,7 +170,7 @@ export const KnowledgeManagementPage: React.FC = () => {
       dispatch(fetchStats());
       dispatch(fetchNodes(nodeFilterParams));
       dispatch(fetchChapters());
-      dispatch(fetchAllNodesSimple());
+      if (allNodesRequested.current) dispatch(fetchAllNodesSimple());
     },
     [dispatch, editingNode, nodeFilterParams]
   );
@@ -212,7 +228,7 @@ export const KnowledgeManagementPage: React.FC = () => {
       dispatch(fetchStats());
       dispatch(fetchNodes(nodeFilterParams));
       dispatch(fetchRelations());
-      dispatch(fetchAllNodesSimple());
+      if (allNodesRequested.current) dispatch(fetchAllNodesSimple());
     } else {
       await dispatch(deleteRelation(deleteConfirm.id));
       // 刷新相关数据
@@ -303,18 +319,31 @@ export const KnowledgeManagementPage: React.FC = () => {
                 onEditRelation={handleEditRelation}
                 onDeleteRelation={handleDeleteRelationConfirm}
               />
+            ) : allNodesError ? (
+              <div className="flex min-h-64 flex-col items-center justify-center gap-3 text-sm text-red-600 dark:text-red-300" role="alert">
+                <span>{allNodesError}</span>
+                <Button variant="outline" size="sm" onClick={handleRetryAllNodes}>
+                  <RefreshCw className="mr-1 h-4 w-4" /> 重试
+                </Button>
+              </div>
             ) : (
-              <KnowledgeGraphEditor
-                allNodes={allNodes}
-                relations={relations}
-                relationsLoading={relationsLoading}
-                saving={saving}
-                nodeTypeMap={nodeTypeMap}
-                chapters={chapters}
-                onCreateRelation={handleGraphCreateRelation}
-                onEditRelation={handleEditRelation}
-                onDeleteRelation={handleDeleteRelationConfirm}
-              />
+              <React.Suspense fallback={(
+                <div className="flex min-h-64 items-center justify-center text-sm text-surface-500">
+                  <Loader2 className="mr-2 h-5 w-5 animate-spin" /> 加载中...
+                </div>
+              )}>
+                <KnowledgeGraphEditor
+                  allNodes={allNodes}
+                  relations={relations}
+                  relationsLoading={relationsLoading || allNodesLoading}
+                  saving={saving}
+                  nodeTypeMap={nodeTypeMap}
+                  chapters={chapters}
+                  onCreateRelation={handleGraphCreateRelation}
+                  onEditRelation={handleEditRelation}
+                  onDeleteRelation={handleDeleteRelationConfirm}
+                />
+              </React.Suspense>
             )}
           </CardContent>
         </Card>
@@ -336,7 +365,10 @@ export const KnowledgeManagementPage: React.FC = () => {
         <RelationFormModal
           relation={editingRelation}
           allNodes={allNodes}
+          nodesLoading={allNodesLoading}
+          nodesError={allNodesError}
           saving={saving}
+          onRetryNodes={handleRetryAllNodes}
           onSave={handleSaveRelation}
           onClose={() => dispatch(closeRelationModal())}
         />

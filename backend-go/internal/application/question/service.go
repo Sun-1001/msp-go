@@ -41,6 +41,7 @@ const (
 // Repository is the persistence surface required by teacher question bank use cases.
 type Repository interface {
 	MatchConceptIDs(context.Context, string) ([]string, error)
+	MatchConceptIDsBatch(context.Context, []string) ([][]string, error)
 	ListQuestions(context.Context, string, ListFilter) ([]Question, int, error)
 	GetQuestion(context.Context, string, string) (Question, bool, error)
 	CreateQuestion(context.Context, string, QuestionInput, time.Time) (Question, error)
@@ -377,19 +378,39 @@ func (s *Service) BatchImport(ctx context.Context, ownerID string, questions []Q
 		return BatchOperationResponse{}, ErrBadRequest
 	}
 	normalized := make([]QuestionInput, 0, len(questions))
-	for _, input := range questions {
+	matchIndexes := make(map[string]int)
+	matchTitles := make([]string, 0, len(questions))
+	questionMatchIndexes := make([]int, len(questions))
+	for index, input := range questions {
 		input = normalizeQuestionInput(input)
 		if !validQuestionInput(input) {
 			return BatchOperationResponse{}, ErrBadRequest
 		}
 		if len(input.ConceptIDs) == 0 {
-			conceptIDs, err := s.repo.MatchConceptIDs(ctx, input.Title)
-			if err != nil {
-				return BatchOperationResponse{}, err
+			key := strings.ToLower(input.Title)
+			matchIndex, ok := matchIndexes[key]
+			if !ok {
+				matchIndex = len(matchTitles)
+				matchIndexes[key] = matchIndex
+				matchTitles = append(matchTitles, input.Title)
 			}
-			input.ConceptIDs = conceptIDs
+			questionMatchIndexes[index] = matchIndex + 1
 		}
 		normalized = append(normalized, input)
+	}
+	if len(matchTitles) > 0 {
+		matches, err := s.repo.MatchConceptIDsBatch(ctx, matchTitles)
+		if err != nil {
+			return BatchOperationResponse{}, err
+		}
+		if len(matches) != len(matchTitles) {
+			return BatchOperationResponse{}, fmt.Errorf("match concept ids batch: unexpected result count %d", len(matches))
+		}
+		for index, matchIndex := range questionMatchIndexes {
+			if matchIndex > 0 {
+				normalized[index].ConceptIDs = matches[matchIndex-1]
+			}
+		}
 	}
 	return s.repo.BatchImport(ctx, ownerID, normalized, s.now())
 }

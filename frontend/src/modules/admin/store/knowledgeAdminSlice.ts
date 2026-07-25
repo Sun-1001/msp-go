@@ -49,6 +49,8 @@ export interface KnowledgeAdminState extends WithLoadingState {
   relations: KnowledgeRelationAdmin[];
   relationsLoading: boolean;
   allNodes: SimpleNode[];
+  allNodesLoading: boolean;
+  allNodesError: string | null;
 
   // 模态框状态
   nodeModalOpen: boolean;
@@ -76,6 +78,8 @@ const initialState: KnowledgeAdminState = {
   relations: [],
   relationsLoading: false,
   allNodes: [],
+  allNodesLoading: false,
+  allNodesError: null,
   nodeModalOpen: false,
   editingNode: null,
   relationModalOpen: false,
@@ -315,8 +319,17 @@ const knowledgeAdminSlice = createSlice({
 
     // ========== 所有节点简要信息 ==========
     builder
+      .addCase(fetchAllNodesSimple.pending, (state) => {
+        state.allNodesLoading = true;
+        state.allNodesError = null;
+      })
       .addCase(fetchAllNodesSimple.fulfilled, (state, action) => {
+        state.allNodesLoading = false;
         state.allNodes = action.payload;
+      })
+      .addCase(fetchAllNodesSimple.rejected, (state, action) => {
+        state.allNodesLoading = false;
+        state.allNodesError = action.payload || '获取节点列表失败';
       });
 
     // ========== 创建节点 ==========

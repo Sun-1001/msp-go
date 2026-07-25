@@ -68,4 +68,8 @@ export const noticeService = {
     await apiClient.post(`${BASE}/${id}/confirm`);
   },
 
+  async remind(id: string): Promise<{ unconfirmed_students: string[]; count: number }> {
+    const { data } = await apiClient.post<{ unconfirmed_students: string[]; count: number }>(`${BASE}/${id}/remind`);
+    return data;
+  },
 };

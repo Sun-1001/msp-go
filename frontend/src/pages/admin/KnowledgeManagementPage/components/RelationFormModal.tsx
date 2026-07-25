@@ -12,13 +12,16 @@ import type {
 interface RelationFormModalProps {
   relation: KnowledgeRelationAdmin | null;
   allNodes: SimpleNode[];
+  nodesLoading: boolean;
+  nodesError: string | null;
   saving: boolean;
   onSave: (data: KnowledgeRelationCreateData | KnowledgeRelationUpdateData) => void;
+  onRetryNodes: () => void;
   onClose: () => void;
 }
 
 export const RelationFormModal = React.memo<RelationFormModalProps>(
-  ({ relation, allNodes, saving, onSave, onClose }) => {
+  ({ relation, allNodes, nodesLoading, nodesError, saving, onSave, onRetryNodes, onClose }) => {
     const [form, setForm] = useState({
       source_id: relation?.source_id || '',
       target_id: relation?.target_id || '',
@@ -52,6 +55,16 @@ export const RelationFormModal = React.memo<RelationFormModalProps>(
           <h3 className="text-lg font-semibold text-surface-900 dark:text-surface-100 mb-4">
             {relation ? '编辑知识关系' : '新增知识关系'}
           </h3>
+          {nodesLoading ? (
+            <div className="mb-4 flex items-center justify-center py-4 text-sm text-surface-500">
+              <Loader2 className="mr-2 h-5 w-5 animate-spin" /> 加载节点...
+            </div>
+          ) : nodesError ? (
+            <div className="mb-4 flex items-center justify-between gap-3 rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700 dark:border-red-900 dark:bg-red-950/30 dark:text-red-200" role="alert">
+              <span>{nodesError}</span>
+              <Button type="button" variant="outline" size="sm" onClick={onRetryNodes}>重试</Button>
+            </div>
+          ) : null}
           <form onSubmit={handleSubmit} className="space-y-4">
             {/* 源节点 */}
             <div>
@@ -62,7 +75,7 @@ export const RelationFormModal = React.memo<RelationFormModalProps>(
                 className={INPUT_CLASS}
                 value={form.source_id}
                 onChange={(e) => setForm((f) => ({ ...f, source_id: e.target.value }))}
-                disabled={!!relation}
+                disabled={!!relation || nodesLoading || !!nodesError}
                 required
               >
                 <option value="">请选择源节点</option>
@@ -102,7 +115,7 @@ export const RelationFormModal = React.memo<RelationFormModalProps>(
                 className={INPUT_CLASS}
                 value={form.target_id}
                 onChange={(e) => setForm((f) => ({ ...f, target_id: e.target.value }))}
-                disabled={!!relation}
+                disabled={!!relation || nodesLoading || !!nodesError}
                 required
               >
                 <option value="">请选择目标节点</option>
@@ -148,7 +161,7 @@ export const RelationFormModal = React.memo<RelationFormModalProps>(
               </Button>
               <Button
                 type="submit"
-                disabled={saving || (!relation && (!form.source_id || !form.target_id))}
+                disabled={saving || nodesLoading || !!nodesError || (!relation && (!form.source_id || !form.target_id))}
               >
                 {saving ? <Loader2 className="h-4 w-4 animate-spin mr-1" /> : null}
                 {relation ? '保存修改' : '创建关系'}
