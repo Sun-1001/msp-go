@@ -17,14 +17,14 @@
 
 | 场景 | 能力 |
 |------|------|
-| 学生 | 我的班级、班级题目、AI 自主练习、学习会话、错题本、知识图谱、学习路径、资源中心、西电账户绑定 |
-| 教师 | 班级与学生管理、题库管理、教学资源、学习数据和班级分析 |
+| 学生 | 我的班级、班级题目、AI 自主练习、学习会话、错题本、知识图谱、学习路径、资源中心、西电与公众号绑定 |
+| 教师 | 班级与学生管理、题库管理、教学资源、学习数据、班级分析和公众号绑定 |
 | 管理员 | 用户管理、平台统计、AI provider/model/Agent 配置、知识图谱管理、系统设置和安全日志 |
-| 平台 | JWT 与 Cookie 兼容认证、PostgreSQL/pgvector、Redis、对象存储、Prometheus 指标和 Go forward migration |
+| 平台 | JWT 与 Cookie 兼容认证、PostgreSQL/pgvector、Redis、对象存储、公众号模板消息提醒、Prometheus 指标和 Go forward migration |
 
 ## 快速开始
 
-建议使用与仓库配置一致的 Go 1.25.12、Node.js 20、PostgreSQL 18 + pgvector 和 Redis 7。
+建议使用与仓库配置一致的 Go 1.25.10、Node.js 20、PostgreSQL 18 + pgvector 和 Redis 7。
 
 ```powershell
 Copy-Item .env.example .env

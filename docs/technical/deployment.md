@@ -19,7 +19,26 @@ PostgreSQL、Redis 和 Go API 默认只绑定宿主机回环地址；前端默�
 Copy-Item .env.example .env
 ```
 
-生产环境至少要替换数据库密码、`JWT_SECRET_KEY`、`FERNET_SECRET_KEY`、初始管理员密码、CORS、管理网段和对象存储凭据。设置 `ENVIRONMENT=production`，不要把开发密钥或真实 `.env` 提交到仓库。
+生产环境至少要替换数据库密码、`JWT_SECRET_KEY`、`FERNET_SECRET_KEY`、初始管理员密码、CORS、管理网段和对象存储凭据。设置 `ENVIRONMENT=production`，不要把开发密钥或真实 `.env` 提交到仓库。启用公众号时还必须按消息模式设置 `WECHAT_OFFICIAL_ACCOUNT_*` 配置；`APP_SECRET`、`TOKEN` 和非明文模式使用的 `AES_KEY` 应由部署密钥系统或权限收紧的 `.env` 提供，不能写入镜像、Compose 文件或版本库。凭据出现在截图、日志或聊天记录中即视为泄露，应先在微信后台重置再部署。
+
+公众号配置项如下：
+
+| 配置 | 用途 |
+| --- | --- |
+| `WECHAT_OFFICIAL_ACCOUNT_ENABLED` | 是否启用回调、师生绑定和管理员测试消息；默认 `false` |
+| `WECHAT_OFFICIAL_ACCOUNT_APP_ID` | 公众号或测试号 AppID |
+| `WECHAT_OFFICIAL_ACCOUNT_APP_SECRET` | 调用微信 API 的密钥 |
+| `WECHAT_OFFICIAL_ACCOUNT_TOKEN` | 回调签名共享 Token，必须为 3 至 32 位 ASCII 字母或数字 |
+| `WECHAT_OFFICIAL_ACCOUNT_AES_KEY` | 微信后台生成的 43 字符 `EncodingAESKey`；兼容或安全模式必填 |
+| `WECHAT_OFFICIAL_ACCOUNT_MESSAGE_MODE` | `plain`、`compatible` 或 `safe` |
+| `WECHAT_OFFICIAL_ACCOUNT_NAME` | 前端展示的公众号名称 |
+| `WECHAT_OFFICIAL_ACCOUNT_HTTP_TIMEOUT_SECONDS` | 后端调用微信 API 的单次 HTTP 请求超时，范围 1 至 60 秒，默认 10 秒 |
+| `WECHAT_MESSAGE_REMINDERS_ENABLED` | 是否为私信、班级通知和答疑启用微信公众号模板提醒；默认 `false`，启用时要求公众号总开关已开启 |
+| `WECHAT_PRIVATE_MESSAGE_TEMPLATE_ID` | 私信提醒模板 ID；提醒总开关开启时必填 |
+| `WECHAT_NOTICE_TEMPLATE_ID` | 班级通知提醒模板 ID；提醒总开关开启时必填 |
+| `WECHAT_QA_MESSAGE_TEMPLATE_ID` | 答疑提醒模板 ID；提醒总开关开启时必填 |
+
+消息模式必须与微信后台一致：`plain` 对应明文模式且只接收明文；`compatible` 对应兼容模式并同时接收明文和 AES 消息；`safe` 对应安全模式且只接收 AES 消息。兼容和安全模式必须配置同一公众号生成的 `EncodingAESKey`。下文回调路径使用默认 `API_V1_PREFIX=/api/v1`；部署若修改该前缀，微信后台 URL 和所有调试 API 路径必须同步替换。
 
 ## 构建与启动
 
@@ -56,6 +75,10 @@ FROM public.go_schema_migrations
 ORDER BY version;
 ```
 
+公众号绑定、师生消息提醒和消息中心北京时间默认值由单一 forward 文件 `0013_wechat_official_account.up.sql` 交付。升级前规范数据库应仅包含版本 1-12；第一次 migration runner 应记录 `version=13, name=wechat_official_account` 且 `applied_count=1`，紧接着重复执行应为 `applied_count=0`。若目标库曾运行未提交的旧 version 13、14 或 15，发布前必须在备份后核对实际 schema 并校准 `go_schema_migrations`；不得删除旧 version 13 后重跑合并迁移。
+
+从不含提醒入队代码的旧版本首次上线时，必须先应用规范 `0013_wechat_official_account`，再排空并停止旧实例流量，完成所有新实例部署后统一开启 `WECHAT_MESSAGE_REMINDERS_ENABLED=true`。不能在旧实例仍接收写请求时直接混合启用：旧实例可以提交私信、通知或答疑，但不会生成提醒任务，且系统不从正文表回填历史任务。
+
 ## 反向代理
 
 `frontend/nginx.conf` 负责前端容器内的静态资源和 API 转发，根目录 `nginx-site.conf` 可用于站点级反向代理。部署时应确认：
@@ -73,6 +96,7 @@ ORDER BY version;
 `EXERCISE_GENERATION_REQUEST_TIMEOUT_SECONDS` 是生成、独立求解、验证及最多一次重试共享的总预算。生产环境通常应保持默认 55 秒；如需配置到 60 秒以上，必须同步调整前端请求超时，如需超过 300 秒还必须同步调整所有边缘代理。Nginx 的 300 秒仅是代理安全上限，不代表业务请求应持续运行 300 秒。
 
 - `/api/` 指向 Go API；
+- 微信回调 `GET/POST /api/v1/integrations/wechat/official-account/callback` 必须通过公网 HTTPS 原样转发到 Go API，不能要求站内 JWT；该路由使用微信签名和时间戳校验请求；
 - SSE 路径关闭不必要的代理缓冲并保留足够超时；
 - 上传大小限制与后端配置一致；
 - TLS、HSTS、CSP 和其他安全响应头由边缘代理统一设置；
@@ -128,9 +152,18 @@ docker compose logs --tail 200 backend
 3. 登录、刷新令牌和角色权限符合预期。
 
 4. 数据库迁移首次执行有新增版本，重复执行无待应用版本。
-5. 文件上传、对象存储、外部 AI provider 和西电账户绑定按部署配置进行连通性验证；`ocr` Agent 必须选择支持图片输入的模型。
-6. 分别提交真实 PNG、JPEG 图片和空白/低对比图片，确认成功路径只产生一次 attempt，并各执行一次 session、DKT 和 profile 更新；OCR/数学不确定或失败路径的这些写入均为零。图片 OCR 当前只接受 PNG、JPEG 和 GIF。
-7. 验证通用数学判定的 `correct`、`incorrect`、`indeterminate` 响应，以及解析生成不可用、超时、取消、无效输出和验证失败的 `failure.stage`、`failure.code`、`retryable` 契约。
+5. 启用公众号时，在微信后台将回调 URL 配置为 `https://<public-host>/api/v1/integrations/wechat/official-account/callback`，确认 GET 验证、关注/取关事件和文本绑定回调均成功。
+6. 分别使用测试学生和测试教师生成绑定口令并完成绑定，确认两端个人中心均显示已绑定/已关注；随后由管理员调用 `POST /api/v1/admin/wechat/test-message` 向两类账号发送服务端固定测试内容。
+7. 为私信、通知和答疑配置字段均为 `keyword1`、`keyword2`、`keyword3` 的模板及对应 ID，开启 `WECHAT_MESSAGE_REMINDERS_ENABLED=true` 后依次验证学生发教师、教师发学生的私信，教师班级通知，以及学生发起、师生回复的答疑。私信和答疑只展示空白规范化后的前 40 个 Unicode 字符并在截断时追加 `…`；通知只展示主题。再验证已读、通知已确认、解绑、取关和账号停用时任务转为 `skipped`。
+8. 文件上传、对象存储、外部 AI provider 和西电账户绑定按部署配置进行连通性验证；`ocr` Agent 必须选择支持图片输入的模型。
+9. 分别提交真实 PNG、JPEG 图片和空白/低对比图片，确认成功路径只产生一次 attempt，并各执行一次 session、DKT 和 profile 更新；OCR/数学不确定或失败路径的这些写入均为零。图片 OCR 当前只接受 PNG、JPEG 和 GIF。
+10. 验证通用数学判定的 `correct`、`incorrect`、`indeterminate` 响应，以及解析生成不可用、超时、取消、无效输出和验证失败的 `failure.stage`、`failure.code`、`retryable` 契约。
+
+公众号 live 验收必须记录实际账号类型、认证状态、接口权限、IP 白名单、模板字段和微信返回码。管理员固定测试消息仍走客服消息接口并受用户最近交互窗口约束；三类业务提醒走模板消息接口，必须单独验收目标账号的模板权限、模板 ID 和字段结构。测试号链路通过只能证明代码与测试环境可用，不能替代正式公众号的权限验收，也不能保证可以任意主动群发。
+
+业务消息先与提醒任务在同一 PostgreSQL 事务提交，再由 API 进程内 worker 在事务外调用微信。多实例通过 `FOR UPDATE SKIP LOCKED` 和 owner 租约协调；发送前重新检查接收账号、当前 AppID 绑定、关注状态和未读/未确认状态，并从业务原表读取模板字段，之后在调用微信前续租，已经失效或被接管的 owner 不再发送。瞬时网络、限频和 5xx 错误有限重试；解绑、取关、已读或已确认不重试；模板、永久配置或权限错误进入 `dead` 并写脱敏错误码。任务表不保存正文、摘要、主题、OpenID、AppSecret、access token 或微信原始响应。模板摘要会发送给微信并可能显示在锁屏通知中，生产启用前必须完成隐私评估。终态任务保留 30 天，worker 每小时分批清理，每轮最多删除 10000 条；迁移包含终态清理和收件人外键所需索引。
+
+多实例部署必须共享 Redis。回调处理采用 6 秒 owner 租约，成功后转为 24 小时完成态并保存被动回复；处理中重试返回 503，完成态重试重放回复。绑定口令按微信事件 ID 预留并保留原 TTL，避免进程在 Redis 消费后、PostgreSQL 落库前退出时丢失绑定。关注状态只接受不早于当前状态的微信 `CreateTime`，同秒冲突由取关优先。稳定版 access token 刷新锁按单次微信 HTTP 请求超时再加 10 秒余量计算，等待锁和实际刷新使用独立预算；配置上限为 60 秒。
 
 仓库不永久保留验收测试源码。发布前按 [开发指南](development.md) 临时创建非网络验收用例，覆盖真实 PNG/JPEG 的上传、存储回读、多模态 Base64 传递和学习状态写入边界，运行并记录结果后删除：
 
