@@ -15,15 +15,20 @@ import (
 // NoticeRepository persists notice data in PostgreSQL.
 type NoticeRepository struct {
 	Repository
+	wechatReminders WechatReminderEnqueuer
 }
 
 // NewNoticeRepository creates a PostgreSQL-backed notice repository.
-func NewNoticeRepository(db Querier) (NoticeRepository, error) {
+func NewNoticeRepository(db Querier, reminders ...WechatReminderEnqueuer) (NoticeRepository, error) {
 	base, err := NewRepository(db)
 	if err != nil {
 		return NoticeRepository{}, err
 	}
-	return NoticeRepository{Repository: base}, nil
+	var reminderEnqueuer WechatReminderEnqueuer
+	if len(reminders) > 0 {
+		reminderEnqueuer = reminders[0]
+	}
+	return NoticeRepository{Repository: base, wechatReminders: reminderEnqueuer}, nil
 }
 
 // ListNotices returns paginated notices for a user.
@@ -90,6 +95,7 @@ func (r NoticeRepository) listStudentNotices(ctx context.Context, studentID stri
 		if err := rows.Scan(&item.ID, &item.ClassName, &item.Title, &item.PublishedAt, &item.Confirmed); err != nil {
 			return nil, 0, err
 		}
+		item.PublishedAt = messageCenterWallTime(item.PublishedAt)
 		items = append(items, item)
 	}
 	return items, total, rows.Err()
@@ -179,6 +185,7 @@ func (r NoticeRepository) listTeacherNotices(ctx context.Context, teacherID stri
 			&item.ConfirmedCount, &item.TotalCount); err != nil {
 			return nil, 0, err
 		}
+		item.PublishedAt = messageCenterWallTime(item.PublishedAt)
 		items = append(items, item)
 	}
 	return items, total, rows.Err()
@@ -212,6 +219,7 @@ func (r NoticeRepository) getStudentNotice(ctx context.Context, noticeID string,
 		}
 		return nil, false, err
 	}
+	item.PublishedAt = messageCenterWallTime(item.PublishedAt)
 	if len(attachmentsJSON) > 0 {
 		_ = json.Unmarshal(attachmentsJSON, &item.Attachments)
 	}
@@ -249,6 +257,7 @@ func (r NoticeRepository) getTeacherNotice(ctx context.Context, noticeID string,
 		}
 		return nil, false, err
 	}
+	item.PublishedAt = messageCenterWallTime(item.PublishedAt)
 
 	return item, true, nil
 }
@@ -257,7 +266,7 @@ func (r NoticeRepository) getTeacherNotice(ctx context.Context, noticeID string,
 func (r NoticeRepository) CreateNotice(ctx context.Context, teacherID string, classID string, title string, body string, now time.Time) (noticeapp.TeacherNoticeItem, error) {
 	var created noticeapp.TeacherNoticeItem
 	err := withRepositoryTx(ctx, "notice publication", r.Repository, func(base Repository) NoticeRepository {
-		return NoticeRepository{Repository: base}
+		return NoticeRepository{Repository: base, wechatReminders: r.wechatReminders}
 	}, func(txRepo NoticeRepository) error {
 		item, err := txRepo.createNotice(ctx, teacherID, classID, title, body, now)
 		if err != nil {
@@ -270,6 +279,7 @@ func (r NoticeRepository) CreateNotice(ctx context.Context, teacherID string, cl
 }
 
 func (r NoticeRepository) createNotice(ctx context.Context, teacherID string, classID string, title string, body string, now time.Time) (noticeapp.TeacherNoticeItem, error) {
+	now = messageCenterInstant(now)
 	var teacherActive bool
 	if err := r.DB().QueryRow(ctx, `
 		SELECT true
@@ -305,6 +315,9 @@ func (r NoticeRepository) createNotice(ctx context.Context, teacherID string, cl
 		VALUES ($1, $2, $3, $4, $5, $6, $7)`,
 		id, teacherID, classID, className, title, body, now,
 	); err != nil {
+		return noticeapp.TeacherNoticeItem{}, err
+	}
+	if err := r.wechatReminders.EnqueueNoticeRecipients(ctx, r.DB(), id); err != nil {
 		return noticeapp.TeacherNoticeItem{}, err
 	}
 
@@ -362,7 +375,7 @@ func (r NoticeRepository) ConfirmNotice(ctx context.Context, noticeID string, st
 			WHERE notice_id = $1 AND student_id = $2
 		), inserted AS (
 			INSERT INTO public.notice_confirmations (id, notice_id, student_id, confirmed_at)
-			SELECT $3, $1, $2, now()
+				SELECT $3, $1, $2, clock_timestamp() AT TIME ZONE 'Asia/Shanghai'
 			WHERE EXISTS (SELECT 1 FROM recipient)
 			ON CONFLICT (notice_id, student_id) DO NOTHING
 			RETURNING 1

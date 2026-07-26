@@ -13,6 +13,7 @@ import { getApiErrorMessage } from '@/libs/http/apiClient';
 import { passwordChangeSchema, type PasswordChangeFormData } from '@/libs/validation/schemas';
 import { authService } from '@/modules/auth/services/authService';
 import { xidianService, type XidianBindingStatus, type XidianCaptchaChallenge } from '@/modules/xidian/services/xidianService';
+import { WechatBindingSection } from '@/modules/wechat/components/WechatBindingSection';
 
 export const ProfilePage: React.FC = () => {
   const user = useAppSelector(selectCurrentUser);
@@ -211,7 +212,7 @@ export const ProfilePage: React.FC = () => {
               <Lock className="w-5 h-5" />
               账号安全与绑定
             </CardTitle>
-            <CardDescription>查看注册邮箱并管理可用于身份验证的学校账户</CardDescription>
+            <CardDescription>查看注册邮箱并管理学校账户与消息渠道</CardDescription>
           </CardHeader>
           <CardContent className="space-y-4">
             {/* Email */}
@@ -284,6 +285,9 @@ export const ProfilePage: React.FC = () => {
                 )}
                 <span className="text-sm">{xidianActionStatus.message}</span>
               </div>
+            )}
+            {(user?.role === 'student' || user?.role === 'teacher') && (
+              <WechatBindingSection userId={user.id} />
             )}
           </CardContent>
         </Card>

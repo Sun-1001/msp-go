@@ -2,6 +2,7 @@ package config
 
 import (
 	"bufio"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -14,6 +15,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode/utf8"
 )
 
 const (
@@ -21,6 +23,7 @@ const (
 	defaultJWTSecretKey      = "your-secret-key-change-in-production"
 	defaultAdminPassword     = "admin123"
 	minProductionSecretBytes = 32
+	maxWechatTemplateIDBytes = 256
 )
 
 // Config contains process-level settings loaded from environment variables.
@@ -125,6 +128,19 @@ type Config struct {
 	XidianPieceWidth         int
 	XidianPieceHeight        int
 
+	WechatOfficialAccountEnabled     bool
+	WechatOfficialAccountAppID       string
+	WechatOfficialAccountAppSecret   string
+	WechatOfficialAccountToken       string
+	WechatOfficialAccountAESKey      string
+	WechatOfficialAccountMessageMode string
+	WechatOfficialAccountName        string
+	WechatOfficialAccountHTTPTimeout time.Duration
+	WechatMessageRemindersEnabled    bool
+	WechatPrivateMessageTemplateID   string
+	WechatNoticeTemplateID           string
+	WechatQAMessageTemplateID        string
+
 	EinoEnabled       bool
 	EinoBaseURL       string
 	EinoAPIKey        string
@@ -222,22 +238,34 @@ func Load() (Config, error) {
 		XidianEhallBase:           envString("XIDIAN_EHALL_BASE", "https://ehall.xidian.edu.cn"),
 		XidianUserAgent: envString("XIDIAN_USER_AGENT",
 			"Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36"),
-		XidianHTTPConnectTimeout: envSeconds("XIDIAN_HTTP_CONNECT_TIMEOUT", 10*time.Second),
-		XidianHTTPReadTimeout:    envSeconds("XIDIAN_HTTP_READ_TIMEOUT", 30*time.Second),
-		XidianChallengeTTL:       time.Duration(envInt("XIDIAN_CHALLENGE_TTL", 600)) * time.Second,
-		XidianHTTPRetryCount:     envInt("XIDIAN_HTTP_RETRY_COUNT", 2),
-		XidianCaptchaWidth:       envInt("XIDIAN_CAPTCHA_WIDTH", 280),
-		XidianCaptchaHeight:      envInt("XIDIAN_CAPTCHA_HEIGHT", 155),
-		XidianPieceWidth:         envInt("XIDIAN_PIECE_WIDTH", 44),
-		XidianPieceHeight:        envInt("XIDIAN_PIECE_HEIGHT", 155),
-		EinoEnabled:              envBool("EINO_ENABLED", false),
-		EinoBaseURL:              envString("EINO_BASE_URL", ""),
-		EinoAPIKey:               envString("EINO_API_KEY", ""),
-		EinoModel:                envString("EINO_MODEL", ""),
-		EinoTimeout:              envSeconds("EINO_TIMEOUT_SECONDS", 45*time.Second),
-		EinoTemperature:          envFloat("EINO_TEMPERATURE", 0.3),
-		EinoMaxTokens:            envInt("EINO_MAX_TOKENS", 1200),
-		EinoMaxIterations:        envInt("EINO_MAX_ITERATIONS", 8),
+		XidianHTTPConnectTimeout:         envSeconds("XIDIAN_HTTP_CONNECT_TIMEOUT", 10*time.Second),
+		XidianHTTPReadTimeout:            envSeconds("XIDIAN_HTTP_READ_TIMEOUT", 30*time.Second),
+		XidianChallengeTTL:               time.Duration(envInt("XIDIAN_CHALLENGE_TTL", 600)) * time.Second,
+		XidianHTTPRetryCount:             envInt("XIDIAN_HTTP_RETRY_COUNT", 2),
+		XidianCaptchaWidth:               envInt("XIDIAN_CAPTCHA_WIDTH", 280),
+		XidianCaptchaHeight:              envInt("XIDIAN_CAPTCHA_HEIGHT", 155),
+		XidianPieceWidth:                 envInt("XIDIAN_PIECE_WIDTH", 44),
+		XidianPieceHeight:                envInt("XIDIAN_PIECE_HEIGHT", 155),
+		WechatOfficialAccountEnabled:     envBool("WECHAT_OFFICIAL_ACCOUNT_ENABLED", false),
+		WechatOfficialAccountAppID:       envString("WECHAT_OFFICIAL_ACCOUNT_APP_ID", ""),
+		WechatOfficialAccountAppSecret:   envString("WECHAT_OFFICIAL_ACCOUNT_APP_SECRET", ""),
+		WechatOfficialAccountToken:       envString("WECHAT_OFFICIAL_ACCOUNT_TOKEN", ""),
+		WechatOfficialAccountAESKey:      envString("WECHAT_OFFICIAL_ACCOUNT_AES_KEY", ""),
+		WechatOfficialAccountMessageMode: strings.ToLower(envString("WECHAT_OFFICIAL_ACCOUNT_MESSAGE_MODE", "plain")),
+		WechatOfficialAccountName:        envString("WECHAT_OFFICIAL_ACCOUNT_NAME", "微信公众号"),
+		WechatOfficialAccountHTTPTimeout: envSeconds("WECHAT_OFFICIAL_ACCOUNT_HTTP_TIMEOUT_SECONDS", 10*time.Second),
+		WechatMessageRemindersEnabled:    envBool("WECHAT_MESSAGE_REMINDERS_ENABLED", false),
+		WechatPrivateMessageTemplateID:   envString("WECHAT_PRIVATE_MESSAGE_TEMPLATE_ID", ""),
+		WechatNoticeTemplateID:           envString("WECHAT_NOTICE_TEMPLATE_ID", ""),
+		WechatQAMessageTemplateID:        envString("WECHAT_QA_MESSAGE_TEMPLATE_ID", ""),
+		EinoEnabled:                      envBool("EINO_ENABLED", false),
+		EinoBaseURL:                      envString("EINO_BASE_URL", ""),
+		EinoAPIKey:                       envString("EINO_API_KEY", ""),
+		EinoModel:                        envString("EINO_MODEL", ""),
+		EinoTimeout:                      envSeconds("EINO_TIMEOUT_SECONDS", 45*time.Second),
+		EinoTemperature:                  envFloat("EINO_TEMPERATURE", 0.3),
+		EinoMaxTokens:                    envInt("EINO_MAX_TOKENS", 1200),
+		EinoMaxIterations:                envInt("EINO_MAX_ITERATIONS", 8),
 	}
 
 	if cfg.Port <= 0 || cfg.Port > 65535 {
@@ -325,6 +353,9 @@ func Load() (Config, error) {
 		return Config{}, err
 	}
 	if err := validateXidianConfig(cfg); err != nil {
+		return Config{}, err
+	}
+	if err := validateWechatOfficialAccountConfig(cfg); err != nil {
 		return Config{}, err
 	}
 	if err := validateEinoConfig(cfg); err != nil {
@@ -700,6 +731,87 @@ func validateXidianConfig(cfg Config) error {
 		"XIDIAN_EHALL_BASE": cfg.XidianEhallBase,
 		"XIDIAN_USER_AGENT": cfg.XidianUserAgent,
 	})
+}
+
+func validateWechatOfficialAccountConfig(cfg Config) error {
+	if cfg.WechatMessageRemindersEnabled && !cfg.WechatOfficialAccountEnabled {
+		return errors.New("WECHAT_MESSAGE_REMINDERS_ENABLED requires WECHAT_OFFICIAL_ACCOUNT_ENABLED=true")
+	}
+	if cfg.WechatMessageRemindersEnabled {
+		templates := map[string]string{
+			"WECHAT_NOTICE_TEMPLATE_ID":          cfg.WechatNoticeTemplateID,
+			"WECHAT_PRIVATE_MESSAGE_TEMPLATE_ID": cfg.WechatPrivateMessageTemplateID,
+			"WECHAT_QA_MESSAGE_TEMPLATE_ID":      cfg.WechatQAMessageTemplateID,
+		}
+		missing := make([]string, 0)
+		for key, value := range templates {
+			if strings.TrimSpace(value) == "" {
+				missing = append(missing, key)
+			}
+		}
+		if len(missing) > 0 {
+			sort.Strings(missing)
+			return fmt.Errorf("WeChat reminder config missing: %s", strings.Join(missing, ", "))
+		}
+		for key, value := range templates {
+			if len(value) > maxWechatTemplateIDBytes || !utf8.ValidString(value) || strings.ContainsAny(value, "\t\r\n") {
+				return fmt.Errorf("%s must be a valid WeChat template ID of at most %d bytes", key, maxWechatTemplateIDBytes)
+			}
+		}
+	}
+	if !cfg.WechatOfficialAccountEnabled {
+		return nil
+	}
+	switch cfg.WechatOfficialAccountMessageMode {
+	case "plain", "compatible", "safe":
+	default:
+		return fmt.Errorf("WECHAT_OFFICIAL_ACCOUNT_MESSAGE_MODE must be one of plain, compatible, safe, got %s", cfg.WechatOfficialAccountMessageMode)
+	}
+	values := map[string]string{
+		"WECHAT_OFFICIAL_ACCOUNT_APP_ID":     cfg.WechatOfficialAccountAppID,
+		"WECHAT_OFFICIAL_ACCOUNT_APP_SECRET": cfg.WechatOfficialAccountAppSecret,
+		"WECHAT_OFFICIAL_ACCOUNT_TOKEN":      cfg.WechatOfficialAccountToken,
+		"WECHAT_OFFICIAL_ACCOUNT_NAME":       cfg.WechatOfficialAccountName,
+	}
+	missing := make([]string, 0)
+	for key, value := range values {
+		if strings.TrimSpace(value) == "" {
+			missing = append(missing, key)
+		}
+	}
+	if len(missing) > 0 {
+		sort.Strings(missing)
+		return fmt.Errorf("WeChat Official Account config missing: %s", strings.Join(missing, ", "))
+	}
+	if !asciiAlphaNumeric(cfg.WechatOfficialAccountToken) || len(cfg.WechatOfficialAccountToken) < 3 || len(cfg.WechatOfficialAccountToken) > 32 {
+		return errors.New("WECHAT_OFFICIAL_ACCOUNT_TOKEN must contain 3 to 32 ASCII letters or digits")
+	}
+	if cfg.WechatOfficialAccountHTTPTimeout < time.Second || cfg.WechatOfficialAccountHTTPTimeout > 60*time.Second {
+		return errors.New("WECHAT_OFFICIAL_ACCOUNT_HTTP_TIMEOUT_SECONDS must be between 1 and 60 seconds")
+	}
+	needsAES := cfg.WechatOfficialAccountMessageMode == "compatible" || cfg.WechatOfficialAccountMessageMode == "safe"
+	if needsAES && strings.TrimSpace(cfg.WechatOfficialAccountAESKey) == "" {
+		return errors.New("WECHAT_OFFICIAL_ACCOUNT_AES_KEY must not be empty in compatible or safe message mode")
+	}
+	if cfg.WechatOfficialAccountAESKey != "" {
+		if len(cfg.WechatOfficialAccountAESKey) != 43 {
+			return errors.New("WECHAT_OFFICIAL_ACCOUNT_AES_KEY must contain exactly 43 Base64 characters")
+		}
+		decoded, err := base64.StdEncoding.DecodeString(cfg.WechatOfficialAccountAESKey + "=")
+		if err != nil || len(decoded) != 32 {
+			return errors.New("WECHAT_OFFICIAL_ACCOUNT_AES_KEY must decode to 32 bytes")
+		}
+	}
+	return nil
+}
+
+func asciiAlphaNumeric(value string) bool {
+	for _, char := range value {
+		if (char < 'a' || char > 'z') && (char < 'A' || char > 'Z') && (char < '0' || char > '9') {
+			return false
+		}
+	}
+	return true
 }
 
 func validateEinoConfig(cfg Config) error {

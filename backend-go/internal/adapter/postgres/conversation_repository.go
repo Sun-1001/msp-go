@@ -10,21 +10,27 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 
 	conversationapp "mathstudy/backend-go/internal/application/conversation"
+	wechatreminder "mathstudy/backend-go/internal/application/wechatreminder"
 	"mathstudy/backend-go/internal/domain/user"
 )
 
 // ConversationRepository persists conversation data in PostgreSQL.
 type ConversationRepository struct {
 	Repository
+	wechatReminders WechatReminderEnqueuer
 }
 
 // NewConversationRepository creates a PostgreSQL-backed conversation repository.
-func NewConversationRepository(db Querier) (ConversationRepository, error) {
+func NewConversationRepository(db Querier, reminders ...WechatReminderEnqueuer) (ConversationRepository, error) {
 	base, err := NewRepository(db)
 	if err != nil {
 		return ConversationRepository{}, err
 	}
-	return ConversationRepository{Repository: base}, nil
+	var reminderEnqueuer WechatReminderEnqueuer
+	if len(reminders) > 0 {
+		reminderEnqueuer = reminders[0]
+	}
+	return ConversationRepository{Repository: base, wechatReminders: reminderEnqueuer}, nil
 }
 
 // ListConversations returns paginated conversations for a user.
@@ -101,6 +107,7 @@ func (r ConversationRepository) listStudentConversations(ctx context.Context, st
 		if err := rows.Scan(&item.ID, &item.TeacherID, &displayName, &teacherUsername, &subject, &item.LastTime, &item.Archived, &unread, &lastMsg); err != nil {
 			return nil, 0, err
 		}
+		item.LastTime = messageCenterWallTime(item.LastTime)
 		if displayName.Valid {
 			teacherName = displayName.String
 		} else {
@@ -191,6 +198,7 @@ func (r ConversationRepository) listTeacherConversations(ctx context.Context, te
 		if err := rows.Scan(&item.ID, &item.StudentID, &displayName, &studentUsername, &subject, &item.LastTime, &lastMsg, &unread, &pendingReply); err != nil {
 			return nil, 0, err
 		}
+		item.LastTime = messageCenterWallTime(item.LastTime)
 		if displayName.Valid {
 			studentName = displayName.String
 		} else {
@@ -234,6 +242,7 @@ func (r ConversationRepository) GetConversation(ctx context.Context, conversatio
 		}
 		return conversationapp.ConversationDetail{}, false, err
 	}
+	detail.LastTime = messageCenterWallTime(detail.LastTime)
 	if teacherDisplay.Valid {
 		teacherName = teacherDisplay.String
 	} else {
@@ -281,6 +290,7 @@ func (r ConversationRepository) GetConversation(ctx context.Context, conversatio
 		if err := msgRows.Scan(&msg.ID, &msg.From, &msg.Text, &msg.Time, &readAt); err != nil {
 			return conversationapp.ConversationDetail{}, false, err
 		}
+		msg.Time = messageCenterWallTime(msg.Time)
 		if readAt.Valid {
 			b := true
 			msg.ReadByRecipient = &b
@@ -314,7 +324,7 @@ func (r ConversationRepository) AcknowledgeConversationRead(ctx context.Context,
 			  AND (c.student_id = $2 OR c.teacher_id = $2)
 		), updated AS (
 			UPDATE public.conversation_messages target
-			SET read_at = now()
+			SET read_at = clock_timestamp() AT TIME ZONE 'Asia/Shanghai'
 			FROM authorized_cutoff cutoff
 			WHERE target.conversation_id = $1
 			  AND target.sender_id != $2
@@ -407,7 +417,7 @@ func (r ConversationRepository) CreateConversation(ctx context.Context, creatorI
 	if !reopened {
 		err = tx.QueryRow(ctx, `
 			WITH stamped AS (
-				SELECT clock_timestamp()::timestamp without time zone AS created_at
+				SELECT clock_timestamp() AT TIME ZONE 'Asia/Shanghai' AS created_at
 			)
 			INSERT INTO public.conversations (
 				id, student_id, teacher_id, subject,
@@ -437,7 +447,7 @@ func (r ConversationRepository) CreateConversation(ctx context.Context, creatorI
 			VALUES (
 				$1, $2, $3, $4, $5,
 				GREATEST(
-					clock_timestamp()::timestamp without time zone,
+					clock_timestamp() AT TIME ZONE 'Asia/Shanghai',
 					$6::timestamp without time zone + interval '1 microsecond'
 				)
 			)
@@ -458,13 +468,26 @@ func (r ConversationRepository) CreateConversation(ctx context.Context, creatorI
 		if err != nil {
 			return conversationapp.ConversationDetail{}, err
 		}
+		recipientID := teacherID
+		if creatorRole == user.RoleTeacher {
+			recipientID = studentID
+		}
+		if err := r.wechatReminders.Enqueue(
+			ctx,
+			tx,
+			wechatreminder.EventPrivateMessage,
+			msgID,
+			recipientID,
+		); err != nil {
+			return conversationapp.ConversationDetail{}, err
+		}
 	} else if reopened {
 		_, err = tx.Exec(ctx, `
 			UPDATE public.conversations
 			SET `+archiveColumn+` = false,
 				subject = CASE WHEN $2 = '' THEN subject ELSE $2 END,
 				updated_at = GREATEST(
-					clock_timestamp()::timestamp without time zone,
+					clock_timestamp() AT TIME ZONE 'Asia/Shanghai',
 					updated_at + interval '1 microsecond'
 				)
 			WHERE id = $1`, convID, subject)
@@ -519,15 +542,17 @@ func (r ConversationRepository) SendMessage(ctx context.Context, conversationID 
 	}
 
 	var parentLastMessageAt time.Time
+	var recipientID string
 	err = tx.QueryRow(ctx, `
-		SELECT c.last_message_at
+		SELECT c.last_message_at,
+			CASE WHEN $3 = 'student' THEN c.teacher_id ELSE c.student_id END
 		FROM public.conversations c
 		WHERE c.id = $1
 		  AND (
 			(c.student_id = $2 AND $3 = 'student')
 			OR (c.teacher_id = $2 AND $3 = 'teacher')
 		  )
-		FOR UPDATE`, conversationID, senderID, senderRole).Scan(&parentLastMessageAt)
+		FOR UPDATE`, conversationID, senderID, senderRole).Scan(&parentLastMessageAt, &recipientID)
 	if err == pgx.ErrNoRows {
 		return conversationapp.Message{}, conversationapp.ErrNotFound
 	}
@@ -541,7 +566,7 @@ func (r ConversationRepository) SendMessage(ctx context.Context, conversationID 
 		VALUES (
 			$1, $2, $3, $4, $5,
 			GREATEST(
-				clock_timestamp()::timestamp without time zone,
+				clock_timestamp() AT TIME ZONE 'Asia/Shanghai',
 				$6::timestamp without time zone + interval '1 microsecond'
 			)
 		)
@@ -564,6 +589,15 @@ func (r ConversationRepository) SendMessage(ctx context.Context, conversationID 
 	if err != nil {
 		return conversationapp.Message{}, err
 	}
+	if err := r.wechatReminders.Enqueue(
+		ctx,
+		tx,
+		wechatreminder.EventPrivateMessage,
+		msgID,
+		recipientID,
+	); err != nil {
+		return conversationapp.Message{}, err
+	}
 
 	if err := tx.Commit(ctx); err != nil {
 		return conversationapp.Message{}, err
@@ -573,7 +607,7 @@ func (r ConversationRepository) SendMessage(ctx context.Context, conversationID 
 		ID:   msgID,
 		From: senderRole,
 		Text: text,
-		Time: messageAt,
+		Time: messageCenterWallTime(messageAt),
 	}, nil
 }
 
@@ -586,7 +620,9 @@ func (r ConversationRepository) ArchiveConversation(ctx context.Context, convers
 		participantColumn = "teacher_id"
 	}
 	tag, err := r.DB().Exec(ctx, `
-		UPDATE public.conversations SET `+archiveColumn+` = true, updated_at = now()
+		UPDATE public.conversations
+		SET `+archiveColumn+` = true,
+			updated_at = clock_timestamp() AT TIME ZONE 'Asia/Shanghai'
 		WHERE id = $1 AND `+participantColumn+` = $2`,
 		conversationID, userID,
 	)

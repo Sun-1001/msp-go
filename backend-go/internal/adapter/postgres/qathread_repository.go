@@ -9,21 +9,27 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 
 	qathreadapp "mathstudy/backend-go/internal/application/qathread"
+	wechatreminder "mathstudy/backend-go/internal/application/wechatreminder"
 	"mathstudy/backend-go/internal/domain/user"
 )
 
 // QAThreadRepository persists Q&A thread data in PostgreSQL.
 type QAThreadRepository struct {
 	Repository
+	wechatReminders WechatReminderEnqueuer
 }
 
 // NewQAThreadRepository creates a PostgreSQL-backed Q&A thread repository.
-func NewQAThreadRepository(db Querier) (QAThreadRepository, error) {
+func NewQAThreadRepository(db Querier, reminders ...WechatReminderEnqueuer) (QAThreadRepository, error) {
 	base, err := NewRepository(db)
 	if err != nil {
 		return QAThreadRepository{}, err
 	}
-	return QAThreadRepository{Repository: base}, nil
+	var reminderEnqueuer WechatReminderEnqueuer
+	if len(reminders) > 0 {
+		reminderEnqueuer = reminders[0]
+	}
+	return QAThreadRepository{Repository: base, wechatReminders: reminderEnqueuer}, nil
 }
 
 // ListThreads returns paginated threads for a user.
@@ -105,6 +111,7 @@ func (r QAThreadRepository) listStudentThreads(ctx context.Context, studentID st
 			&item.Status, &item.ClassID, &item.ClassName, &item.Unread, &item.LastUpdate); err != nil {
 			return nil, 0, err
 		}
+		item.LastUpdate = messageCenterWallTime(item.LastUpdate)
 		items = append(items, item)
 	}
 	return items, total, rows.Err()
@@ -181,6 +188,7 @@ func (r QAThreadRepository) listTeacherThreads(ctx context.Context, teacherID st
 			&knowledgePoint, &resourceName, &item.Status, &item.ContextPreview, &item.LastUpdate); err != nil {
 			return nil, 0, err
 		}
+		item.LastUpdate = messageCenterWallTime(item.LastUpdate)
 		if knowledgePoint.Valid {
 			item.KnowledgePoint = knowledgePoint.String
 		}
@@ -200,30 +208,37 @@ func (r QAThreadRepository) GetThread(ctx context.Context, threadID string, user
 	return r.getTeacherThread(ctx, threadID, userID, page, pageSize)
 }
 
-// AcknowledgeThreadRead marks teacher replies no newer than a delivered message cutoff.
-func (r QAThreadRepository) AcknowledgeThreadRead(ctx context.Context, threadID string, studentID string, throughMessageID string) (bool, error) {
+// AcknowledgeThreadRead marks messages from the other participant no newer than a delivered message cutoff.
+func (r QAThreadRepository) AcknowledgeThreadRead(ctx context.Context, threadID string, userID string, role user.Role, throughMessageID string) (bool, error) {
 	var valid bool
 	var updated int
 	err := r.DB().QueryRow(ctx, `
 		WITH authorized_cutoff AS (
-			SELECT qtm.created_at, qtm.id
+			SELECT qtm.created_at, qtm.id,
+				CASE
+					WHEN $4::text = 'student' THEN 'teacher'
+					WHEN $4::text = 'teacher' THEN 'student'
+				END AS sender_role
 			FROM public.question_thread_messages qtm
 			JOIN public.question_threads qt ON qt.id = qtm.thread_id
 			WHERE qtm.thread_id = $1
 			  AND qtm.id = $3
-			  AND qt.student_id = $2
+			  AND (
+				($4::text = 'student' AND qt.student_id = $2)
+				OR ($4::text = 'teacher' AND qt.teacher_id = $2)
+			  )
 		), updated AS (
 			UPDATE public.question_thread_messages target
-			SET read_at = now()
+			SET read_at = clock_timestamp() AT TIME ZONE 'Asia/Shanghai'
 			FROM authorized_cutoff cutoff
 			WHERE target.thread_id = $1
-			  AND target.sender_role = 'teacher'
+			  AND target.sender_role = cutoff.sender_role
 			  AND target.read_at IS NULL
 			  AND (target.created_at, target.id) <= (cutoff.created_at, cutoff.id)
 			RETURNING 1
 		)
 		SELECT EXISTS (SELECT 1 FROM authorized_cutoff), COUNT(*) FROM updated`,
-		threadID, studentID, throughMessageID,
+		threadID, userID, throughMessageID, string(role),
 	).Scan(&valid, &updated)
 	return valid, err
 }
@@ -325,6 +340,7 @@ func (r QAThreadRepository) loadThreadMessages(ctx context.Context, threadID str
 		if err := rows.Scan(&m.ID, &m.From, &m.Text, &m.Time); err != nil {
 			return nil, 0, "", err
 		}
+		m.Time = messageCenterWallTime(m.Time)
 		msgs = append(msgs, m)
 	}
 	if err := rows.Err(); err != nil {
@@ -470,7 +486,7 @@ func (r QAThreadRepository) CreateThread(ctx context.Context, studentID string, 
 	var parentUpdatedAt time.Time
 	err = tx.QueryRow(ctx, `
 		WITH stamped AS (
-			SELECT clock_timestamp()::timestamp without time zone AS created_at
+			SELECT clock_timestamp() AT TIME ZONE 'Asia/Shanghai' AS created_at
 		)
 		INSERT INTO public.question_threads (
 			id, student_id, teacher_id, class_id, class_name,
@@ -495,7 +511,7 @@ func (r QAThreadRepository) CreateThread(ctx context.Context, studentID string, 
 		VALUES (
 			$1, $2, $3, 'student', $4,
 			GREATEST(
-				clock_timestamp()::timestamp without time zone,
+				clock_timestamp() AT TIME ZONE 'Asia/Shanghai',
 				$5::timestamp without time zone + interval '1 microsecond'
 			)
 		)
@@ -509,6 +525,15 @@ func (r QAThreadRepository) CreateThread(ctx context.Context, studentID string, 
 		UPDATE public.question_threads
 		SET updated_at = $2
 		WHERE id = $1`, threadID, messageAt); err != nil {
+		return qathreadapp.ThreadDetail{}, err
+	}
+	if err := r.wechatReminders.Enqueue(
+		ctx,
+		tx,
+		wechatreminder.EventQAMessage,
+		msgID,
+		teacherID,
+	); err != nil {
 		return qathreadapp.ThreadDetail{}, err
 	}
 
@@ -526,7 +551,7 @@ func (r QAThreadRepository) CreateThread(ctx context.Context, studentID string, 
 		Source:               source,
 		Context:              threadContext,
 		Status:               "待回复",
-		Messages:             []qathreadapp.Message{{ID: msgID, From: "student", Text: firstMsg, Time: messageAt}},
+		Messages:             []qathreadapp.Message{{ID: msgID, From: "student", Text: firstMsg, Time: messageCenterWallTime(messageAt)}},
 		MessagesTotal:        1,
 		MessagesPage:         1,
 		MessagesSize:         50,
@@ -566,15 +591,17 @@ func (r QAThreadRepository) CreateThreadMessage(ctx context.Context, threadID st
 	}
 
 	var parentUpdatedAt time.Time
+	var recipientID string
 	err = tx.QueryRow(ctx, `
-		SELECT qt.updated_at
+		SELECT qt.updated_at,
+			CASE WHEN $3 = 'student' THEN qt.teacher_id ELSE qt.student_id END
 		FROM public.question_threads qt
 		WHERE qt.id = $1
 		  AND (
 			(qt.student_id = $2 AND $3 = 'student')
 			OR (qt.teacher_id = $2 AND $3 = 'teacher')
 		  )
-		FOR UPDATE`, threadID, senderID, senderRole).Scan(&parentUpdatedAt)
+		FOR UPDATE`, threadID, senderID, senderRole).Scan(&parentUpdatedAt, &recipientID)
 	if err == pgx.ErrNoRows {
 		return qathreadapp.Message{}, qathreadapp.ErrNotFound
 	}
@@ -588,7 +615,7 @@ func (r QAThreadRepository) CreateThreadMessage(ctx context.Context, threadID st
 		VALUES (
 			$1, $2, $3, $4, $5,
 			GREATEST(
-				clock_timestamp()::timestamp without time zone,
+				clock_timestamp() AT TIME ZONE 'Asia/Shanghai',
 				$6::timestamp without time zone + interval '1 microsecond'
 			)
 		)
@@ -611,12 +638,21 @@ func (r QAThreadRepository) CreateThreadMessage(ctx context.Context, threadID st
 	if err != nil {
 		return qathreadapp.Message{}, err
 	}
+	if err := r.wechatReminders.Enqueue(
+		ctx,
+		tx,
+		wechatreminder.EventQAMessage,
+		msgID,
+		recipientID,
+	); err != nil {
+		return qathreadapp.Message{}, err
+	}
 
 	if err := tx.Commit(ctx); err != nil {
 		return qathreadapp.Message{}, err
 	}
 
-	return qathreadapp.Message{ID: msgID, From: senderRole, Text: text, Time: messageAt}, nil
+	return qathreadapp.Message{ID: msgID, From: senderRole, Text: text, Time: messageCenterWallTime(messageAt)}, nil
 }
 
 // UpdateThreadStatus updates a thread's status (teacher only).
@@ -625,7 +661,7 @@ func (r QAThreadRepository) UpdateThreadStatus(ctx context.Context, threadID str
 		UPDATE public.question_threads
 		SET status = $1,
 			updated_at = GREATEST(
-				clock_timestamp()::timestamp without time zone,
+				clock_timestamp() AT TIME ZONE 'Asia/Shanghai',
 				updated_at + interval '1 microsecond'
 			)
 		WHERE id = $2 AND teacher_id = $3`,

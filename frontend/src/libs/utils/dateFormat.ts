@@ -1,5 +1,21 @@
 import { format, type Locale } from 'date-fns';
 
+const beijingMonthDayTimeFormatter = new Intl.DateTimeFormat('zh-CN', {
+  timeZone: 'Asia/Shanghai',
+  month: 'numeric',
+  day: 'numeric',
+  hour: '2-digit',
+  minute: '2-digit',
+  hourCycle: 'h23',
+});
+
+function formatBeijingMonthDayTime(date: Date): string {
+  const parts = new Map(
+    beijingMonthDayTimeFormatter.formatToParts(date).map(({ type, value }) => [type, value])
+  );
+  return `${parts.get('month') ?? ''}月${parts.get('day') ?? ''}日 ${parts.get('hour') ?? ''}:${parts.get('minute') ?? ''}`;
+}
+
 interface FormatDateOptions {
   locale?: Locale;
   fallback?: string;
@@ -40,7 +56,7 @@ export function formatRelativeTime(value: string | number | Date | null | undefi
 
   const now = Date.now();
   const diffMs = now - date.getTime();
-  if (diffMs < 0) return format(date, 'M月d日 HH:mm');
+  if (diffMs < 0) return formatBeijingMonthDayTime(date);
 
   const diffMin = Math.floor(diffMs / 60000);
   if (diffMin < 1) return '刚刚';
@@ -53,5 +69,5 @@ export function formatRelativeTime(value: string | number | Date | null | undefi
   if (diffDays === 1) return '昨天';
   if (diffDays < 7) return `${diffDays}天前`;
 
-  return format(date, 'M月d日 HH:mm');
+  return formatBeijingMonthDayTime(date);
 }

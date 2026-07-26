@@ -21,7 +21,7 @@ import (
 type Service interface {
 	ListThreads(ctx context.Context, userID string, role user.Role, search string, status string, className string, teacherID string, page int, pageSize int) (qathreadapp.ListResponse, error)
 	GetThread(ctx context.Context, userID string, threadID string, role user.Role, page int, pageSize int) (any, error)
-	AcknowledgeThreadRead(ctx context.Context, studentID string, threadID string, throughMessageID string) error
+	AcknowledgeThreadRead(ctx context.Context, userID string, role user.Role, threadID string, throughMessageID string) error
 	CreateThread(ctx context.Context, studentID string, teacherID string, content string, source string) (qathreadapp.ThreadDetail, error)
 	CreateThreadMessage(ctx context.Context, threadID string, senderID string, senderRole string, text string) (qathreadapp.Message, error)
 	UpdateThreadStatus(ctx context.Context, threadID string, teacherID string, status string) error
@@ -164,7 +164,7 @@ type acknowledgeReadRequest struct {
 }
 
 func (h *Handler) acknowledgeRead(w http.ResponseWriter, r *http.Request) {
-	principal, ok := h.requireStudent(w, r)
+	principal, ok := h.requireMessageUser(w, r)
 	if !ok {
 		return
 	}
@@ -179,7 +179,7 @@ func (h *Handler) acknowledgeRead(w http.ResponseWriter, r *http.Request) {
 		writeQAError(w, http.StatusUnprocessableEntity, "VALIDATION_ERROR", "through_message_id 不能为空")
 		return
 	}
-	if err := h.service.AcknowledgeThreadRead(r.Context(), principal.UserID, r.PathValue("id"), req.ThroughMessageID); err != nil {
+	if err := h.service.AcknowledgeThreadRead(r.Context(), principal.UserID, principal.Role, r.PathValue("id"), req.ThroughMessageID); err != nil {
 		if errors.Is(err, qathreadapp.ErrInvalidInput) {
 			writeQAError(w, http.StatusUnprocessableEntity, "VALIDATION_ERROR", "已读确认参数无效")
 			return
