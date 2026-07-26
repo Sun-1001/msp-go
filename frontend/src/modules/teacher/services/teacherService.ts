@@ -49,14 +49,18 @@ export const teacherService = {
   /**
    * 获取教师学生分页列表
    */
-  async getStudents(params: TeacherStudentListParams = {}): Promise<TeacherStudentListResponse> {
+  async getStudents(
+    params: TeacherStudentListParams = {},
+    signal?: AbortSignal,
+  ): Promise<TeacherStudentListResponse> {
     try {
       const response = await apiClient.get<TeacherStudentListResponse>(`${BASE_PATH}/students`, {
         params,
+        signal,
       });
       return response.data;
     } catch (error) {
-      teacherLogger.error('获取学生列表失败', error);
+      if (!signal?.aborted) teacherLogger.error('获取学生列表失败', error);
       throw error;
     }
   },
@@ -94,14 +98,15 @@ export const teacherService = {
   /**
    * 获取学生详情（StudentDetailPage）
    */
-  async getStudentDetail(studentId: string): Promise<StudentDetailData> {
+  async getStudentDetail(studentId: string, signal?: AbortSignal): Promise<StudentDetailData> {
     try {
       const response = await apiClient.get<StudentDetailData>(
-        `${BASE_PATH}/students/${studentId}/detail`
+        `${BASE_PATH}/students/${studentId}/detail`,
+        { signal },
       );
       return response.data;
     } catch (error) {
-      teacherLogger.error('获取学生详情失败', error);
+      if (!signal?.aborted) teacherLogger.error('获取学生详情失败', error);
       throw error;
     }
   },

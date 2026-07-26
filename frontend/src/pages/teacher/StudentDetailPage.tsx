@@ -46,20 +46,24 @@ export const StudentDetailPage: React.FC = () => {
   const [error, setError] = useState('');
 
   useEffect(() => {
+    const controller = new AbortController();
     const fetchData = async () => {
       if (!id) return;
       try {
         setIsLoading(true);
         setError('');
-        const result = await teacherService.getStudentDetail(id);
+        const result = await teacherService.getStudentDetail(id, controller.signal);
+        if (controller.signal.aborted) return;
         setData(result);
       } catch {
+        if (controller.signal.aborted) return;
         setError('获取学生详情失败，请稍后重试');
       } finally {
-        setIsLoading(false);
+        if (!controller.signal.aborted) setIsLoading(false);
       }
     };
-    fetchData();
+    void fetchData();
+    return () => controller.abort();
   }, [id]);
 
   const student = data?.student;

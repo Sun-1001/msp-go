@@ -60,6 +60,7 @@ export const StudentsPage: React.FC = () => {
   }, []);
 
   useEffect(() => {
+    const controller = new AbortController();
     const loadStudents = async () => {
       setIsLoading(true);
       setErrorMessage('');
@@ -69,18 +70,21 @@ export const StudentsPage: React.FC = () => {
           page_size: pageSize,
           class_id: selectedClassId === 'all' ? undefined : selectedClassId,
           search: searchTerm.trim() || undefined,
-        });
+        }, controller.signal);
+        if (controller.signal.aborted) return;
         setStudents(response.items);
         setPagination({ total: response.total, totalPages: response.total_pages });
       } catch {
+        if (controller.signal.aborted) return;
         setStudents([]);
         setPagination({ total: 0, totalPages: 0 });
         setErrorMessage('学生列表加载失败，请稍后重试');
       } finally {
-        setIsLoading(false);
+        if (!controller.signal.aborted) setIsLoading(false);
       }
     };
-    loadStudents();
+    void loadStudents();
+    return () => controller.abort();
   }, [currentPage, searchTerm, selectedClassId]);
 
   return (
