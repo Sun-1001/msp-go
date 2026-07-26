@@ -79,10 +79,10 @@ func (r AdminSettingsRepository) UpsertSettings(ctx context.Context, updates []a
 	return nil
 }
 
-// ExportTable exports one whitelisted table, excluding sensitive fields.
-func (r AdminSettingsRepository) ExportTable(ctx context.Context, table string) ([]map[string]any, error) {
+// ExportTable visits every row in one whitelisted table, excluding sensitive fields.
+func (r AdminSettingsRepository) ExportTable(ctx context.Context, table string, visit func(map[string]any) error) (int, error) {
 	if !safeTableName(table) {
-		return nil, fmt.Errorf("unsafe table name %q", table)
+		return 0, fmt.Errorf("unsafe table name %q", table)
 	}
 	sql := "SELECT * FROM " + pgx.Identifier{"public", table}.Sanitize()
 	if table == "users" {
@@ -90,16 +90,16 @@ func (r AdminSettingsRepository) ExportTable(ctx context.Context, table string) 
 	}
 	rows, err := r.DB().Query(ctx, sql)
 	if err != nil {
-		return nil, err
+		return 0, err
 	}
 	defer rows.Close()
 
 	fields := rows.FieldDescriptions()
-	result := []map[string]any{}
+	count := 0
 	for rows.Next() {
 		values, err := rows.Values()
 		if err != nil {
-			return nil, err
+			return count, err
 		}
 		item := map[string]any{}
 		for index, field := range fields {
@@ -109,9 +109,12 @@ func (r AdminSettingsRepository) ExportTable(ctx context.Context, table string) 
 			}
 			item[name] = normalizeExportValue(name, values[index])
 		}
-		result = append(result, item)
+		if err := visit(item); err != nil {
+			return count, err
+		}
+		count++
 	}
-	return result, rows.Err()
+	return count, rows.Err()
 }
 
 // ImportRows imports rows into one whitelisted table with ON CONFLICT DO NOTHING.

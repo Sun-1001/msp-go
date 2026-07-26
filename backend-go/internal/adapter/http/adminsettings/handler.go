@@ -2,11 +2,15 @@ package adminsettingshttp
 
 import (
 	"context"
+	"encoding/base64"
+	"encoding/json"
 	"errors"
 	"io"
 	"log/slog"
 	"net/http"
+	"os"
 	"strings"
+	"time"
 
 	adminsettingsapp "mathstudy/backend-go/internal/application/adminsettings"
 	authapp "mathstudy/backend-go/internal/application/auth"
@@ -24,7 +28,7 @@ type Service interface {
 	GeneralSettings(context.Context) (adminsettingsapp.GeneralSettingsResponse, error)
 	UpdateGeneralSettings(context.Context, string, string) (adminsettingsapp.GeneralSettingsResponse, error)
 	ExportableTables(context.Context) (adminsettingsapp.ExportableTablesResponse, error)
-	ExportData(context.Context, []string, string) (adminsettingsapp.DataExportResponse, error)
+	ExportData(context.Context, []string, string, io.Writer) (adminsettingsapp.DataExportMetadata, error)
 	ImportData(context.Context, []byte, string) (adminsettingsapp.DataImportResponse, error)
 	DatabaseMonitor(context.Context) (adminsettingsapp.DatabaseMonitorResponse, error)
 }
@@ -158,12 +162,70 @@ func (h *Handler) exportDatabase(w http.ResponseWriter, r *http.Request) {
 	if !decodeRequest(w, r, &request) {
 		return
 	}
-	response, err := h.service.ExportData(r.Context(), request.Tables, principal.UserID)
+	temporary, err := os.CreateTemp("", "msp-database-export-*.json")
 	if err != nil {
 		h.writeServiceError(w, err, "导出数据库数据失败")
 		return
 	}
-	httpjson.Write(w, http.StatusOK, response)
+	temporaryPath := temporary.Name()
+	defer func() {
+		_ = temporary.Close()
+		_ = os.Remove(temporaryPath)
+	}()
+
+	response, err := h.service.ExportData(r.Context(), request.Tables, principal.UserID, temporary)
+	if err != nil {
+		h.writeServiceError(w, err, "导出数据库数据失败")
+		return
+	}
+	if _, err := temporary.Seek(0, io.SeekStart); err != nil {
+		h.writeServiceError(w, err, "导出数据库数据失败")
+		return
+	}
+	if err := writeDataExportResponse(w, temporary, response); err != nil {
+		h.logger.Warn("stream database export response failed", "error", redact.String(err.Error()))
+	}
+}
+
+func writeDataExportResponse(w http.ResponseWriter, source io.Reader, metadata adminsettingsapp.DataExportMetadata) error {
+	filename, err := json.Marshal(metadata.Filename)
+	if err != nil {
+		return err
+	}
+	tail, err := json.Marshal(struct {
+		ExportedAt   time.Time      `json:"exported_at"`
+		TableCounts  map[string]int `json:"table_counts"`
+		TotalRecords int            `json:"total_records"`
+	}{
+		ExportedAt:   metadata.ExportedAt,
+		TableCounts:  metadata.TableCounts,
+		TotalRecords: metadata.TotalRecords,
+	})
+	if err != nil {
+		return err
+	}
+
+	prefix := append([]byte(`{"filename":`), filename...)
+	prefix = append(prefix, []byte(`,"content":"`)...)
+	suffix := append([]byte(`",`), tail[1:]...)
+	suffix = append(suffix, '\n')
+
+	w.Header().Set("Content-Type", "application/json; charset=utf-8")
+	w.WriteHeader(http.StatusOK)
+	if _, err := w.Write(prefix); err != nil {
+		return err
+	}
+	encoder := base64.NewEncoder(base64.StdEncoding, w)
+	_, copyErr := io.Copy(encoder, source)
+	closeErr := encoder.Close()
+	if copyErr != nil {
+		return copyErr
+	}
+	if closeErr != nil {
+		return closeErr
+	}
+	_, err = w.Write(suffix)
+	return err
 }
 
 func (h *Handler) importDatabase(w http.ResponseWriter, r *http.Request) {

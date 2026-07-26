@@ -2,10 +2,10 @@ package adminsettings
 
 import (
 	"context"
-	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"sort"
 	"strconv"
 	"strings"
@@ -26,11 +26,13 @@ const (
 	maxImportStringBytes  = 1 << 20
 	maxImportValueDepth   = 16
 	maxImportArrayItems   = 4096
+	maxExportJSONBytes    = 100 << 20
 )
 
 var (
 	// ErrBadRequest is returned when input cannot be applied.
-	ErrBadRequest = errors.New("bad admin settings request")
+	ErrBadRequest     = errors.New("bad admin settings request")
+	errExportTooLarge = errors.New("database export exceeds size limit")
 )
 
 var exportableTables = []ExportableTableItem{
@@ -83,7 +85,7 @@ func (e Error) Unwrap() error {
 type Repository interface {
 	GetSettings(context.Context, []string) (map[string]string, error)
 	UpsertSettings(context.Context, []SettingUpdate) error
-	ExportTable(context.Context, string) ([]map[string]any, error)
+	ExportTable(context.Context, string, func(map[string]any) error) (int, error)
 	ImportRows(context.Context, string, []map[string]any) (TableImportResult, error)
 	DatabaseOverview(context.Context) (DatabaseOverview, error)
 	TableStats(context.Context) ([]TableStats, error)
@@ -134,10 +136,9 @@ type ExportableTablesResponse struct {
 	Tables []ExportableTableItem `json:"tables"`
 }
 
-// DataExportResponse mirrors /admin/settings/database/export.
-type DataExportResponse struct {
+// DataExportMetadata describes a streamed database export response.
+type DataExportMetadata struct {
 	Filename     string         `json:"filename"`
-	Content      string         `json:"content"`
 	ExportedAt   time.Time      `json:"exported_at"`
 	TableCounts  map[string]int `json:"table_counts"`
 	TotalRecords int            `json:"total_records"`
@@ -314,48 +315,121 @@ func (s *Service) ExportableTables(context.Context) (ExportableTablesResponse, e
 	return ExportableTablesResponse{Tables: tables}, nil
 }
 
-// ExportData exports selected tables as Base64-encoded JSON.
-func (s *Service) ExportData(ctx context.Context, tables []string, adminID string) (DataExportResponse, error) {
+// ExportData writes selected tables as JSON and returns response metadata.
+func (s *Service) ExportData(ctx context.Context, tables []string, adminID string, destination io.Writer) (DataExportMetadata, error) {
 	if len(tables) == 0 {
-		return DataExportResponse{}, badRequest("至少选择一张表")
+		return DataExportMetadata{}, badRequest("至少选择一张表")
 	}
 	for _, table := range tables {
 		if !s.isExportableTable(table) {
-			return DataExportResponse{}, badRequest("不支持导出的表: " + table)
+			return DataExportMetadata{}, badRequest("不支持导出的表: " + table)
 		}
+	}
+	if destination == nil {
+		return DataExportMetadata{}, errors.New("database export destination is nil")
 	}
 
 	exportedAt := s.now()
-	tablePayloads := map[string][]map[string]any{}
-	tableCounts := map[string]int{}
-	total := 0
-	for _, table := range tables {
-		rows, err := s.repo.ExportTable(ctx, table)
-		if err != nil {
-			return DataExportResponse{}, fmt.Errorf("export %s: %w", table, err)
+	metadata := DataExportMetadata{
+		Filename:    "backup_" + exportedAt.Format("20060102_150405") + ".json",
+		ExportedAt:  exportedAt,
+		TableCounts: map[string]int{},
+	}
+	orderedTables := append([]string(nil), tables...)
+	sort.Strings(orderedTables)
+	writer := &exportLimitWriter{destination: destination, remaining: maxExportJSONBytes}
+	if err := s.writeExportPayload(ctx, writer, orderedTables, adminID, &metadata); err != nil {
+		if errors.Is(err, errExportTooLarge) {
+			return DataExportMetadata{}, badRequest("导出数据不能超过 100MB")
 		}
-		tablePayloads[table] = rows
-		tableCounts[table] = len(rows)
-		total += len(rows)
+		return DataExportMetadata{}, err
 	}
+	return metadata, nil
+}
 
-	payload := map[string]any{
-		"version":     "1.0",
-		"exported_at": exportedAt.Format(time.RFC3339),
-		"exported_by": adminID,
-		"tables":      tablePayloads,
+func (s *Service) writeExportPayload(
+	ctx context.Context,
+	writer io.Writer,
+	tables []string,
+	adminID string,
+	metadata *DataExportMetadata,
+) error {
+	if _, err := io.WriteString(writer, `{"exported_at":`); err != nil {
+		return fmt.Errorf("write export metadata: %w", err)
 	}
-	data, err := json.Marshal(payload)
+	if err := writeJSONValue(writer, metadata.ExportedAt.Format(time.RFC3339)); err != nil {
+		return fmt.Errorf("write export timestamp: %w", err)
+	}
+	if _, err := io.WriteString(writer, `,"exported_by":`); err != nil {
+		return fmt.Errorf("write export metadata: %w", err)
+	}
+	if err := writeJSONValue(writer, adminID); err != nil {
+		return fmt.Errorf("write export administrator: %w", err)
+	}
+	if _, err := io.WriteString(writer, `,"tables":{`); err != nil {
+		return fmt.Errorf("write export tables: %w", err)
+	}
+	for index, table := range tables {
+		if index > 0 {
+			if _, err := io.WriteString(writer, ","); err != nil {
+				return fmt.Errorf("write export table separator: %w", err)
+			}
+		}
+		if err := writeJSONValue(writer, table); err != nil {
+			return fmt.Errorf("write export table name: %w", err)
+		}
+		if _, err := io.WriteString(writer, ":["); err != nil {
+			return fmt.Errorf("write export table %s: %w", table, err)
+		}
+		firstRow := true
+		count, err := s.repo.ExportTable(ctx, table, func(row map[string]any) error {
+			if !firstRow {
+				if _, err := io.WriteString(writer, ","); err != nil {
+					return err
+				}
+			}
+			firstRow = false
+			return writeJSONValue(writer, row)
+		})
+		if err != nil {
+			return fmt.Errorf("export %s: %w", table, err)
+		}
+		if _, err := io.WriteString(writer, "]"); err != nil {
+			return fmt.Errorf("write export table %s: %w", table, err)
+		}
+		metadata.TableCounts[table] = count
+		metadata.TotalRecords += count
+	}
+	if _, err := io.WriteString(writer, `},"version":"1.0"}`); err != nil {
+		return fmt.Errorf("finish database export: %w", err)
+	}
+	return nil
+}
+
+func writeJSONValue(writer io.Writer, value any) error {
+	data, err := json.Marshal(value)
 	if err != nil {
-		return DataExportResponse{}, fmt.Errorf("marshal export: %w", err)
+		return err
 	}
-	return DataExportResponse{
-		Filename:     "backup_" + exportedAt.Format("20060102_150405") + ".json",
-		Content:      base64.StdEncoding.EncodeToString(data),
-		ExportedAt:   exportedAt,
-		TableCounts:  tableCounts,
-		TotalRecords: total,
-	}, nil
+	_, err = writer.Write(data)
+	return err
+}
+
+type exportLimitWriter struct {
+	destination io.Writer
+	remaining   int64
+}
+
+func (w *exportLimitWriter) Write(data []byte) (int, error) {
+	if int64(len(data)) > w.remaining {
+		return 0, errExportTooLarge
+	}
+	written, err := w.destination.Write(data)
+	w.remaining -= int64(written)
+	if err == nil && written != len(data) {
+		return written, io.ErrShortWrite
+	}
+	return written, err
 }
 
 // ImportData imports a JSON backup file using ON CONFLICT DO NOTHING semantics.
