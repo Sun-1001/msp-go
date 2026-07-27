@@ -956,6 +956,18 @@ func submissionExerciseForUpdate(ctx context.Context, repo Repository, userID st
 	return loadSubmissionExercise(ctx, repo, userID, exerciseID, repo.GetExerciseForUpdate)
 }
 
+// CanSubmitExercise reports whether the exercise currently satisfies the same access and content rules as SubmitAnswer.
+func (s *Service) CanSubmitExercise(ctx context.Context, userID string, exerciseID string) (bool, error) {
+	_, _, err := submissionExercise(ctx, s.repo, userID, exerciseID)
+	if err == nil {
+		return true, nil
+	}
+	if errors.Is(err, ErrBadRequest) || errors.Is(err, ErrForbidden) || errors.Is(err, ErrNotFound) {
+		return false, nil
+	}
+	return false, err
+}
+
 type exerciseGetter func(context.Context, string) (Exercise, bool, error)
 
 func loadSubmissionExercise(ctx context.Context, repo Repository, userID string, exerciseID string, get exerciseGetter) (Exercise, string, error) {

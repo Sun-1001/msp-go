@@ -83,6 +83,8 @@ export interface ExercisePanelProps {
   onNextQuestion: () => void | Promise<void>;
   submitAnswer: (submission: ExerciseAnswerSubmission) => Promise<void>;
   onLoadSolution: () => void | Promise<void>;
+  nextButtonLabel?: string;
+  resetKey?: string | number;
 }
 
 const ExercisePanelContent: React.FC<ExercisePanelProps> = ({
@@ -99,6 +101,7 @@ const ExercisePanelContent: React.FC<ExercisePanelProps> = ({
   onNextQuestion,
   submitAnswer,
   onLoadSolution,
+  nextButtonLabel = '下一题',
 }) => {
   const [answer, setAnswer] = useState('');
   const [answerImage, setAnswerImage] = useState<File | null>(null);
@@ -307,7 +310,7 @@ const ExercisePanelContent: React.FC<ExercisePanelProps> = ({
               isLoading={isLoading}
               disabled={isLoading}
             >
-              下一题
+              {nextButtonLabel}
             </Button>
           )}
         </CardFooter>
@@ -526,5 +529,8 @@ const ExercisePanelContent: React.FC<ExercisePanelProps> = ({
 };
 
 export const ExercisePanel: React.FC<ExercisePanelProps> = (props) => (
-  <ExercisePanelContent key={props.currentQuestion?.id ?? 'no-question'} {...props} />
+  <ExercisePanelContent
+    key={`${props.currentQuestion?.id ?? 'no-question'}:${props.resetKey ?? 'default'}`}
+    {...props}
+  />
 );

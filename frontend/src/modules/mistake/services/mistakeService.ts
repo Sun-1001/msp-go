@@ -157,15 +157,21 @@ export interface ReviewExercise {
   title: string;
   content: string;
   difficulty: number;
-  type: string;
+  type: 'multiple_choice' | 'short_answer' | 'proof';
   knowledgePoints: string[];
+  knowledgePointNames: string[];
   hintsAvailable: boolean;
+  estimatedTimeSeconds: number;
+  options: string[] | null;
 }
 
 export interface ReviewContext {
   isReview: boolean;
   originalAttemptId: string;
+  previousAnswer: string;
   previousErrorType: string | null;
+  previousExplanation: string;
+  previousSuggestion: string;
   masteryBefore: number;
   errorCount: number;
 }
@@ -318,12 +324,18 @@ interface ReviewExerciseResponseRaw {
     difficulty: number;
     type: string;
     knowledge_points: string[] | null;
+    knowledge_point_names: string[] | null;
     hints_available: boolean;
+    estimated_time_seconds: number;
+    options: string[] | null;
   };
   context: {
     is_review: boolean;
     original_attempt_id: string;
+    previous_answer: string;
     previous_error_type: string | null;
+    previous_explanation: string;
+    previous_suggestion: string;
     mastery_before: number;
     error_count: number;
   };
@@ -445,14 +457,20 @@ function mapReviewExerciseResponse(raw: ReviewExerciseResponseRaw): ReviewExerci
       title: raw.exercise.title,
       content: raw.exercise.content,
       difficulty: raw.exercise.difficulty,
-      type: raw.exercise.type,
+      type: raw.exercise.type as ReviewExercise['type'],
       knowledgePoints: raw.exercise.knowledge_points ?? [],
+      knowledgePointNames: raw.exercise.knowledge_point_names ?? [],
       hintsAvailable: raw.exercise.hints_available,
+      estimatedTimeSeconds: raw.exercise.estimated_time_seconds,
+      options: raw.exercise.options,
     },
     context: {
       isReview: raw.context.is_review,
       originalAttemptId: raw.context.original_attempt_id,
+      previousAnswer: raw.context.previous_answer,
       previousErrorType: raw.context.previous_error_type,
+      previousExplanation: raw.context.previous_explanation,
+      previousSuggestion: raw.context.previous_suggestion,
       masteryBefore: raw.context.mastery_before,
       errorCount: raw.context.error_count,
     },
@@ -616,6 +634,34 @@ export async function fetchReviewExercise(
   }
 }
 
+/**
+ * 获取指定错题的重做内容
+ */
+export async function fetchReviewExerciseByAttempt(
+  attemptId: string,
+  signal?: AbortSignal
+): Promise<ReviewExerciseResponse> {
+  const normalizedAttemptId = attemptId.trim();
+  if (!normalizedAttemptId) {
+    throw new Error('缺少错题记录 ID');
+  }
+
+  mistakeLogger.info('Fetching exact mistake review exercise', {
+    attemptId: normalizedAttemptId,
+  });
+
+  try {
+    const response = await apiClient.get<ReviewExerciseResponseRaw>(
+      `/mistakes/${encodeURIComponent(normalizedAttemptId)}/review`,
+      { signal }
+    );
+    return mapReviewExerciseResponse(response.data);
+  } catch (error) {
+    mistakeLogger.error('Failed to fetch exact mistake review exercise', { error });
+    throw error;
+  }
+}
+
 // 默认导出
 export const mistakeService = {
   fetchMistakes,
@@ -624,6 +670,7 @@ export const mistakeService = {
   markAsMastered,
   deleteMistake,
   fetchReviewExercise,
+  fetchReviewExerciseByAttempt,
 };
 
 export default mistakeService;
