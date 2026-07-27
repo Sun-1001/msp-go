@@ -11,9 +11,13 @@ import {
   Clock,
   Loader2,
   AlertCircle,
+  Copy,
 } from 'lucide-react';
 import { passwordResetService } from '@/modules/password-reset/services/passwordResetService';
-import type { PasswordResetRequestItem } from '@/modules/password-reset/types/passwordReset';
+import type {
+  PasswordResetRequestItem,
+  PasswordResetReviewResponse,
+} from '@/modules/password-reset/types/passwordReset';
 
 type TabFilter = 'all' | 'pending' | 'approved' | 'rejected';
 
@@ -37,7 +41,7 @@ export const InboxPage: React.FC = () => {
   const [reviewAction, setReviewAction] = useState<'approve' | 'reject'>('approve');
   const [rejectReason, setRejectReason] = useState('');
   const [reviewing, setReviewing] = useState(false);
-  const [reviewResult, setReviewResult] = useState('');
+  const [reviewResult, setReviewResult] = useState<PasswordResetReviewResponse | null>(null);
 
   const fetchData = useCallback(async () => {
     setLoading(true);
@@ -69,10 +73,10 @@ export const InboxPage: React.FC = () => {
         action: reviewAction,
         reject_reason: reviewAction === 'reject' ? rejectReason : undefined,
       });
-      setReviewResult(res.message);
+      setReviewResult(res);
       await fetchData();
     } catch {
-      setReviewResult('操作失败，请稍后重试');
+      setReviewResult({ success: false, message: '操作失败，请稍后重试', temp_password: null });
     } finally {
       setReviewing(false);
     }
@@ -81,14 +85,14 @@ export const InboxPage: React.FC = () => {
   const closeReviewModal = () => {
     setReviewTarget(null);
     setRejectReason('');
-    setReviewResult('');
+    setReviewResult(null);
   };
 
   const openReview = (item: PasswordResetRequestItem, action: 'approve' | 'reject') => {
     setReviewTarget(item);
     setReviewAction(action);
     setRejectReason('');
-    setReviewResult('');
+    setReviewResult(null);
   };
 
   const tabs: { key: TabFilter; label: string }[] = [
@@ -110,7 +114,7 @@ export const InboxPage: React.FC = () => {
             信箱
           </h1>
           <p className="mt-1 text-sm text-surface-500 dark:text-surface-400">
-            管理密码重置申请，审批通过后请线下安全告知用户临时密码
+            管理密码重置申请与临时密码通知
           </p>
         </div>
 
@@ -260,7 +264,40 @@ export const InboxPage: React.FC = () => {
         >
           {reviewResult ? (
             <div className="space-y-4 text-center">
-              <p className="text-sm text-surface-700 dark:text-surface-300">{reviewResult}</p>
+              <p className="text-sm text-surface-700 dark:text-surface-300">{reviewResult.message}</p>
+              {reviewResult.temp_password ? (
+                <div className="flex items-center gap-2 rounded-md border border-surface-200 bg-surface-50 p-3 dark:border-surface-700 dark:bg-surface-800">
+                  <code className="min-w-0 flex-1 break-all text-left text-sm font-semibold text-surface-900 dark:text-surface-100">
+                    {reviewResult.temp_password}
+                  </code>
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    onClick={() => void navigator.clipboard.writeText(reviewResult.temp_password ?? '')}
+                    title="复制临时密码"
+                    aria-label="复制临时密码"
+                  >
+                    <Copy className="h-4 w-4" />
+                  </Button>
+                </div>
+              ) : null}
+              {reviewResult.email_notification ? (
+                <div
+                  role="status"
+                  className={`flex items-center gap-2 rounded-md border p-3 text-left text-sm ${
+                    reviewResult.email_notification.status === 'sent'
+                      ? 'border-emerald-200 bg-emerald-50 text-emerald-700 dark:border-emerald-800 dark:bg-emerald-900/20 dark:text-emerald-300'
+                      : 'border-amber-200 bg-amber-50 text-amber-700 dark:border-amber-800 dark:bg-amber-900/20 dark:text-amber-300'
+                  }`}
+                >
+                  {reviewResult.email_notification.status === 'sent' ? (
+                    <CheckCircle className="h-4 w-4 shrink-0" />
+                  ) : (
+                    <AlertCircle className="h-4 w-4 shrink-0" />
+                  )}
+                  <span>{reviewResult.email_notification.message}</span>
+                </div>
+              ) : null}
               <Button onClick={closeReviewModal} className="w-full">确定</Button>
             </div>
           ) : reviewAction === 'approve' ? (
@@ -271,7 +308,7 @@ export const InboxPage: React.FC = () => {
               <div className="p-3 bg-orange-50 dark:bg-orange-900/20 rounded-lg">
                 <p className="text-xs text-orange-700 dark:text-orange-300 flex items-center gap-2">
                   <AlertCircle className="w-4 h-4 shrink-0" />
-                  通过后系统会生成临时密码，请通过线下安全渠道告知用户
+                  通过后系统会生成临时密码并发送到申请邮箱
                 </p>
               </div>
               <div className="flex gap-3">

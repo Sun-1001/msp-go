@@ -3,7 +3,7 @@
 > 文档定位：本文是仓库规则要求保留的迁移阶段跟踪与验证证据，不作为通用路线图。当前跨模块未完成事项统一维护在 [项目待办](TODO.md)；任何迁移阶段的开始、阻塞、恢复或完成仍必须同步更新本文。
 
 **Document status**: P4 in progress; P5 done; P6 AI/Agent in progress (Eino Tutor/Portrait/Diagnostician/Math Solver/Question Parser/Question Generator/OCR/Content Moderator Agents, admin LLM/Agent config loop, and uniform student AI risk center wired; unified channel scheduling/model catalog slice in progress; OCR, general-math, student AI risk-control, model-moderation, and multi-key channel-management slices delivered, token streaming and live external-provider quality acceptance pending); P7 in progress; P8 static contract handoff done; P9 Python backend removed by user confirmation; repository-wide quality cleanup batch done 2026-07-12
-**Last updated**: 2026-07-25
+**Last updated**: 2026-07-27
 **适用范围**：原 `backend/` Python FastAPI 后端整体迁移到 Go 后端；`backend/` 已从当前工作区删除
 **重构原则**：接口兼容、数据连续、分阶段验收、每阶段完成必须更新本文档
 
@@ -418,8 +418,8 @@ backend-go/
 |--------|------|------|------|
 | P0 | `/health`、`/metrics` | DONE | Go P1 骨架已承接 `/health`、`/health/detailed`、`/metrics`；2026-06-01 起 `/health/detailed` 和 `/metrics` 默认限制在 `MANAGEMENT_ALLOWED_CIDRS` 内访问 |
 | P1 | `/auth` | DONE | Go P3 已承接登录、注册、刷新、登出、当前用户、修改密码、注册状态、忘记密码公开申请/状态查询 |
-| P1 | `/admin/users` | DONE | Go P3 追加承接管理员用户统计、列表、创建、更新、状态切换、删除、CSV 导入导出 |
-| P1 | `/admin/settings` | DONE | Go P7 已承接注册开关、通用信息、可导出表、数据库 JSON 导入导出和数据库监控 |
+| P1 | `/admin/users` | DONE | Go P3 追加承接管理员用户统计、列表、创建、更新、状态切换、删除、CSV 导入导出；2026-07-27 起账号停用、封禁解除和重新启用在业务提交后尽力发送事件邮件，并返回独立投递状态 |
+| P1 | `/admin/settings` | DONE | Go P7 已承接注册开关、通用信息、可导出表、数据库 JSON 导入导出、数据库监控，以及管理员 SMTP 配置/连接测试/测试邮件和事件模板列表、编辑、预览、恢复接口 |
 | P1 | `/admin/announcements`、`/announcements` | DONE | Go P7 已承接管理员公告 CRUD、学生/教师有效公告队列和账号级“不再弹出”；version 9 保存公告修订与用户关闭记录 |
 | P2 | `/session` | DONE | Go P4 已承接会话创建、历史、列表、结束、模式、删除、批删、任务取消和 SSE 响应；P6 已接入可配置的 Eino Tutor Agent 第一片能力，token 级流式和资源推荐仍待后续 slice |
 | P2 | `/exercise` | DONE | Go P4 已承接班级下一题、学生 AI 自主出题、提交答案、题目详情和题目解析；P6 已接入可配置 Eino Math Solver、Diagnostician、Question Generator 与 OCR Agent。`POST /exercise/generate` 仅学生可用，按知识点/难度生成严格四选一题，模型不可用或输出非法时返回 503 且不落库；生成题目在落库前经 SolutionSolver 独立求解与 VerifySolution 双重验证，验证失败时携带原因重试一次，二次仍失败返回 503 且不落库；图片答案支持可信存储回读和 PNG/JPEG/GIF 多模态 OCR，OCR/数学不确定或失败时在事务前终止且不更新学习状态 |
@@ -436,7 +436,7 @@ backend-go/
 | P5 | `/xidian` | DONE | Go P7 仅保留绑定状态、验证码挑战、绑定完成和解绑；2026-07-21 已删除课表/考试/成绩同步、快照读取及持久化密码/Cookie，外部 IDS live 验证留到有西电凭证的集成环境 |
 | P5 | `/upload` | DONE | Go P7 已承接图片上传、教师资源文件上传、本地 `/uploads` 文件落盘、S3 兼容对象存储和七牛云对象存储适配；2026-06-01 起图片上传要求登录、增加用户/IP 速率限制、按真实图片内容校验，本地 `/uploads` 禁止目录索引；2026-07-02 本地静态上传访问收紧到规范化的 `images/`、`documents/`、`videos/` 文件路径 |
 | P5 | `/admin/security-logs` | DONE | Go P7 已承接列表筛选/分页/日期分组、统计、删除、JSON/CSV 导出、归档、每日报告、清理和容量查询 |
-| P5 | `/admin/inbox` | DONE | Go P7 已承接密码重置申请列表、待处理计数和审批通过/拒绝；审批通过会重置用户密码并清理登录失败计数 |
+| P5 | `/admin/inbox` | DONE | Go P7 已承接密码重置申请列表、待处理计数和审批通过/拒绝；审批通过会重置用户密码、清理登录失败计数，并在事务提交后尽力发送临时密码邮件、返回独立投递状态 |
 | P5 | `/admin/stats` | DONE | Go P7 已承接总览、用户增长、最近活动和系统状态 |
 
 ---
@@ -524,6 +524,7 @@ backend-go/
 | R67 | 学生 AI 并发与在途额度预留依赖 Redis，且数据库用量账本与 Redis 租约不存在跨系统事务 | Redis 故障会暂时拒绝全部受控 AI 请求；回复持久化失败或租约释放失败时可能在 TTL 内少一个可用槽位 | MITIGATED | 2026-07-21 风控采用 fail-closed，禁止 Redis 故障时绕过封禁/并发/额度；每个租约有 10 分钟 TTL，释放幂等，数据库以单条 CTE 原子写入成功回复和不可回退的额度账本。后续应增加 Redis 可用性告警、租约拒绝指标和多节点故障演练；当前 key 设计仅按单节点 Redis 验证，未声明 Redis Cluster 兼容 |
 | R68 | 仓库不再永久保留测试用例源码 | 后续变更缺少持续回归守卫，历史用例无法直接重复运行，缺陷可能在临时验证未覆盖时回归 | ACCEPTED | 2026-07-21 按用户要求改为“实现完成后创建临时测试、运行并记录、提交前删除”；保留 Go/Vitest 测试运行能力，以 `.gitignore` 和提交前检查阻止测试源码入库，并要求迁移批次保存验证命令、结果、覆盖率与残余风险。该策略不能提供永久回归保护，需用更严格的变更级临时测试、静态检查、构建和运行时验收补偿 |
 | R69 | 生产更新脚本只备份配置且依赖固定 sleep，forward migration 前缺少数据库/上传快照和真实就绪检查 | 迁移失败时缺少可恢复数据，数据库未就绪时更新中断，旧镜像又被自动清理导致回滚窗口缩短 | MITIGATED | 2026-07-23 完成 P7 部署迁移安全链路切片：更新脚本在停止应用写入后备份 PostgreSQL 与 uploads，记录旧镜像引用、不可变镜像 ID 和原运行状态，使用 `pg_isready`/容器健康状态等待，迁移或新版本健康检查失败时保持应用停止且不再自动 prune；首次部署同步使用真实就绪检查，恢复手册覆盖数据库、uploads 和旧镜像。临时 7 路正常/故障测试、脚本语法、Go 全仓 test/vet/build、本地 version 10 幂等迁移、SQL 表核对和差异检查通过；真实 Compose 烟测与生产备份恢复演练仍需在有 Docker 的受控环境执行 |
+| R70 | 账号状态和密码重置通知在业务提交后同步尽力投递，未使用持久化 outbox 或投递幂等键 | SMTP 超时或进程中断时可能出现业务已成功但邮件未送达；服务器接受邮件后响应丢失时，人工重试又可能重复投递 | ACCEPTED | 主业务事务不因邮件失败回滚，API 和管理员 UI 独立返回 `sent`、`failed`、`skipped` 投递状态，密码审批继续一次性返回临时密码供受控线下交付；SMTP 强制直接 TLS 或 STARTTLS，禁止明文降级。后续需要可靠重试、审计和去重时引入持久化 outbox、稳定消息 ID 与异步 worker |
 | R9 | 当前机器未配置可连接 PostgreSQL 测试库且 Docker CLI 不可用 | P2 数据库迁移/Repository 集成验收不能在本机闭环 | CLOSED | 已使用本地 PostgreSQL `math_platform` 执行清库、Go 迁移、重复迁移和迁移集成测试；Docker CLI 仍不可用但不阻塞 P2 |
 
 ---
@@ -538,6 +539,7 @@ backend-go/
 | ADR-004 | 2026-05-08 | AI/Agent uses a new Eino architecture instead of bridging legacy Python LangGraph/LiteLLM workflows | IN_PROGRESS | Tutor/Portrait/Diagnostician/Math Solver/Question Parser/Question Generator/OCR Agent, encrypted provider config and runtime selection are wired; OCR/general-math slice is delivered, while token streaming and live external-provider quality acceptance remain |
 | ADR-005 | 2026-04-18 | 默认启动和 Nginx 分流先切到 Go | DONE | Python 代码保留为迁移参考，不再由默认启动、compose、Nginx split routing 承流 |
 | ADR-006 | 2026-04-18 | P3 JWT 兼容层使用标准库 HMAC 实现，不引入额外 JWT 框架 | DONE | Go 侧显式验证 `alg`、`iss`、`aud`、`exp`、`iat`、`jti` 和 `type`，生成与 Python PyJWT 兼容的 HS256/HS384/HS512 token；密码哈希使用 `bcrypt` 保持兼容 |
+| ADR-007 | 2026-07-27 | 管理员通知邮件采用模块化 SMTP 适配器和提交后同步尽力投递 | DONE | SMTP 密码复用 Fernet 加密并从所有管理响应和数据库备份中排除；传输只允许直接 TLS 或 STARTTLS；官方中英文事件模板内置在 application 层，PostgreSQL 仅保存管理员覆盖，渲染使用 `text/template` 与 `html/template`；首个切片不引入邮件接收、持久化 outbox 或营销群发 |
 
 ---
 
@@ -698,6 +700,12 @@ backend-go/
 - 开始日期：2026-05-01
 - 完成日期：TODO
 - 负责人：Codex
+- 2026-07-27 管理员邮件投递基础切片启动状态：`IN_PROGRESS`；最终状态：`DONE`；启动与完成日期：2026-07-27。P7 总体仍保持 `IN_PROGRESS`。范围包括独立 email application、SMTP adapter、PostgreSQL repository 和管理员 HTTP 模块；管理员可维护 SMTP、测试连接、发送测试邮件，并管理 `auth.password_reset`、`account.suspended`、`account.deactivated`、`account.reactivated` 四类 `zh-CN`/`en-US` 模板的覆盖、预览和官方恢复。账号状态变更与密码重置审批先提交主业务，再尽力投递邮件；失败不回滚主业务，响应返回独立 `email_notification`。本切片不包含邮件接收、自助 token 重置、异步 outbox 或营销群发。
+- 2026-07-27 邮件切片安全与数据行为：SMTP 密码复用现有 Fernet 加密，管理响应仅暴露 `smtp_password_configured`；空密码保存保留已有密文，只有 `clear_password=true` 显式清除。直接 TLS 关闭时强制完成 STARTTLS，不支持 STARTTLS 即失败，禁止认证或邮件明文降级。模板主题禁止换行，HTML 变量由 `html/template` 自动转义。version 14 新增 `email_templates` 覆盖表；数据库导出排除 `system_settings.smtp_password` 和模板 `updated_by`，数据库导入拒绝 `smtp_password`。
+- 2026-07-27 邮件切片验证命令：临时 Go/Vitest 测试存在时执行 `go test ./internal/application/email -count=1 -cover` 及邮件 HTTP、SMTP、管理员用户、密码审批、前端 SMTP/模板交互定向测试；删除全部临时测试源码后执行 backend-go `go test ./... -count=1`、`go vet ./...`、`go build ./...`、连续两次 `go run ./cmd/migrate`；frontend `npm.cmd test -- --passWithNoTests`、`npm.cmd run lint`、`npm.cmd run build`；仓库根目录 `git diff --check`、定向 `gofmt -l` 和测试源码/fixture 残留扫描。
+- 2026-07-27 邮件切片验证结果：临时邮件 application 测试 statement coverage 为 80.2%，并覆盖 SMTP 无 STARTTLS 时拒绝明文降级、密码不回填/空值保留/显式清除、管理员账号通知、密码审批通知、模板预览与恢复；全部临时测试源码随后删除。删除后 Go 全包测试、vet、build，前端测试、lint、TypeScript/Vite 生产构建，差异与定向格式检查全部通过；前端仅保留既有 Browserslist 数据过期和大 chunk 警告。迁移首次执行 `applied_count=1` 并应用 version 14 `email_delivery`，第二次执行 `applied_count=0`。
+- 2026-07-27 邮件切片交付物：`backend-go/internal/application/email/`、`backend-go/internal/adapter/email/`、`backend-go/internal/adapter/http/adminemail/`、`backend-go/internal/adapter/postgres/email_repository.go`、`backend-go/migrations/0014_email_delivery.up.sql`、管理员用户/信箱通知接线、`frontend/src/modules/email/`、管理员邮件设置页签、账号管理和密码审批投递状态展示，以及本跟踪记录。
+- 2026-07-27 邮件切片残余风险：尚未使用真实 SMTP 提供商执行 live 投递，管理员浏览器视觉验收因本地登录滑块验证码未获操作授权而停在登录页；同步尽力投递没有自动重试、持久化审计或幂等去重，详见 R70。SMTP 设置继续采用既有后提交覆盖语义，并发管理员修改没有版本号/CAS；密码重置响应保留一次性临时密码用于邮件失败时的受控线下交付，调用链应禁止缓存和敏感响应日志。
 - 2026-07-23 部署迁移安全链路切片启动状态：`IN_PROGRESS`；最终状态：`DONE`；启动与完成日期：2026-07-23。P7 总体仍保持 `IN_PROGRESS`。范围包括将生产更新顺序收敛为旧应用持续运行期间确认数据库并拉取镜像、停止应用写入后备份 PostgreSQL 与本地 uploads、执行 Go forward migration、等待 backend/frontend 容器健康；首次部署以 `pg_isready` 代替固定 sleep。更新过程记录解析后的 Compose 配置、旧镜像引用与不可变镜像 ID、原运行状态，不再自动 prune；备份或迁移前二次数据库就绪失败时只恢复原本运行的应用，migration 失败时保持应用停止。
 - 2026-07-23 部署迁移安全链路临时验证：生产实现完成后创建一次性 Bash mock Docker/Compose 测试，覆盖正常的拉取、停写、数据库/uploads 备份、迁移、启动顺序，`pg_dump` 失败、首次 PostgreSQL 未就绪、备份后二次 PostgreSQL 未就绪、migration 失败、原服务未运行时备份失败不得误启动，以及新版本健康失败后再次停止应用，共 7 条路径全部通过；随后删除临时测试脚本、mock fixture 和运行目录。
 - 2026-07-23 部署迁移安全链路最终验证命令：Git Bash `bash -n scripts/deployment-common.sh scripts/deploy.sh scripts/update.sh`；`GOCACHE=E:\code\msp-go\.gocache go test ./... -count=1`、`go vet ./...`、`go build ./...`；`go run ./cmd/migrate`；PostgreSQL 只读 SQL 核对 `go_schema_migrations.version=10` 和六张消息中心表；`git diff --check`；`git ls-files --cached --others --exclude-standard` 测试源码扫描。

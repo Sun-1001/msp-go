@@ -1,5 +1,7 @@
 /** 密码重置相关类型定义 */
 
+import type { EmailNotificationResult } from '@/modules/email/types/email';
+
 // 用户端
 export interface PasswordResetSubmitRequest {
   username: string;
@@ -45,4 +47,6 @@ export interface PasswordResetReviewRequest {
 export interface PasswordResetReviewResponse {
   success: boolean;
   message: string;
+  temp_password: string | null;
+  email_notification?: EmailNotificationResult;
 }

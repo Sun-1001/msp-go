@@ -12,8 +12,10 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 	goredis "github.com/redis/go-redis/v9"
 
+	emailadapter "mathstudy/backend-go/internal/adapter/email"
 	adminaiconfighthttp "mathstudy/backend-go/internal/adapter/http/adminaiconfig"
 	adminairiskhttp "mathstudy/backend-go/internal/adapter/http/adminairisk"
+	adminemailhttp "mathstudy/backend-go/internal/adapter/http/adminemail"
 	admininboxhttp "mathstudy/backend-go/internal/adapter/http/admininbox"
 	adminsettingshttp "mathstudy/backend-go/internal/adapter/http/adminsettings"
 	adminstatshttp "mathstudy/backend-go/internal/adapter/http/adminstats"
@@ -55,6 +57,7 @@ import (
 	authapp "mathstudy/backend-go/internal/application/auth"
 	classroomapp "mathstudy/backend-go/internal/application/classroom"
 	conversationapp "mathstudy/backend-go/internal/application/conversation"
+	emailapp "mathstudy/backend-go/internal/application/email"
 	exerciseapp "mathstudy/backend-go/internal/application/exercise"
 	knowledgeapp "mathstudy/backend-go/internal/application/knowledge"
 	messagecenterapp "mathstudy/backend-go/internal/application/messagecenter"
@@ -627,7 +630,22 @@ func main() {
 		logger.Error("configure knowledge handler", "error", err)
 		os.Exit(1)
 	}
-	adminUserService, err := adminuserapp.NewService(userRepo)
+	emailRepo, err := adapterpostgres.NewEmailRepository(dbPool)
+	if err != nil {
+		logger.Error("configure email repository", "error", err)
+		os.Exit(1)
+	}
+	emailService, err := emailapp.NewService(emailRepo, appCipher, emailadapter.NewSMTPTransport(), logger)
+	if err != nil {
+		logger.Error("configure email service", "error", err)
+		os.Exit(1)
+	}
+	adminEmailHandler, err := adminemailhttp.NewHandler(logger, emailService, authService)
+	if err != nil {
+		logger.Error("configure admin email handler", "error", err)
+		os.Exit(1)
+	}
+	adminUserService, err := adminuserapp.NewService(userRepo, emailService)
 	if err != nil {
 		logger.Error("configure admin user service", "error", err)
 		os.Exit(1)
@@ -642,6 +660,7 @@ func main() {
 		logger.Error("configure admin inbox service", "error", err)
 		os.Exit(1)
 	}
+	adminInboxService.SetEventSender(emailService)
 	adminInboxHandler, err := admininboxhttp.NewHandler(logger, adminInboxService, authService)
 	if err != nil {
 		logger.Error("configure admin inbox handler", "error", err)
@@ -879,6 +898,7 @@ func main() {
 			adminAIConfigHandler.Register(mux, cfg.APIV1Prefix+"/admin/ai-config")
 			adminStatsHandler.Register(mux, cfg.APIV1Prefix+"/admin/stats")
 			adminSettingsHandler.Register(mux, cfg.APIV1Prefix+"/admin/settings")
+			adminEmailHandler.Register(mux, cfg.APIV1Prefix+"/admin/settings")
 			securityLogHandler.Register(mux, cfg.APIV1Prefix+"/admin/security-logs")
 			knowledgeHandler.Register(mux, cfg.APIV1Prefix+"/admin/knowledge")
 			wechatHandler.RegisterAdmin(mux, cfg.APIV1Prefix+"/admin/wechat")

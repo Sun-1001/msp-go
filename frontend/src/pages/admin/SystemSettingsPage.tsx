@@ -33,6 +33,7 @@ import {
 import { getApiErrorMessage } from '../../libs/http/apiClient';
 import { base64ToBlob, downloadBlob } from '@/libs/utils/download';
 import { useSerialPolling } from '@/hooks/useSerialPolling';
+import { EmailSettingsPanel } from '@/modules/email/components/EmailSettingsPanel';
 
 export const SystemSettingsPage: React.FC = () => {
   return (
@@ -47,6 +48,7 @@ export const SystemSettingsPage: React.FC = () => {
         <Tabs defaultValue="general" className="space-y-6">
           <TabsList>
             <TabsTrigger value="general">常规设置</TabsTrigger>
+            <TabsTrigger value="email">邮件设置</TabsTrigger>
             <TabsTrigger value="database">数据库</TabsTrigger>
             <TabsTrigger value="security">安全设置</TabsTrigger>
           </TabsList>
@@ -58,6 +60,10 @@ export const SystemSettingsPage: React.FC = () => {
 
             {/* 基本信息 */}
             <GeneralInfoCard />
+          </TabsContent>
+
+          <TabsContent value="email">
+            <EmailSettingsPanel />
           </TabsContent>
 
           {/* 数据库 Tab */}

@@ -79,12 +79,12 @@ func (r UserRepository) ReviewPasswordResetRequest(ctx context.Context, update a
 		var userID string
 		var status string
 		err := tx.DB().QueryRow(ctx, `
-			SELECT user_id, username, status::text
+			SELECT user_id, username, email, status::text
 			FROM public.password_reset_requests
 			WHERE id = $1
 			FOR UPDATE`,
 			update.RequestID,
-		).Scan(&userID, &result.Username, &status)
+		).Scan(&userID, &result.Username, &result.Email, &status)
 		if err != nil {
 			if errors.Is(err, pgx.ErrNoRows) {
 				result.Found = false

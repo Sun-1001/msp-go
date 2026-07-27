@@ -19,6 +19,10 @@ var sensitiveExportFields = map[string]bool{
 	"hashed_password": true,
 }
 
+var sensitiveSystemSettingKeys = map[string]bool{
+	"smtp_password": true,
+}
+
 // AdminSettingsRepository persists system settings and database management operations.
 type AdminSettingsRepository struct {
 	Repository
@@ -85,8 +89,11 @@ func (r AdminSettingsRepository) ExportTable(ctx context.Context, table string, 
 		return 0, fmt.Errorf("unsafe table name %q", table)
 	}
 	sql := "SELECT * FROM " + pgx.Identifier{"public", table}.Sanitize()
-	if table == "users" {
+	switch table {
+	case "users":
 		sql += " WHERE role <> 'ADMIN'::public.userrole"
+	case "system_settings":
+		sql += " WHERE key <> 'smtp_password'"
 	}
 	rows, err := r.DB().Query(ctx, sql)
 	if err != nil {
@@ -228,6 +235,15 @@ func filterImportRow(table string, row map[string]any) map[string]any {
 		}
 		filtered[column] = value
 	}
+	if table == "system_settings" {
+		key, ok := stringValue(filtered["key"])
+		if !ok || sensitiveSystemSettingKeys[strings.ToLower(key)] {
+			return map[string]any{}
+		}
+	}
+	if table == "email_templates" {
+		delete(filtered, "updated_by")
+	}
 	if table == "users" && !normalizeImportedUserRow(filtered) {
 		return map[string]any{}
 	}
@@ -271,7 +287,9 @@ func stringValue(value any) (string, bool) {
 }
 
 func shouldOmitExportField(table string, field string) bool {
-	return sensitiveExportFields[field] || (table == "security_logs" && field == "ip_address")
+	return sensitiveExportFields[field] ||
+		(table == "security_logs" && field == "ip_address") ||
+		(table == "email_templates" && field == "updated_by")
 }
 
 func normalizeExportValue(field string, value any) any {

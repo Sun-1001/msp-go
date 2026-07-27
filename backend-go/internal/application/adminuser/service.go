@@ -8,6 +8,7 @@ import (
 	"time"
 
 	authapp "mathstudy/backend-go/internal/application/auth"
+	emailapp "mathstudy/backend-go/internal/application/email"
 	"mathstudy/backend-go/internal/domain/user"
 	"mathstudy/backend-go/internal/platform/numutil"
 	"mathstudy/backend-go/internal/platform/redact"
@@ -107,9 +108,10 @@ type Update struct {
 
 // UpdateResponse mirrors update/status responses.
 type UpdateResponse struct {
-	Success bool     `json:"success"`
-	Message string   `json:"message"`
-	User    UserItem `json:"user"`
+	Success           bool                         `json:"success"`
+	Message           string                       `json:"message"`
+	User              UserItem                     `json:"user"`
+	EmailNotification *emailapp.NotificationResult `json:"email_notification,omitempty"`
 }
 
 // DeleteResponse mirrors delete responses.
@@ -157,16 +159,21 @@ type ImportResponse struct {
 
 // Service implements admin user management use cases.
 type Service struct {
-	repo Repository
-	now  func() time.Time
+	repo     Repository
+	notifier emailapp.EventSender
+	now      func() time.Time
 }
 
 // NewService creates an admin user service.
-func NewService(repo Repository) (*Service, error) {
+func NewService(repo Repository, senders ...emailapp.EventSender) (*Service, error) {
 	if repo == nil {
 		return nil, errors.New("admin user repository is nil")
 	}
-	return &Service{repo: repo, now: func() time.Time { return time.Now().UTC() }}, nil
+	var notifier emailapp.EventSender
+	if len(senders) > 0 {
+		notifier = senders[0]
+	}
+	return &Service{repo: repo, notifier: notifier, now: func() time.Time { return time.Now().UTC() }}, nil
 }
 
 // AccountStats returns current user account counters.
@@ -284,7 +291,40 @@ func (s *Service) UpdateUserStatus(ctx context.Context, userID string, statusVal
 	if status == user.StatusSuspended {
 		message = "用户已停用"
 	}
-	return UpdateResponse{Success: true, Message: message, User: toUserItem(account)}, nil
+	var notification *emailapp.NotificationResult
+	if s.notifier != nil {
+		event := emailapp.EventAccountSuspended
+		if status == user.StatusActive {
+			event = emailapp.EventAccountReactivated
+		}
+		displayName := account.Username
+		if account.DisplayName != nil && strings.TrimSpace(*account.DisplayName) != "" {
+			displayName = strings.TrimSpace(*account.DisplayName)
+		}
+		deliveryErr := s.notifier.SendEvent(ctx, emailapp.EventRequest{
+			Event:     event,
+			Locale:    emailapp.LocaleZhCN,
+			Recipient: account.Email,
+			Variables: map[string]string{
+				"display_name": displayName,
+				"username":     account.Username,
+				"role_name":    roleDisplayName(account.Role),
+			},
+		})
+		report := emailapp.NotificationResultFromError(deliveryErr)
+		notification = &report
+		if report.Status == emailapp.NotificationSent {
+			message += "，通知邮件已发送"
+		} else {
+			message += "，但" + report.Message
+		}
+	}
+	return UpdateResponse{
+		Success:           true,
+		Message:           message,
+		User:              toUserItem(account),
+		EmailNotification: notification,
+	}, nil
 }
 
 // DeleteUser physically deletes the user and dependent records.
@@ -519,6 +559,19 @@ func emptyUsername(value string) string {
 		return "(空)"
 	}
 	return value
+}
+
+func roleDisplayName(role user.Role) string {
+	switch role {
+	case user.RoleStudent:
+		return "学生"
+	case user.RoleTeacher:
+		return "教师"
+	case user.RoleAdmin:
+		return "管理员"
+	default:
+		return "用户"
+	}
 }
 
 func badRequest(message string) error {

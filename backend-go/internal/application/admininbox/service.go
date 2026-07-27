@@ -8,6 +8,7 @@ import (
 	"time"
 
 	authapp "mathstudy/backend-go/internal/application/auth"
+	emailapp "mathstudy/backend-go/internal/application/email"
 	"mathstudy/backend-go/internal/platform/securerand"
 )
 
@@ -102,20 +103,28 @@ type ReviewResult struct {
 	AlreadyProcessed bool
 	UserFound        bool
 	Username         string
+	Email            string
 }
 
 // ReviewResponse mirrors the Python review response.
 type ReviewResponse struct {
-	Success      bool    `json:"success"`
-	Message      string  `json:"message"`
-	TempPassword *string `json:"temp_password"`
+	Success           bool                         `json:"success"`
+	Message           string                       `json:"message"`
+	TempPassword      *string                      `json:"temp_password"`
+	EmailNotification *emailapp.NotificationResult `json:"email_notification,omitempty"`
 }
 
 // Service implements admin password reset inbox use cases.
 type Service struct {
-	repo    Repository
-	clearer LoginFailureClearer
-	now     func() time.Time
+	repo     Repository
+	clearer  LoginFailureClearer
+	notifier emailapp.EventSender
+	now      func() time.Time
+}
+
+// SetEventSender wires the optional post-commit password notification sender.
+func (s *Service) SetEventSender(sender emailapp.EventSender) {
+	s.notifier = sender
 }
 
 // NewService creates an admin inbox service.
@@ -214,7 +223,33 @@ func (s *Service) ReviewRequest(ctx context.Context, requestID string, adminID s
 		if s.clearer != nil {
 			s.clearer.Clear(ctx, result.Username)
 		}
-		return ReviewResponse{Success: true, Message: "已通过审批，请线下安全告知用户临时密码", TempPassword: tempPassword}, nil
+		message := "已通过审批，请线下安全告知用户临时密码"
+		var notification *emailapp.NotificationResult
+		if s.notifier != nil && tempPassword != nil {
+			deliveryErr := s.notifier.SendEvent(ctx, emailapp.EventRequest{
+				Event:     emailapp.EventPasswordReset,
+				Locale:    emailapp.LocaleZhCN,
+				Recipient: result.Email,
+				Variables: map[string]string{
+					"display_name":  result.Username,
+					"username":      result.Username,
+					"temp_password": *tempPassword,
+				},
+			})
+			report := emailapp.NotificationResultFromError(deliveryErr)
+			notification = &report
+			if report.Status == emailapp.NotificationSent {
+				message = "已通过审批，临时密码邮件已发送"
+			} else {
+				message = "已通过审批，但" + report.Message + "，请线下安全告知用户临时密码"
+			}
+		}
+		return ReviewResponse{
+			Success:           true,
+			Message:           message,
+			TempPassword:      tempPassword,
+			EmailNotification: notification,
+		}, nil
 	}
 	return ReviewResponse{Success: true, Message: "已拒绝该申请"}, nil
 }

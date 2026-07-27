@@ -97,7 +97,10 @@ export const AccountManagementPage: React.FC = () => {
     const newStatus: UserStatus = user.status === 'active' ? 'suspended' : 'active';
     dispatch({ type: 'SET_ACTION_LOADING', payload: user.id });
     try {
-      await adminUserService.updateUserStatus(user.id, newStatus);
+      const response = await adminUserService.updateUserStatus(user.id, newStatus);
+      if (response.email_notification) {
+        alert(response.message);
+      }
       // 刷新数据
       await Promise.all([loadStats(), loadUsers()]);
     } catch (error) {
