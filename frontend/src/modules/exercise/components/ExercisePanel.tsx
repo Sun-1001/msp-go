@@ -29,6 +29,11 @@ import type {
 const inlineOrBlockMathRegex = /\$\$?[\s\S]+?\$\$?/;
 const latexHintRegex = /\\[a-zA-Z]+|[_^]/;
 
+const normalizeExerciseMathDelimiters = (value: string) =>
+  value
+    .replace(/\\\[\s*([\s\S]*?)\s*\\\]/g, (_match, expression: string) => `$$${expression}$$`)
+    .replace(/\\\(\s*([\s\S]*?)\s*\\\)/g, (_match, expression: string) => `$${expression}$`);
+
 const questionTypeLabels: Record<Question['type'], string> = {
   multiple_choice: '选择题',
   short_answer: '简答题',
@@ -41,26 +46,27 @@ const renderMathContent = (
 ) => {
   if (!value) return null;
 
+  const normalizedValue = normalizeExerciseMathDelimiters(value);
   const safeContentClassName = [
     'min-w-0 max-w-full overflow-x-auto overflow-y-hidden [overflow-wrap:anywhere]',
     options.className,
   ].filter(Boolean).join(' ');
 
-  if (inlineOrBlockMathRegex.test(value)) {
-    return <MathText className={safeContentClassName}>{value}</MathText>;
+  if (inlineOrBlockMathRegex.test(normalizedValue)) {
+    return <MathText className={safeContentClassName}>{normalizedValue}</MathText>;
   }
 
-  if (latexHintRegex.test(value)) {
+  if (latexHintRegex.test(normalizedValue)) {
     return (
       <MathRenderer
-        expression={value}
+        expression={normalizedValue}
         block={options.block}
         className={`inline-block ${safeContentClassName}`}
       />
     );
   }
 
-  return <span className={safeContentClassName}>{value}</span>;
+  return <span className={safeContentClassName}>{normalizedValue}</span>;
 };
 
 export interface ExercisePanelProps {
