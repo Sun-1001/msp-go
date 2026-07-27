@@ -36,6 +36,7 @@ import (
 	sessionhttp "mathstudy/backend-go/internal/adapter/http/session"
 	teacherhttp "mathstudy/backend-go/internal/adapter/http/teacher"
 	uploadhttp "mathstudy/backend-go/internal/adapter/http/upload"
+	wechathttp "mathstudy/backend-go/internal/adapter/http/wechat"
 	xidianhttp "mathstudy/backend-go/internal/adapter/http/xidian"
 	einoagent "mathstudy/backend-go/internal/adapter/llm/einoagent"
 	moderationadapter "mathstudy/backend-go/internal/adapter/llm/moderation"
@@ -68,7 +69,10 @@ import (
 	sessionapp "mathstudy/backend-go/internal/application/session"
 	teacherapp "mathstudy/backend-go/internal/application/teacher"
 	uploadapp "mathstudy/backend-go/internal/application/upload"
+	wechatapp "mathstudy/backend-go/internal/application/wechat"
+	wechatreminder "mathstudy/backend-go/internal/application/wechatreminder"
 	xidianapp "mathstudy/backend-go/internal/application/xidian"
+	wechatintegration "mathstudy/backend-go/internal/integration/wechat"
 	xidianintegration "mathstudy/backend-go/internal/integration/xidian"
 	"mathstudy/backend-go/internal/platform/config"
 	"mathstudy/backend-go/internal/platform/health"
@@ -113,7 +117,7 @@ func main() {
 		}
 	}()
 	if err := requireSharedRedis(ctx, cfg, redisClient); err != nil {
-		logger.Error("redis is required for production refresh sessions", "error", err)
+		logger.Error("redis is required for configured shared state", "error", err)
 		os.Exit(1)
 	}
 	store := metrics.NewStore(cfg.AppVersion, cfg.Environment)
@@ -516,8 +520,16 @@ func main() {
 		logger.Error("configure message center search rate limit", "error", err)
 		os.Exit(1)
 	}
+	wechatReminderEnqueuer, err := adapterpostgres.NewWechatReminderEnqueuer(
+		cfg.WechatMessageRemindersEnabled,
+		cfg.WechatOfficialAccountAppID,
+	)
+	if err != nil {
+		logger.Error("configure wechat reminder enqueuer", "error", err)
+		os.Exit(1)
+	}
 	// Message center: conversations
-	conversationRepo, err := adapterpostgres.NewConversationRepository(dbPool)
+	conversationRepo, err := adapterpostgres.NewConversationRepository(dbPool, wechatReminderEnqueuer)
 	if err != nil {
 		logger.Error("configure conversation repository", "error", err)
 		os.Exit(1)
@@ -539,7 +551,7 @@ func main() {
 	}
 
 	// Message center: notices
-	noticeRepo, err := adapterpostgres.NewNoticeRepository(dbPool)
+	noticeRepo, err := adapterpostgres.NewNoticeRepository(dbPool, wechatReminderEnqueuer)
 	if err != nil {
 		logger.Error("configure notice repository", "error", err)
 		os.Exit(1)
@@ -562,7 +574,7 @@ func main() {
 	}
 
 	// Message center: Q&A threads
-	qaThreadRepo, err := adapterpostgres.NewQAThreadRepository(dbPool)
+	qaThreadRepo, err := adapterpostgres.NewQAThreadRepository(dbPool, wechatReminderEnqueuer)
 	if err != nil {
 		logger.Error("configure qathread repository", "error", err)
 		os.Exit(1)
@@ -751,6 +763,85 @@ func main() {
 		logger.Error("configure xidian handler", "error", err)
 		os.Exit(1)
 	}
+	wechatRepo, err := adapterpostgres.NewWechatRepository(dbPool)
+	if err != nil {
+		logger.Error("configure wechat repository", "error", err)
+		os.Exit(1)
+	}
+	wechatState, err := adapterredis.NewWechatStateStore(redisClient)
+	if err != nil {
+		logger.Error("configure wechat state store", "error", err)
+		os.Exit(1)
+	}
+	var wechatProtocol *wechatintegration.Protocol
+	var wechatTextSender wechatapp.Sender
+	var wechatTemplateSender wechatreminder.Sender
+	if cfg.WechatOfficialAccountEnabled {
+		wechatProtocol, err = wechatintegration.NewProtocol(
+			cfg.WechatOfficialAccountAppID,
+			cfg.WechatOfficialAccountToken,
+			cfg.WechatOfficialAccountAESKey,
+		)
+		if err != nil {
+			logger.Error("configure wechat callback protocol", "error", err)
+			os.Exit(1)
+		}
+		wechatAPIClient, clientErr := wechatintegration.NewAPIClient(
+			cfg.WechatOfficialAccountAppID,
+			cfg.WechatOfficialAccountAppSecret,
+			outbound.NewPublicHTTPSClient(cfg.WechatOfficialAccountHTTPTimeout),
+			wechatState,
+		)
+		if clientErr != nil {
+			logger.Error("configure wechat API client", "error", clientErr)
+			os.Exit(1)
+		}
+		wechatTextSender = wechatAPIClient
+		wechatTemplateSender = wechatAPIClient
+	}
+	wechatService, err := wechatapp.NewService(wechatRepo, wechatState, wechatTextSender, wechatapp.Config{
+		Enabled:            cfg.WechatOfficialAccountEnabled,
+		AppID:              cfg.WechatOfficialAccountAppID,
+		AccountName:        cfg.WechatOfficialAccountName,
+		BindingTicketTTL:   10 * time.Minute,
+		EventDedupeTTL:     24 * time.Hour,
+		EventProcessingTTL: 6 * time.Second,
+	})
+	if err != nil {
+		logger.Error("configure wechat service", "error", err)
+		os.Exit(1)
+	}
+	wechatHandler, err := wechathttp.NewHandler(logger, wechatService, authService, wechatProtocol, wechathttp.Config{
+		Enabled:     cfg.WechatOfficialAccountEnabled,
+		MessageMode: cfg.WechatOfficialAccountMessageMode,
+	}, wechathttp.WithRedisRateLimit(redisClient, cfg.RedisFallbackCacheMaxSize))
+	if err != nil {
+		logger.Error("configure wechat handler", "error", err)
+		os.Exit(1)
+	}
+	wechatReminderRepo, err := adapterpostgres.NewWechatReminderRepository(dbPool)
+	if err != nil {
+		logger.Error("configure wechat reminder repository", "error", err)
+		os.Exit(1)
+	}
+	wechatReminderWorker, err := wechatreminder.NewWorker(
+		wechatReminderRepo,
+		wechatTemplateSender,
+		wechatreminder.ClassifySendError,
+		logger,
+		wechatreminder.Config{
+			Enabled:                  cfg.WechatMessageRemindersEnabled,
+			AppID:                    cfg.WechatOfficialAccountAppID,
+			PrivateMessageTemplateID: cfg.WechatPrivateMessageTemplateID,
+			NoticeTemplateID:         cfg.WechatNoticeTemplateID,
+			QAMessageTemplateID:      cfg.WechatQAMessageTemplateID,
+			SendTimeout:              cfg.WechatOfficialAccountHTTPTimeout,
+		},
+	)
+	if err != nil {
+		logger.Error("configure wechat reminder worker", "error", err)
+		os.Exit(1)
+	}
 
 	checker := health.NewChecker(cfg.AppVersion, dbPool, health.RedisPingerFunc(func(ctx context.Context) error {
 		return redisClient.Ping(ctx).Err()
@@ -763,6 +854,8 @@ func main() {
 		store,
 		httpserver.WithRoutes(func(mux *http.ServeMux) {
 			authHandler.Register(mux, cfg.APIV1Prefix+"/auth")
+			wechatHandler.RegisterPublic(mux, cfg.APIV1Prefix+"/integrations/wechat")
+			wechatHandler.RegisterUser(mux, cfg.APIV1Prefix+"/integrations/wechat")
 			announcementHandler.RegisterUser(mux, cfg.APIV1Prefix+"/announcements")
 			progressHandler.Register(mux, cfg.APIV1Prefix+"/progress")
 			portraitHandler.Register(mux, cfg.APIV1Prefix+"/portrait")
@@ -788,6 +881,7 @@ func main() {
 			adminSettingsHandler.Register(mux, cfg.APIV1Prefix+"/admin/settings")
 			securityLogHandler.Register(mux, cfg.APIV1Prefix+"/admin/security-logs")
 			knowledgeHandler.Register(mux, cfg.APIV1Prefix+"/admin/knowledge")
+			wechatHandler.RegisterAdmin(mux, cfg.APIV1Prefix+"/admin/wechat")
 		}),
 	)
 	if err != nil {
@@ -808,8 +902,16 @@ func main() {
 	signal.Notify(stopCh, os.Interrupt, syscall.SIGTERM)
 	defer signal.Stop(stopCh)
 
+	stopWechatReminderWorker := startWechatReminderWorker(
+		wechatReminderWorker,
+		cfg.WechatMessageRemindersEnabled,
+		cfg.ShutdownTimeout,
+		logger,
+	)
 	logger.Info("Go API listening", "addr", cfg.HTTPAddr(), "environment", cfg.Environment)
-	if err := serveHTTP(server, stopCh, cfg.ShutdownTimeout, logger); err != nil {
+	serveErr := serveHTTP(server, stopCh, cfg.ShutdownTimeout, logger)
+	stopWechatReminderWorker()
+	if serveErr != nil {
 		os.Exit(1)
 	}
 }
@@ -823,7 +925,7 @@ func newLogger(cfg config.Config) *slog.Logger {
 }
 
 func requireSharedRedis(ctx context.Context, cfg config.Config, redisClient *goredis.Client) error {
-	if !cfg.RequiresSharedRefreshSessionStore() {
+	if !cfg.RequiresSharedRefreshSessionStore() && !cfg.WechatOfficialAccountEnabled {
 		return nil
 	}
 	checkCtx, cancel := context.WithTimeout(ctx, cfg.RedisConnectTimeout+cfg.RedisSocketTimeout)

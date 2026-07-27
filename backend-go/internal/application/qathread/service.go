@@ -32,7 +32,7 @@ const (
 type Repository interface {
 	ListThreads(ctx context.Context, userID string, role user.Role, search string, status string, className string, teacherID string, page, pageSize int) ([]any, int, error)
 	GetThread(ctx context.Context, threadID string, userID string, role user.Role, page, pageSize int) (any, bool, error)
-	AcknowledgeThreadRead(ctx context.Context, threadID string, studentID string, throughMessageID string) (bool, error)
+	AcknowledgeThreadRead(ctx context.Context, threadID string, userID string, role user.Role, throughMessageID string) (bool, error)
 	CreateThread(ctx context.Context, studentID string, teacherID string, content string, source string, now time.Time) (ThreadDetail, error)
 	CreateThreadMessage(ctx context.Context, threadID string, senderID string, senderRole string, text string, now time.Time) (Message, error)
 	UpdateThreadStatus(ctx context.Context, threadID string, teacherID string, status string) (bool, error)
@@ -157,14 +157,14 @@ func (s *Service) GetThread(ctx context.Context, userID string, threadID string,
 	return item, nil
 }
 
-// AcknowledgeThreadRead marks only teacher replies at or before a cutoff returned by GetThread.
-func (s *Service) AcknowledgeThreadRead(ctx context.Context, studentID string, threadID string, throughMessageID string) error {
+// AcknowledgeThreadRead marks messages from the other participant at or before a cutoff returned by GetThread.
+func (s *Service) AcknowledgeThreadRead(ctx context.Context, userID string, role user.Role, threadID string, throughMessageID string) error {
 	threadID = strings.TrimSpace(threadID)
 	throughMessageID = strings.TrimSpace(throughMessageID)
-	if !validIdentifier(threadID) || !validIdentifier(throughMessageID) {
+	if (role != user.RoleStudent && role != user.RoleTeacher) || !validIdentifier(threadID) || !validIdentifier(throughMessageID) {
 		return ErrInvalidInput
 	}
-	ok, err := s.repo.AcknowledgeThreadRead(ctx, threadID, studentID, throughMessageID)
+	ok, err := s.repo.AcknowledgeThreadRead(ctx, threadID, userID, role, throughMessageID)
 	if err != nil {
 		return err
 	}

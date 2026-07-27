@@ -120,6 +120,8 @@ export const MessageCenterPage: React.FC = () => {
   const threadStatusUpdateRef = useRef('');
   const acknowledgedConversationCutoff = useRef('');
   const acknowledgingConversationCutoff = useRef('');
+  const acknowledgedThreadCutoff = useRef('');
+  const acknowledgingThreadCutoff = useRef('');
   const { toast } = useToast();
   const {
     summary,
@@ -129,6 +131,7 @@ export const MessageCenterPage: React.FC = () => {
   } = useMessageCenterSummary();
   const pageVisible = usePageVisibility();
   const { ref: conversationDetailRef, isVisible: conversationDetailVisible } = useObservedVisibility<HTMLDivElement>();
+  const { ref: threadDetailRef, isVisible: threadDetailVisible } = useObservedVisibility<HTMLDivElement>();
   // ---- state ---------------------------------------------------------
   const [searchTerm, setSearchTerm] = useState('');
   const [serverSearch, setServerSearch] = useState('');
@@ -659,6 +662,25 @@ export const MessageCenterPage: React.FC = () => {
     setActiveThread(null);
     void loadThreadDetail(activeThreadId);
   }, [activeTab, activeThreadId, loadThreadDetail]);
+
+  useEffect(() => {
+    const throughMessageID = activeThread?.read_through_message_id;
+    const cutoffKey = activeThread && throughMessageID ? `${activeThread.id}:${throughMessageID}` : '';
+    if (!pageVisible || !threadDetailVisible || activeTab !== 'answers' || !activeThread || !throughMessageID || activeThread.id !== activeThreadId || acknowledgedThreadCutoff.current === cutoffKey || acknowledgingThreadCutoff.current === cutoffKey) return;
+    const threadID = activeThread.id;
+    acknowledgingThreadCutoff.current = cutoffKey;
+    threadListRequest.current++;
+    void qaThreadService.acknowledgeRead(threadID, throughMessageID).then(async () => {
+      acknowledgedThreadCutoff.current = cutoffKey;
+      const loaded = await loadThreads(1, false, false, { refreshLoadedPages: true });
+      if (!loaded) setListLoadError('答疑列表刷新失败，请稍后重试。');
+      refreshMessageCenterSummaryAfterMutation();
+    }).catch(() => {
+      toast({ type: 'error', title: '答疑已显示，但同步已读状态失败' });
+    }).finally(() => {
+      if (acknowledgingThreadCutoff.current === cutoffKey) acknowledgingThreadCutoff.current = '';
+    });
+  }, [activeTab, activeThread, activeThreadId, loadThreads, pageVisible, threadDetailVisible, toast]);
 
   const reloadInitialData = useCallback(async (preserveCurrent = false) => {
     const request = ++reloadRequest.current;
@@ -1354,7 +1376,7 @@ export const MessageCenterPage: React.FC = () => {
                     </div>
                   ) : activeThread && activeThread.id === activeThreadId ? (
                     <div className="space-y-5">
-                      <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+                      <div ref={threadDetailRef} className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
                         <div>
                           <div className="text-sm text-surface-500 dark:text-surface-400">
                             {activeThread.student_name} · {activeThread.class_name} · {activeThread.source}

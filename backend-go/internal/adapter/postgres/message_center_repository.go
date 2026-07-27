@@ -158,6 +158,7 @@ func scanPreviewItems(rows interface {
 		if err := rows.Scan(&item.ID, &item.Type, &item.Title, &item.Summary, &item.OccurredAt, &item.Pending); err != nil {
 			return nil, err
 		}
+		item.OccurredAt = messageCenterWallTime(item.OccurredAt)
 		items = append(items, item)
 	}
 	return items, rows.Err()
