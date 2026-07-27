@@ -241,6 +241,18 @@ export function useExerciseViewModel() {
   const solutionInFlightRef = useRef(false);
   const questionVersionRef = useRef(0);
 
+  const loadQuestion = useCallback((question: Question) => {
+    questionVersionRef.current += 1;
+    setCurrentQuestion(question);
+    setSubmitResult(null);
+    setSolution(null);
+    setSolutionError(null);
+    setError(null);
+    setErrorType(null);
+    setErrorSource(null);
+    startTimeRef.current = Date.now();
+  }, []);
+
   const loadNextQuestion = useCallback(async (conceptId?: string, difficulty?: number) => {
     setIsLoading(true);
     setError(null);
@@ -475,6 +487,7 @@ export function useExerciseViewModel() {
     error,
     errorType,
     errorSource,
+    loadQuestion,
     loadNextQuestion,
     generateQuestion,
     submitAnswer,

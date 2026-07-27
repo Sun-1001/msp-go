@@ -307,21 +307,6 @@ func main() {
 		logger.Error("configure portrait handler", "error", err)
 		os.Exit(1)
 	}
-	mistakeRepo, err := adapterpostgres.NewMistakeRepository(dbPool)
-	if err != nil {
-		logger.Error("configure mistake repository", "error", err)
-		os.Exit(1)
-	}
-	mistakeService, err := mistakeapp.NewService(mistakeRepo)
-	if err != nil {
-		logger.Error("configure mistake service", "error", err)
-		os.Exit(1)
-	}
-	mistakeHandler, err := mistakehttp.NewHandler(logger, mistakeService, authService)
-	if err != nil {
-		logger.Error("configure mistake handler", "error", err)
-		os.Exit(1)
-	}
 	uploadStorage, err := storageadapter.NewUploadStorage(cfg, logger)
 	if err != nil {
 		logger.Error("configure upload storage", "error", err)
@@ -387,6 +372,21 @@ func main() {
 	)
 	if err != nil {
 		logger.Error("configure exercise service", "error", err)
+		os.Exit(1)
+	}
+	mistakeRepo, err := adapterpostgres.NewMistakeRepository(dbPool)
+	if err != nil {
+		logger.Error("configure mistake repository", "error", err)
+		os.Exit(1)
+	}
+	mistakeService, err := mistakeapp.NewService(mistakeRepo, exerciseService)
+	if err != nil {
+		logger.Error("configure mistake service", "error", err)
+		os.Exit(1)
+	}
+	mistakeHandler, err := mistakehttp.NewHandler(logger, mistakeService, authService)
+	if err != nil {
+		logger.Error("configure mistake handler", "error", err)
 		os.Exit(1)
 	}
 	exerciseHandler, err := exercisehttp.NewHandler(

@@ -230,7 +230,7 @@ func (r MistakeRepository) ErrorCountsByContent(ctx context.Context, userID stri
 	rows, err := r.DB().Query(ctx, `
 		SELECT content_id, count(id)::int
 		FROM public.content_attempts
-		WHERE student_id = $1 AND is_correct = false
+		WHERE student_id = $1 AND is_correct = false AND submitted_at IS NOT NULL
 		GROUP BY content_id`,
 		userID,
 	)
@@ -311,7 +311,7 @@ const mistakeListFromWhere = `
 		LEFT JOIN (
 			SELECT content_id, count(id)::int AS error_count
 			FROM public.content_attempts
-			WHERE student_id = $1 AND is_correct = false
+			WHERE student_id = $1 AND is_correct = false AND submitted_at IS NOT NULL
 			GROUP BY content_id
 		) ec ON ec.content_id = ca.content_id
 		LEFT JOIN LATERAL (

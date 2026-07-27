@@ -1,5 +1,5 @@
 import React from 'react';
-import { useSearchParams } from 'react-router-dom';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 import { MainLayout } from '../../components/layout/MainLayout';
 import { Card, CardContent, CardHeader, CardTitle } from '../../components/ui/Card';
 import { Button } from '../../components/ui/Button';
@@ -25,6 +25,7 @@ import {
 } from '@/modules/mistake/hooks/useMistakeBook';
 
 export const MistakeBookPage: React.FC = () => {
+  const navigate = useNavigate();
   const [searchParams] = useSearchParams();
   const conceptId = searchParams.get('concept_id')?.trim() || undefined;
   const {
@@ -167,7 +168,10 @@ export const MistakeBookPage: React.FC = () => {
                               <CheckCircle className="mr-1 h-3 w-3" />
                               已掌握
                             </Button>
-                            <Button size="sm">
+                            <Button
+                              size="sm"
+                              onClick={() => navigate(`/mistake-book/${encodeURIComponent(item.id)}/redo`)}
+                            >
                               重做 <ArrowRight className="ml-1 h-3 w-3" />
                             </Button>
                           </div>

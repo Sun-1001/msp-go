@@ -17,7 +17,7 @@ export interface Question {
   content: string; // LaTeX
   difficulty: number;
   type: 'multiple_choice' | 'short_answer' | 'proof';
-  source: 'class' | 'ai_generated';
+  source: 'class' | 'ai_generated' | 'review';
   knowledgePoints: string[];
   knowledgePointNames: string[];
   hintsAvailable: boolean;
