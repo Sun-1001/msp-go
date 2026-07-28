@@ -40,6 +40,11 @@ func NewWechatReminderEnqueuer(enabled bool, appID string) (WechatReminderEnqueu
 	return WechatReminderEnqueuer{enabled: true, appID: appID}, nil
 }
 
+// Enabled reports whether durable reminder writes are configured.
+func (e WechatReminderEnqueuer) Enabled() bool {
+	return e.enabled
+}
+
 // Enqueue inserts one semantic reminder event and ignores an exact duplicate.
 func (e WechatReminderEnqueuer) Enqueue(
 	ctx context.Context,
@@ -97,6 +102,62 @@ func (e WechatReminderEnqueuer) EnqueueNoticeRecipients(ctx context.Context, db 
 		return fmt.Errorf("enqueue wechat notice reminders: %w", err)
 	}
 	return nil
+}
+
+// RequeueUnconfirmedNoticeRecipients schedules another notice reminder without duplicating active jobs.
+func (e WechatReminderEnqueuer) RequeueUnconfirmedNoticeRecipients(ctx context.Context, db Querier, noticeID string) (int, error) {
+	if !e.enabled {
+		return 0, nil
+	}
+	if db == nil || !validWechatReminderText(noticeID, maxWechatReminderIDBytes) {
+		return 0, errors.New("invalid wechat notice reminder requeue input")
+	}
+	var queued int
+	err := db.QueryRow(ctx, `
+		WITH target AS MATERIALIZED (
+			SELECT nr.notice_id, nr.student_id
+			FROM public.notice_recipients nr
+			WHERE nr.notice_id = $3
+			  AND NOT EXISTS (
+				SELECT 1
+				FROM public.notice_confirmations nc
+				WHERE nc.notice_id = nr.notice_id AND nc.student_id = nr.student_id
+			  )
+		), reset_jobs AS (
+			UPDATE public.wechat_message_reminder_jobs job
+			SET status = 'pending',
+				attempt_count = 0,
+				next_attempt_at = CURRENT_TIMESTAMP AT TIME ZONE 'UTC',
+				lease_owner = NULL,
+				lease_expires_at = NULL,
+				last_error_code = NULL,
+				provider_error_code = NULL,
+				finished_at = NULL
+			FROM target
+			WHERE job.app_id = $1
+			  AND job.event_type = $2
+			  AND job.source_id = target.notice_id
+			  AND job.recipient_user_id = target.student_id
+			  AND job.status IN ('sent', 'skipped', 'dead')
+			RETURNING job.id
+		), inserted_jobs AS (
+			INSERT INTO public.wechat_message_reminder_jobs (
+				app_id, event_type, source_id, recipient_user_id
+			)
+			SELECT $1, $2, target.notice_id, target.student_id
+			FROM target
+			ON CONFLICT (app_id, event_type, source_id, recipient_user_id) DO NOTHING
+			RETURNING id
+		)
+		SELECT (SELECT COUNT(*) FROM reset_jobs) + (SELECT COUNT(*) FROM inserted_jobs)`,
+		e.appID,
+		string(wechatreminder.EventNotice),
+		noticeID,
+	).Scan(&queued)
+	if err != nil {
+		return 0, fmt.Errorf("requeue unconfirmed notice reminders: %w", err)
+	}
+	return queued, nil
 }
 
 // WechatReminderRepository owns durable job leases and delivery eligibility checks.
@@ -239,7 +300,7 @@ func (r WechatReminderRepository) resolveSourceDelivery(
 	case wechatreminder.EventPrivateMessage:
 		query = `
 			SELECT COALESCE(NULLIF(BTRIM(sender.display_name), ''), sender.username),
-				message.text,
+				CASE WHEN message.text <> '' THEN message.text ELSE '[附件]' END,
 				message.created_at AT TIME ZONE 'Asia/Shanghai'
 			FROM public.conversation_messages message
 			JOIN public.conversations conversation
@@ -282,7 +343,7 @@ func (r WechatReminderRepository) resolveSourceDelivery(
 	case wechatreminder.EventQAMessage:
 		query = `
 			SELECT COALESCE(NULLIF(BTRIM(sender.display_name), ''), sender.username),
-				message.text,
+				CASE WHEN message.text <> '' THEN message.text ELSE '[附件]' END,
 				message.created_at AT TIME ZONE 'Asia/Shanghai'
 			FROM public.question_thread_messages message
 			JOIN public.question_threads thread

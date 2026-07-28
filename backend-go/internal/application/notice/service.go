@@ -7,13 +7,15 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"mathstudy/backend-go/internal/application/messageattachment"
 	"mathstudy/backend-go/internal/domain/user"
 )
 
 var (
-	ErrForbidden    = errors.New("notice forbidden")
-	ErrNotFound     = errors.New("notice not found")
-	ErrInvalidInput = errors.New("notice invalid input")
+	ErrForbidden           = errors.New("notice forbidden")
+	ErrNotFound            = errors.New("notice not found")
+	ErrInvalidInput        = errors.New("notice invalid input")
+	ErrReminderUnavailable = errors.New("notice reminder unavailable")
 )
 
 const (
@@ -29,8 +31,9 @@ const (
 type Repository interface {
 	ListNotices(ctx context.Context, userID string, role user.Role, search string, status string, className string, page, pageSize int) ([]any, int, error)
 	GetNotice(ctx context.Context, noticeID string, userID string, role user.Role) (any, bool, error)
-	CreateNotice(ctx context.Context, teacherID string, classID string, title string, body string, now time.Time) (TeacherNoticeItem, error)
+	CreateNotice(ctx context.Context, teacherID string, classID string, title string, body string, attachments []messageattachment.Attachment, now time.Time) (TeacherNoticeItem, error)
 	ConfirmNotice(ctx context.Context, noticeID string, studentID string) (bool, error)
+	RemindUnconfirmed(ctx context.Context, noticeID string, teacherID string) (ReminderResult, error)
 }
 
 // StudentNoticeListItem is the compact student view returned from notice lists.
@@ -45,8 +48,8 @@ type StudentNoticeListItem struct {
 // StudentNoticeItem is the student detail view of a notice.
 type StudentNoticeItem struct {
 	StudentNoticeListItem
-	Body        string   `json:"body"`
-	Attachments []string `json:"attachments"`
+	Body        string                         `json:"body"`
+	Attachments []messageattachment.Attachment `json:"attachments"`
 }
 
 // TeacherNoticeListItem is the compact teacher view returned from notice lists.
@@ -61,14 +64,22 @@ type TeacherNoticeListItem struct {
 
 // TeacherNoticeItem is the teacher detail view of a notice.
 type TeacherNoticeItem struct {
-	ID                  string    `json:"id"`
-	ClassName           string    `json:"class_name"`
-	Title               string    `json:"title"`
-	Body                string    `json:"body"`
-	PublishedAt         time.Time `json:"published_at"`
-	ConfirmedCount      int       `json:"confirmed_count"`
-	TotalCount          int       `json:"total_count"`
-	UnconfirmedStudents []string  `json:"unconfirmed_students"`
+	ID                  string                         `json:"id"`
+	ClassName           string                         `json:"class_name"`
+	Title               string                         `json:"title"`
+	Body                string                         `json:"body"`
+	PublishedAt         time.Time                      `json:"published_at"`
+	ConfirmedCount      int                            `json:"confirmed_count"`
+	TotalCount          int                            `json:"total_count"`
+	UnconfirmedStudents []string                       `json:"unconfirmed_students"`
+	Attachments         []messageattachment.Attachment `json:"attachments"`
+}
+
+// ReminderResult reports the current target set and how many jobs were newly queued.
+type ReminderResult struct {
+	UnconfirmedStudents []string `json:"unconfirmed_students"`
+	Count               int      `json:"count"`
+	QueuedCount         int      `json:"queued_count"`
 }
 
 // ListResponse is the paginated list response.
@@ -130,16 +141,17 @@ func (s *Service) GetNotice(ctx context.Context, userID string, noticeID string,
 }
 
 // CreateNotice publishes a new notice.
-func (s *Service) CreateNotice(ctx context.Context, teacherID string, classID string, title string, body string) (TeacherNoticeItem, error) {
+func (s *Service) CreateNotice(ctx context.Context, teacherID string, classID string, title string, body string, attachments []messageattachment.Attachment) (TeacherNoticeItem, error) {
 	classID = strings.TrimSpace(classID)
 	title = strings.TrimSpace(title)
 	body = strings.TrimSpace(body)
-	if !validIdentifier(classID) || title == "" ||
+	normalizedAttachments, err := messageattachment.Normalize(attachments)
+	if err != nil || !validIdentifier(classID) || title == "" ||
 		utf8.RuneCountInString(title) > maxTitleRunes ||
 		utf8.RuneCountInString(body) > maxBodyRunes || containsInvalidText(title, body) {
 		return TeacherNoticeItem{}, ErrInvalidInput
 	}
-	return s.repo.CreateNotice(ctx, teacherID, classID, title, body, time.Now())
+	return s.repo.CreateNotice(ctx, teacherID, classID, title, body, normalizedAttachments, time.Now())
 }
 
 // ConfirmNotice marks a notice as confirmed by a student.
@@ -156,6 +168,15 @@ func (s *Service) ConfirmNotice(ctx context.Context, noticeID string, studentID 
 		return ErrForbidden
 	}
 	return nil
+}
+
+// RemindUnconfirmed requeues reminders for the teacher's currently unconfirmed recipients.
+func (s *Service) RemindUnconfirmed(ctx context.Context, noticeID string, teacherID string) (ReminderResult, error) {
+	noticeID = strings.TrimSpace(noticeID)
+	if !validIdentifier(noticeID) || !validIdentifier(teacherID) {
+		return ReminderResult{}, ErrInvalidInput
+	}
+	return s.repo.RemindUnconfirmed(ctx, noticeID, teacherID)
 }
 
 func validIdentifier(value string) bool {

@@ -7,6 +7,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"mathstudy/backend-go/internal/application/messageattachment"
 	"mathstudy/backend-go/internal/domain/user"
 )
 
@@ -33,17 +34,18 @@ type Repository interface {
 	ListThreads(ctx context.Context, userID string, role user.Role, search string, status string, className string, teacherID string, page, pageSize int) ([]any, int, error)
 	GetThread(ctx context.Context, threadID string, userID string, role user.Role, page, pageSize int) (any, bool, error)
 	AcknowledgeThreadRead(ctx context.Context, threadID string, userID string, role user.Role, throughMessageID string) (bool, error)
-	CreateThread(ctx context.Context, studentID string, teacherID string, content string, source string, now time.Time) (ThreadDetail, error)
-	CreateThreadMessage(ctx context.Context, threadID string, senderID string, senderRole string, text string, now time.Time) (Message, error)
+	CreateThread(ctx context.Context, studentID string, teacherID string, content string, source string, attachments []messageattachment.Attachment, now time.Time) (ThreadDetail, error)
+	CreateThreadMessage(ctx context.Context, threadID string, senderID string, senderRole string, text string, attachments []messageattachment.Attachment, now time.Time) (Message, error)
 	UpdateThreadStatus(ctx context.Context, threadID string, teacherID string, status string) (bool, error)
 }
 
 // Message is a single message in a thread.
 type Message struct {
-	ID   string    `json:"id"`
-	From string    `json:"from"`
-	Text string    `json:"text"`
-	Time time.Time `json:"time"`
+	ID          string                         `json:"id"`
+	From        string                         `json:"from"`
+	Text        string                         `json:"text"`
+	Time        time.Time                      `json:"time"`
+	Attachments []messageattachment.Attachment `json:"attachments"`
 }
 
 // StudentThreadItem is the student view of a question thread.
@@ -175,29 +177,32 @@ func (s *Service) AcknowledgeThreadRead(ctx context.Context, userID string, role
 }
 
 // CreateThread creates a new question thread.
-func (s *Service) CreateThread(ctx context.Context, studentID string, teacherID string, content string, source string) (ThreadDetail, error) {
+func (s *Service) CreateThread(ctx context.Context, studentID string, teacherID string, content string, source string, attachments []messageattachment.Attachment) (ThreadDetail, error) {
 	teacherID = strings.TrimSpace(teacherID)
 	content = strings.TrimSpace(content)
 	source = strings.TrimSpace(source)
 	if source == "" {
 		source = "消息中心"
 	}
-	if !validIdentifier(teacherID) || content == "" || utf8.RuneCountInString(content) > maxContentRunes ||
+	normalizedAttachments, err := messageattachment.Normalize(attachments)
+	if err != nil || !validIdentifier(teacherID) || (content == "" && len(normalizedAttachments) == 0) || utf8.RuneCountInString(content) > maxContentRunes ||
 		utf8.RuneCountInString(source) > maxSourceRunes || !validText(content) || !validText(source) {
 		return ThreadDetail{}, ErrInvalidInput
 	}
-	return s.repo.CreateThread(ctx, studentID, teacherID, content, source, time.Now())
+	return s.repo.CreateThread(ctx, studentID, teacherID, content, source, normalizedAttachments, time.Now())
 }
 
 // CreateThreadMessage adds a message to a thread.
-func (s *Service) CreateThreadMessage(ctx context.Context, threadID string, senderID string, senderRole string, text string) (Message, error) {
+func (s *Service) CreateThreadMessage(ctx context.Context, threadID string, senderID string, senderRole string, text string, attachments []messageattachment.Attachment) (Message, error) {
 	threadID = strings.TrimSpace(threadID)
 	text = strings.TrimSpace(text)
+	normalizedAttachments, err := messageattachment.Normalize(attachments)
 	if !validIdentifier(threadID) || (senderRole != string(user.RoleStudent) && senderRole != string(user.RoleTeacher)) ||
-		text == "" || utf8.RuneCountInString(text) > maxMessageRunes || !validText(text) {
+		err != nil || (text == "" && len(normalizedAttachments) == 0) ||
+		utf8.RuneCountInString(text) > maxMessageRunes || !validText(text) {
 		return Message{}, ErrInvalidInput
 	}
-	return s.repo.CreateThreadMessage(ctx, threadID, senderID, senderRole, text, time.Now())
+	return s.repo.CreateThreadMessage(ctx, threadID, senderID, senderRole, text, normalizedAttachments, time.Now())
 }
 
 // UpdateThreadStatus updates a thread's status.

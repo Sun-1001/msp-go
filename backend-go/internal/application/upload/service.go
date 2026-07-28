@@ -22,6 +22,8 @@ const (
 	MaxImageSize = 10 * 1024 * 1024
 	// MaxResourceSize keeps parity with the Python video/document upload limit.
 	MaxResourceSize = 500 * 1024 * 1024
+	// MaxMessageFileSize bounds student and teacher document attachments.
+	MaxMessageFileSize = 50 * 1024 * 1024
 )
 
 var (
@@ -89,6 +91,14 @@ func (s *Service) SaveResourceFile(ctx context.Context, reader io.Reader, meta F
 		prefix = "videos"
 	}
 	return s.saveResource(ctx, reader, meta, MaxResourceSize, prefix)
+}
+
+// SaveMessageFile validates and stores one non-video message attachment.
+func (s *Service) SaveMessageFile(ctx context.Context, reader io.Reader, meta FileMeta) (Response, error) {
+	if !IsAllowedDocumentContentType(meta.ContentType) {
+		return Response{}, ErrInvalidContentType
+	}
+	return s.saveResource(ctx, reader, meta, MaxMessageFileSize, "documents")
 }
 
 func (s *Service) saveResource(ctx context.Context, reader io.Reader, meta FileMeta, maxSize int64, prefix string) (Response, error) {
@@ -233,6 +243,27 @@ func hasISOBaseMediaFileType(prefix []byte) bool {
 // IsSafeImagePath reports whether value is a local URL path produced by SaveImage.
 func IsSafeImagePath(value string) bool {
 	return uploadpath.IsImagePath(value)
+}
+
+// IsSafeDocumentPath reports whether value is a local URL path produced by SaveResourceFile for a document.
+func IsSafeDocumentPath(value string) bool {
+	return uploadpath.IsDocumentPath(value)
+}
+
+// IsAllowedImageContentType reports whether contentType is accepted by SaveImage.
+func IsAllowedImageContentType(contentType string) bool {
+	_, ok := allowedImageTypes()[strings.ToLower(strings.TrimSpace(contentType))]
+	return ok
+}
+
+// IsAllowedDocumentContentType reports whether contentType is an accepted non-video resource type.
+func IsAllowedDocumentContentType(contentType string) bool {
+	contentType = strings.ToLower(strings.TrimSpace(contentType))
+	if strings.HasPrefix(contentType, "video/") {
+		return false
+	}
+	_, ok := allowedResourceTypes()[contentType]
+	return ok
 }
 
 type maxBytesReader struct {

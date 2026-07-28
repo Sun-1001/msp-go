@@ -20,6 +20,11 @@ func IsResourcePath(value string) bool {
 	return isLocalUploadPath(value, []string{"documents", "videos"})
 }
 
+// IsDocumentPath reports whether value is a normalized local uploaded document URL.
+func IsDocumentPath(value string) bool {
+	return isLocalUploadPath(value, []string{"documents"})
+}
+
 // CleanServablePath validates a path relative to /uploads/ and returns its clean object key.
 func CleanServablePath(value string) (string, bool) {
 	value = strings.TrimPrefix(value, "/")

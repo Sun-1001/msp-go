@@ -58,6 +58,23 @@ export async function fetchStableOffsetMessageWindow<T extends { id: string; tim
   throw new Error('message history changed while loading');
 }
 
+export async function fetchCompleteOffsetMessageHistory<T extends { id: string; time: string }>(
+  initialTotal: number,
+  pageSize: number,
+  fetchPage: (page: number) => Promise<{ messages: T[]; messages_total: number }>,
+): Promise<{ messages: T[]; total: number; page: number }> {
+  let lastPage = Math.max(1, Math.ceil(initialTotal / pageSize));
+  for (let attempt = 0; attempt < 4; attempt++) {
+    const history = await fetchStableOffsetMessageWindow(lastPage, pageSize, fetchPage);
+    if (history.messages.length >= history.total) {
+      return { ...history, page: lastPage };
+    }
+    lastPage = Math.max(1, Math.ceil(history.total / pageSize));
+  }
+
+  throw new Error('message history changed while loading all pages');
+}
+
 export function selectListItemID(
   currentID: string,
   itemIDs: string[],

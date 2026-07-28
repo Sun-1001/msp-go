@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	authapp "mathstudy/backend-go/internal/application/auth"
+	"mathstudy/backend-go/internal/application/messageattachment"
 	qathreadapp "mathstudy/backend-go/internal/application/qathread"
 	"mathstudy/backend-go/internal/domain/user"
 	"mathstudy/backend-go/internal/platform/httpauth"
@@ -22,8 +23,8 @@ type Service interface {
 	ListThreads(ctx context.Context, userID string, role user.Role, search string, status string, className string, teacherID string, page int, pageSize int) (qathreadapp.ListResponse, error)
 	GetThread(ctx context.Context, userID string, threadID string, role user.Role, page int, pageSize int) (any, error)
 	AcknowledgeThreadRead(ctx context.Context, userID string, role user.Role, threadID string, throughMessageID string) error
-	CreateThread(ctx context.Context, studentID string, teacherID string, content string, source string) (qathreadapp.ThreadDetail, error)
-	CreateThreadMessage(ctx context.Context, threadID string, senderID string, senderRole string, text string) (qathreadapp.Message, error)
+	CreateThread(ctx context.Context, studentID string, teacherID string, content string, source string, attachments []messageattachment.Attachment) (qathreadapp.ThreadDetail, error)
+	CreateThreadMessage(ctx context.Context, threadID string, senderID string, senderRole string, text string, attachments []messageattachment.Attachment) (qathreadapp.Message, error)
 	UpdateThreadStatus(ctx context.Context, threadID string, teacherID string, status string) error
 }
 
@@ -196,9 +197,10 @@ func (h *Handler) acknowledgeRead(w http.ResponseWriter, r *http.Request) {
 }
 
 type createThreadRequest struct {
-	TeacherID string `json:"teacher_id"`
-	Content   string `json:"content"`
-	Source    string `json:"source"`
+	TeacherID   string                         `json:"teacher_id"`
+	Content     string                         `json:"content"`
+	Source      string                         `json:"source"`
+	Attachments []messageattachment.Attachment `json:"attachments"`
 }
 
 func (h *Handler) createThread(w http.ResponseWriter, r *http.Request) {
@@ -213,14 +215,14 @@ func (h *Handler) createThread(w http.ResponseWriter, r *http.Request) {
 	if !httpjson.DecodeStrictOrBadRequest(w, r, maxJSONBodyBytes, &req) {
 		return
 	}
-	if strings.TrimSpace(req.Content) == "" {
-		writeQAError(w, http.StatusUnprocessableEntity, "VALIDATION_ERROR", "content 不能为空")
+	if strings.TrimSpace(req.Content) == "" && len(req.Attachments) == 0 {
+		writeQAError(w, http.StatusUnprocessableEntity, "VALIDATION_ERROR", "问题文字和附件不能同时为空")
 		return
 	}
 	if req.Source == "" {
 		req.Source = "消息中心"
 	}
-	response, err := h.service.CreateThread(r.Context(), principal.UserID, req.TeacherID, req.Content, req.Source)
+	response, err := h.service.CreateThread(r.Context(), principal.UserID, req.TeacherID, req.Content, req.Source, req.Attachments)
 	if err != nil {
 		if errors.Is(err, qathreadapp.ErrInvalidInput) {
 			writeQAError(w, http.StatusUnprocessableEntity, "VALIDATION_ERROR", "teacher_id、content 或 source 长度或格式无效")
@@ -238,9 +240,10 @@ func (h *Handler) createThread(w http.ResponseWriter, r *http.Request) {
 }
 
 type importThreadRequest struct {
-	TeacherID string `json:"teacher_id"`
-	Source    string `json:"source"`
-	Content   string `json:"content"`
+	TeacherID   string                         `json:"teacher_id"`
+	Source      string                         `json:"source"`
+	Content     string                         `json:"content"`
+	Attachments []messageattachment.Attachment `json:"attachments"`
 }
 
 func (h *Handler) importThread(w http.ResponseWriter, r *http.Request) {
@@ -259,7 +262,7 @@ func (h *Handler) importThread(w http.ResponseWriter, r *http.Request) {
 		writeQAError(w, http.StatusUnprocessableEntity, "VALIDATION_ERROR", "content 不能为空")
 		return
 	}
-	response, err := h.service.CreateThread(r.Context(), principal.UserID, req.TeacherID, req.Content, req.Source)
+	response, err := h.service.CreateThread(r.Context(), principal.UserID, req.TeacherID, req.Content, req.Source, req.Attachments)
 	if err != nil {
 		if errors.Is(err, qathreadapp.ErrInvalidInput) {
 			writeQAError(w, http.StatusUnprocessableEntity, "VALIDATION_ERROR", "teacher_id、content 或 source 长度或格式无效")
@@ -277,7 +280,8 @@ func (h *Handler) importThread(w http.ResponseWriter, r *http.Request) {
 }
 
 type createMessageRequest struct {
-	Text string `json:"text"`
+	Text        string                         `json:"text"`
+	Attachments []messageattachment.Attachment `json:"attachments"`
 }
 
 func (h *Handler) createMessage(w http.ResponseWriter, r *http.Request) {
@@ -292,11 +296,11 @@ func (h *Handler) createMessage(w http.ResponseWriter, r *http.Request) {
 	if !httpjson.DecodeStrictOrBadRequest(w, r, maxJSONBodyBytes, &req) {
 		return
 	}
-	if strings.TrimSpace(req.Text) == "" {
-		writeQAError(w, http.StatusUnprocessableEntity, "VALIDATION_ERROR", "text 不能为空")
+	if strings.TrimSpace(req.Text) == "" && len(req.Attachments) == 0 {
+		writeQAError(w, http.StatusUnprocessableEntity, "VALIDATION_ERROR", "消息文字和附件不能同时为空")
 		return
 	}
-	response, err := h.service.CreateThreadMessage(r.Context(), r.PathValue("id"), principal.UserID, string(principal.Role), req.Text)
+	response, err := h.service.CreateThreadMessage(r.Context(), r.PathValue("id"), principal.UserID, string(principal.Role), req.Text, req.Attachments)
 	if err != nil {
 		if errors.Is(err, qathreadapp.ErrInvalidInput) {
 			writeQAError(w, http.StatusUnprocessableEntity, "VALIDATION_ERROR", "消息长度或格式无效")

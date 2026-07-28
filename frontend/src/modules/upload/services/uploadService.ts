@@ -20,7 +20,7 @@ export interface UploadResponse {
  * @param file 图片文件
  * @returns 上传结果
  */
-export async function uploadImage(file: File): Promise<UploadResponse> {
+export async function uploadImage(file: File, onProgress?: (percent: number) => void): Promise<UploadResponse> {
   const formData = new FormData();
   formData.append('file', file);
 
@@ -30,6 +30,12 @@ export async function uploadImage(file: File): Promise<UploadResponse> {
       'Content-Type': 'multipart/form-data',
     },
     timeout: 60000, // 60 秒
+    onUploadProgress: onProgress
+      ? (progressEvent) => {
+          const total = progressEvent.total ?? file.size;
+          onProgress(Math.min(100, Math.round((progressEvent.loaded * 100) / total)));
+        }
+      : undefined,
   });
 
   return response.data;
@@ -130,11 +136,42 @@ export function validateResourceFile(file: File): { valid: boolean; error?: stri
   return { valid: true };
 }
 
+/** 上传消息中心文档附件（最大 50MB）。 */
+export async function uploadMessageFile(file: File, onProgress?: (percent: number) => void): Promise<UploadResponse> {
+  const formData = new FormData();
+  formData.append('file', file);
+  const response = await apiClient.post<UploadResponse>('/upload/message-file', formData, {
+    headers: { 'Content-Type': 'multipart/form-data' },
+    timeout: 120000,
+    onUploadProgress: onProgress
+      ? (progressEvent) => {
+          const total = progressEvent.total ?? file.size;
+          onProgress(Math.min(100, Math.round((progressEvent.loaded * 100) / total)));
+        }
+      : undefined,
+  });
+  return response.data;
+}
+
+/** 验证消息中心可用的文档附件，不接受视频。 */
+export function validateDocumentFile(file: File): { valid: boolean; error?: string } {
+  if (file.type.startsWith('video/')) {
+    return { valid: false, error: '消息附件暂不支持视频文件' };
+  }
+	const maxSize = 50 * 1024 * 1024;
+	if (file.size > maxSize) {
+		return { valid: false, error: `文件大小超过限制: ${(file.size / 1024 / 1024).toFixed(2)}MB > 50MB` };
+	}
+  return validateResourceFile(file);
+}
+
 export const uploadService = {
   uploadImage,
   validateImageFile,
   uploadResourceFile,
+  uploadMessageFile,
   validateResourceFile,
+  validateDocumentFile,
 };
 
 export default uploadService;

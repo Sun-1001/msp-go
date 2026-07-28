@@ -109,7 +109,7 @@ export const MessagePreviewBell: React.FC<MessagePreviewBellProps> = ({ cacheKey
       >
         <Bell className="h-5 w-5" />
         {unread > 0 && (
-          <span className="absolute -right-1 -top-1 grid h-5 min-w-5 place-items-center rounded-full bg-red-600 px-1 text-[10px] font-bold text-white">
+          <span className="absolute -right-0.5 -top-0.5 grid h-4 min-w-4 place-items-center rounded-full bg-red-600 px-1 text-[9px] font-semibold text-white">
             {unread > 99 ? '99+' : unread}
           </span>
         )}
