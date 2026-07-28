@@ -109,7 +109,7 @@ fi
 
 # 拉取镜像
 echo -e "${BLUE}[4/8] 拉取 Docker 镜像...${NC}"
-docker pull "${DOCKER_USERNAME}/backend-go:latest"
+docker pull "${DOCKER_USERNAME}/backend:latest"
 docker pull "${DOCKER_USERNAME}/frontend:latest"
 echo -e "${GREEN}✓ 镜像拉取完成${NC}"
 

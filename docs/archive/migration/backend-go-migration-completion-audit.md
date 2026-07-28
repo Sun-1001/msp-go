@@ -1,14 +1,12 @@
 # Backend Go Migration Cleanup Audit
 
-> Archive note: this is a point-in-time cleanup audit. Current work is tracked in [项目待办](../../TODO.md), while migration phase evidence remains in [后端迁移跟踪](../../backend-python-to-go-refactor.md).
+> Archive note: this is a point-in-time cleanup audit. Current work is tracked in [项目待办](../../TODO.md); current technical behavior is documented under `docs/technical/`.
 
 **Audit date**: 2026-05-07  
 **Capability recheck**: 2026-07-10
 **Status**: CLEANUP COMPLETE, USER-OWNED RUNTIME VALIDATION
 
 **Scope**: migrate the default backend runtime to Go, exclude legacy Python AI/Agent/OCR/LLM/math-solver implementation, keep incomplete Go AI capabilities behind explicit boundaries, and remove the legacy Python backend directory.
-
-The canonical phase tracker remains `docs/backend-python-to-go-refactor.md`.
 
 ## Decision
 
@@ -39,4 +37,4 @@ Because `backend/` is deleted, this workspace can no longer run Python/Go double
 
 Runtime API behavior, Docker/Compose smoke, browser/API flow smoke, performance baseline, and external live integrations are intentionally left to user validation per the user's instruction.
 
-OCR, broader mathematical solving, token-level streaming, teaching feedback, and external provider quality still require P6 implementation and runtime acceptance evidence. The canonical status and per-slice verification record remain in `docs/backend-python-to-go-refactor.md`.
+The remaining work recorded at this point in time has since been consolidated into the current TODO and technical documents.

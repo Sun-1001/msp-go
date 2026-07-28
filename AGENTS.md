@@ -1,13 +1,5 @@
 # Codex Code Guidelines
 
-## Backend Go Rewrite Tracking (Critical)
-
-- The canonical backend Python -> Go migration tracker is `docs/backend-python-to-go-refactor.md`.
-- Every backend refactor phase must be marked in that document when the phase starts, blocks, resumes, or completes.
-- A phase is not complete until `docs/backend-python-to-go-refactor.md` records the phase status, completion date, verification commands, verification results, deliverables, and residual risks.
-- If implementation changes API behavior, database schema, deployment behavior, or migration scope, update the refactor document in the same change.
-- If the document cannot be updated, stop and report the reason before claiming the phase is complete.
-
 ## Code Quality Standards
 
 ### Code Quality
@@ -18,7 +10,7 @@
 - Apply DRY where it removes real duplication.
 - Apply YAGNI and avoid speculative abstractions.
 - Prefer boring, simple solutions over clever code.
-- Avoid unrelated refactors while working on migration phases.
+- Avoid unrelated refactors.
 
 ### Testing
 
@@ -52,13 +44,13 @@
 
 - Adapt to project reality.
 - Choose maintainable implementation over novelty.
-- Keep migration work aligned with the documented phase plan.
+- Keep implementation aligned with the current architecture and TODO documents.
 
 ### Context Continuity
 
-- Reuse established migration decisions.
-- Maintain module boundaries already documented in the migration tracker.
-- Verify integration between completed phases and newly migrated phases without requiring test artifacts to be committed.
+- Reuse established architecture decisions.
+- Maintain module boundaries documented in `docs/technical/architecture.md`.
+- Verify integration between changed modules without requiring test artifacts to be committed.
 
 ## Git Operations and Parallel Task Safety
 
@@ -102,10 +94,10 @@ If those MCP tools are unavailable in the current environment, use fast shell to
 
 - Follow existing patterns.
 - Use verification appropriate to the change without requiring test sources to be part of the deliverable.
-- Keep the migration tracker current for backend Go rewrite work.
+- Update the corresponding architecture, development, deployment, migration policy, or TODO document when behavior changes.
 
 ### After
 
 - Confirm no test case source file is staged or tracked before handoff.
 - Ensure expected deliverables are complete.
-- Update documentation and phase status when a migration phase changes.
+- Update current documentation when architecture, development, deployment, or database behavior changes.

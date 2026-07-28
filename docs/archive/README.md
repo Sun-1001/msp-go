@@ -14,8 +14,6 @@
 |------|----------|
 | [Go 后端迁移完成审计](migration/backend-go-migration-completion-audit.md) | 记录 2026-05-07 清理决策和 2026-07-10 能力复核，结论已进入当前文档 |
 
-后端迁移主跟踪文档因仓库规则必须保留在 [`docs/backend-python-to-go-refactor.md`](../backend-python-to-go-refactor.md)，不移动到归档目录。
-
 ## 安全报告
 
 | 文档 | 归档原因 |

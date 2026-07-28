@@ -7,7 +7,7 @@
 - PostgreSQL 18 + pgvector
 - Redis 7
 
-版本变化时以 [go.mod](../../backend-go/go.mod)、[package.json](../../frontend/package.json) 和 [docker-compose.yml](../../docker-compose.yml) 为准。
+版本变化时以 [go.mod](../../backend/go.mod)、[package.json](../../frontend/package.json) 和 [docker-compose.yml](../../docker-compose.yml) 为准。
 
 ## 首次启动
 
@@ -20,7 +20,7 @@ Copy-Item .env.example .env
 启动后端前先执行迁移：
 
 ```powershell
-Set-Location backend-go
+Set-Location backend
 go mod download
 go run ./cmd/migrate
 go run ./cmd/api
@@ -41,7 +41,7 @@ npm run dev
 Go 后端：
 
 ```powershell
-Set-Location backend-go
+Set-Location backend
 go vet ./...
 go build ./...
 gofmt -w <changed-go-files>
@@ -70,7 +70,7 @@ git status --short
 
 ```powershell
 # Go：只运行受影响包，必要时再扩大范围
-Set-Location backend-go
+Set-Location backend
 go test <affected-packages> -count=1
 
 # 前端：传入本次创建的临时测试文件
@@ -107,15 +107,15 @@ git diff --cached --name-only --diff-filter=ACMR | Select-String -Pattern '(_tes
 
 ## 数据库迁移
 
-新增迁移文件使用 `NNNN_description.up.sql` 命名，并放在 `backend-go/migrations/`。当前只使用 forward migration：
+新增迁移文件使用 `NNNN_description.up.sql` 命名，并放在 `backend/migrations/`。当前只使用 forward migration：
 
 ```powershell
-Set-Location backend-go
+Set-Location backend
 go run ./cmd/migrate
 go run ./cmd/migrate  # 重复执行应无待应用版本
 ```
 
-不要重建或修改 `0001_initial_schema.up.sql` 来承载增量变化。生产回滚依赖备份恢复或经过评审的补偿性 forward migration，详见 [迁移策略](../../backend-go/migrations/README.md)。
+不要重建或修改 `0001_initial_schema.up.sql` 来承载增量变化。生产回滚依赖备份恢复或经过评审的补偿性 forward migration，详见 [迁移策略](../../backend/migrations/README.md)。
 
 ## 环境配置
 
@@ -164,10 +164,10 @@ WECHAT_QA_MESSAGE_TEMPLATE_ID=
 
 若测试号页面没有消息加解密模式选项，使用 `plain`。不要自行编造 `AES_KEY`，兼容模式和安全模式必须使用微信后台对应的 `EncodingAESKey`。
 
-公众号绑定、师生消息提醒和消息中心北京时间默认值由单一 `backend-go/migrations/0013_wechat_official_account.up.sql` 交付。规范数据库从版本 12 升级时，第一次运行应只记录 `version=13, name=wechat_official_account`，第二次应无待应用版本；全新数据库会按顺序应用版本 1-13。若某个本地或仓库外数据库曾运行未提交的旧 `wechat_user_bindings`、`wechat_message_reminders` 或 `message_center_beijing_time`，必须先核对实际 schema 并校准 `go_schema_migrations`；不得删除 version 13 后重跑合并迁移，否则会重复创建现有表。
+公众号绑定、师生消息提醒和消息中心北京时间默认值由单一 `backend/migrations/0013_wechat_official_account.up.sql` 交付。规范数据库从版本 12 升级时，第一次运行应只记录 `version=13, name=wechat_official_account`，第二次应无待应用版本；全新数据库会按顺序应用版本 1-13。若某个本地或仓库外数据库曾运行未提交的旧 `wechat_user_bindings`、`wechat_message_reminders` 或 `message_center_beijing_time`，必须先核对实际 schema 并校准 `go_schema_migrations`；不得删除 version 13 后重跑合并迁移，否则会重复创建现有表。
 
 ```powershell
-Set-Location backend-go
+Set-Location backend
 go run ./cmd/migrate
 go run ./cmd/migrate  # 应返回 applied_count=0
 go run ./cmd/api

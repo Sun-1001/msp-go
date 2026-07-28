@@ -79,9 +79,9 @@ services:
 
   # Go backend service.
   backend:
-    image: ${DOCKER_USERNAME:-your-dockerhub-username}/backend-go:${IMAGE_VERSION:-latest}
+    image: ${DOCKER_USERNAME:-your-dockerhub-username}/backend:${IMAGE_VERSION:-latest}
     build:
-      context: ./backend-go
+      context: ./backend
     container_name: msp_backend
     restart: unless-stopped
     env_file:

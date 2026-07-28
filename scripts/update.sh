@@ -94,7 +94,7 @@ echo -e "${GREEN}✓ PostgreSQL 已就绪${NC}"
 
 # 拉取最新镜像
 echo -e "${BLUE}[3/9] 拉取最新镜像...${NC}"
-docker pull "${DOCKER_USERNAME}/backend-go:${VERSION}"
+docker pull "${DOCKER_USERNAME}/backend:${VERSION}"
 docker pull "${DOCKER_USERNAME}/frontend:${VERSION}"
 echo -e "${GREEN}✓ 镜像拉取完成${NC}"
 

@@ -17,11 +17,10 @@
 
 | 文档 | 定位 |
 |------|------|
-| [Go 数据库迁移策略](../backend-go/migrations/README.md) | 新增迁移、执行和回滚规则 |
-| [后端 Python 到 Go 迁移跟踪](backend-python-to-go-refactor.md) | 仓库规则要求保留的迁移阶段记录和验证证据 |
+| [Go 数据库迁移策略](../backend/migrations/README.md) | 新增迁移、执行、验证和回滚规则 |
 | [前端说明](../frontend/README.md) | 前端常用命令和目录约定 |
 | [第三方声明](../frontend/THIRD_PARTY_NOTICES.md) | 前端第三方素材与许可证声明 |
-| [协作规则](../AGENTS.md) | 代码质量、临时测试清理、Git 和迁移文档约束 |
+| [协作规则](../AGENTS.md) | 代码质量、临时测试清理、Git 和数据库迁移约束 |
 
 ## 历史归档
 
@@ -32,4 +31,4 @@
 1. 新的未完成工作只写入 [TODO.md](TODO.md)，其他文档通过链接引用，不维护第二份路线图。
 2. 当前架构、开发或部署行为变化时，更新 `technical/` 下对应文档。
 3. 已完成且只具备追溯价值的方案、审计和报告移入 `archive/`，并在归档索引登记。
-4. 后端迁移阶段发生开始、阻塞、恢复或完成时，仍必须同步更新 `backend-python-to-go-refactor.md`。
+4. 长期有效的规则只保留在当前文档中；阶段流水、临时验证明细和已关闭风险不建立重复跟踪文档。

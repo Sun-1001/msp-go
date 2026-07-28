@@ -27,7 +27,7 @@ backups/
 .cache/
 .gocache/
 chroma_db/
-backend-go/coverage.out
+backend/coverage.out
 frontend/coverage/
 
 # Python 缓存（根目录级别）

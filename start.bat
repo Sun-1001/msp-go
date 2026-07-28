@@ -9,7 +9,7 @@ echo.
 
 :: 启动 Go 后端 (新窗口)
 echo [1/2] 启动 Go 后端服务...
-start "Backend - Go API" cmd /k "cd /d %~dp0backend-go && go run ./cmd/api"
+start "Backend - Go API" cmd /k "cd /d %~dp0backend && go run ./cmd/api"
 
 :: 等待一秒让后端先启动
 timeout /t 2 /nobreak >nul

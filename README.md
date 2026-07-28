@@ -29,7 +29,7 @@
 ```powershell
 Copy-Item .env.example .env
 
-Set-Location backend-go
+Set-Location backend
 go run ./cmd/migrate
 go run ./cmd/api
 ```
@@ -65,7 +65,7 @@ Windows 也可以运行根目录的 `start.bat` 同时启动前后端。默认�
 ```text
 .
 ├── frontend/              # React + TypeScript 前端
-├── backend-go/            # Go API、迁移和领域实现
+├── backend/               # Go API、迁移和领域实现
 ├── docs/                  # 当前技术文档、待办和历史归档
 ├── scripts/               # 初始化、部署和更新脚本
 ├── docker-compose.yml     # PostgreSQL、Redis、Go API、前端编排
@@ -75,4 +75,4 @@ Windows 也可以运行根目录的 `start.bat` 同时启动前后端。默认�
 
 ## 开发约定
 
-仓库开发与临时测试规则见 [AGENTS.md](AGENTS.md)。测试源码验证通过后必须删除且不得提交；数据库变更必须使用 Go forward migration，具体规则见 [迁移策略](backend-go/migrations/README.md)。
+仓库开发与临时测试规则见 [AGENTS.md](AGENTS.md)。测试源码验证通过后必须删除且不得提交；数据库变更必须使用 Go forward migration，具体规则见 [迁移策略](backend/migrations/README.md)。

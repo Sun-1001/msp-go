@@ -1,0 +1,149 @@
+package adminstatshttp
+
+import (
+	"context"
+	"errors"
+	"log/slog"
+	"net/http"
+
+	adminstatsapp "mathstudy/backend/internal/application/adminstats"
+	authapp "mathstudy/backend/internal/application/auth"
+	"mathstudy/backend/internal/platform/httpauth"
+	"mathstudy/backend/internal/platform/httpjson"
+	"mathstudy/backend/internal/platform/httpquery"
+	"mathstudy/backend/internal/platform/redact"
+)
+
+// Service is the admin stats application surface used by HTTP handlers.
+type Service interface {
+	OverviewStats(context.Context) (adminstatsapp.OverviewStatsResponse, error)
+	UserGrowth(context.Context, string) (adminstatsapp.UserGrowthResponse, error)
+	RecentActivities(context.Context, int) (adminstatsapp.RecentActivitiesResponse, error)
+	SystemStatus(context.Context) (adminstatsapp.SystemStatusResponse, error)
+	ResetTrafficMetrics(context.Context) (adminstatsapp.ResetTrafficMetricsResponse, error)
+}
+
+// Authenticator decodes Go/Python-compatible access tokens.
+type Authenticator interface {
+	DecodeAccessToken(string) (authapp.Principal, bool)
+}
+
+// Handler serves /admin/stats endpoints.
+type Handler struct {
+	service Service
+	auth    Authenticator
+	logger  *slog.Logger
+}
+
+// NewHandler creates an admin stats HTTP handler.
+func NewHandler(logger *slog.Logger, service Service, auth Authenticator) (*Handler, error) {
+	if service == nil {
+		return nil, errors.New("admin stats service is nil")
+	}
+	if auth == nil {
+		return nil, errors.New("admin stats authenticator is nil")
+	}
+	if logger == nil {
+		logger = slog.Default()
+	}
+	return &Handler{service: service, auth: auth, logger: logger}, nil
+}
+
+// Register attaches admin stats routes under prefix, for example /api/v1/admin/stats.
+func (h *Handler) Register(mux *http.ServeMux, prefix string) {
+	mux.HandleFunc("GET "+prefix+"/overview", h.overview)
+	mux.HandleFunc("GET "+prefix+"/user-growth", h.userGrowth)
+	mux.HandleFunc("GET "+prefix+"/recent-activities", h.recentActivities)
+	mux.HandleFunc("GET "+prefix+"/system-status", h.systemStatus)
+	mux.HandleFunc("POST "+prefix+"/system-status/reset", h.resetTrafficMetrics)
+}
+
+func (h *Handler) overview(w http.ResponseWriter, r *http.Request) {
+	if _, ok := h.requireAdmin(w, r); !ok {
+		return
+	}
+	response, err := h.service.OverviewStats(r.Context())
+	if err != nil {
+		h.writeServiceError(w, err, "获取概览统计失败")
+		return
+	}
+	httpjson.Write(w, http.StatusOK, response)
+}
+
+func (h *Handler) userGrowth(w http.ResponseWriter, r *http.Request) {
+	if _, ok := h.requireAdmin(w, r); !ok {
+		return
+	}
+	response, err := h.service.UserGrowth(r.Context(), r.URL.Query().Get("period"))
+	if err != nil {
+		h.writeServiceError(w, err, "获取用户增长趋势失败")
+		return
+	}
+	httpjson.Write(w, http.StatusOK, response)
+}
+
+func (h *Handler) recentActivities(w http.ResponseWriter, r *http.Request) {
+	if _, ok := h.requireAdmin(w, r); !ok {
+		return
+	}
+	limit, err := httpquery.BoundedInt(r.URL.Query().Get("limit"), 10, 1, 50)
+	if err != nil {
+		if errors.Is(err, httpquery.ErrInvalidInt) {
+			writeAdminStatsError(w, http.StatusUnprocessableEntity, "VALIDATION_ERROR", "limit 必须是整数")
+			return
+		}
+		writeAdminStatsError(w, http.StatusUnprocessableEntity, "VALIDATION_ERROR", "limit 必须在 1 到 50 之间")
+		return
+	}
+	response, err := h.service.RecentActivities(r.Context(), limit)
+	if err != nil {
+		h.writeServiceError(w, err, "获取最近活动失败")
+		return
+	}
+	httpjson.Write(w, http.StatusOK, response)
+}
+
+func (h *Handler) systemStatus(w http.ResponseWriter, r *http.Request) {
+	if _, ok := h.requireAdmin(w, r); !ok {
+		return
+	}
+	response, err := h.service.SystemStatus(r.Context())
+	if err != nil {
+		h.writeServiceError(w, err, "获取系统状态失败")
+		return
+	}
+	httpjson.Write(w, http.StatusOK, response)
+}
+
+func (h *Handler) resetTrafficMetrics(w http.ResponseWriter, r *http.Request) {
+	if _, ok := h.requireAdmin(w, r); !ok {
+		return
+	}
+	response, err := h.service.ResetTrafficMetrics(r.Context())
+	if err != nil {
+		h.writeServiceError(w, err, "重置运维流量指标失败")
+		return
+	}
+	httpjson.Write(w, http.StatusOK, response)
+}
+
+func (h *Handler) requireAdmin(w http.ResponseWriter, r *http.Request) (authapp.Principal, bool) {
+	return httpauth.RequireBearerAccess(
+		w, r, h.auth.DecodeAccessToken, authapp.IsAdmin,
+		"权限不足，需要管理员权限", writeAdminStatsError,
+	)
+}
+
+func (h *Handler) writeServiceError(w http.ResponseWriter, err error, fallback string) {
+	switch {
+	case errors.Is(err, adminstatsapp.ErrBadRequest):
+		writeAdminStatsError(w, http.StatusUnprocessableEntity, "VALIDATION_ERROR", redact.String(err.Error()))
+	default:
+		h.logger.Error("admin stats request failed", "error", redact.String(err.Error()))
+		writeAdminStatsError(w, http.StatusInternalServerError, "INTERNAL_ERROR", fallback)
+	}
+}
+
+func writeAdminStatsError(w http.ResponseWriter, status int, code, message string) {
+	httpjson.WriteDetailError(w, status, code, message)
+}

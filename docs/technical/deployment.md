@@ -8,7 +8,7 @@
 |------|----------|----------|
 | PostgreSQL | `pgvector/pgvector:pg18-trixie` | 5432 |
 | Redis | `redis:7-alpine` | 6379 |
-| Backend | `backend-go/Dockerfile` 构建的 Go API | 8000 |
+| Backend | `backend/Dockerfile` 构建的 Go API | 8000 |
 | Frontend | `frontend/Dockerfile` 构建的 Nginx 静态站点 | 80 |
 
 PostgreSQL、Redis 和 Go API 默认只绑定宿主机回环地址；前端默认发布到宿主机 `9000` 端口。
@@ -50,7 +50,7 @@ docker compose up -d postgres redis
 数据库健康后执行 Go migration runner，再启动应用服务。仓库脚本 `scripts/deploy.sh` 和 `scripts/update.sh` 已按这一顺序处理；手工部署时可使用：
 
 ```powershell
-Set-Location backend-go
+Set-Location backend
 go run ./cmd/migrate
 Set-Location ..
 docker compose up -d backend frontend
@@ -58,10 +58,10 @@ docker compose up -d backend frontend
 
 默认生产链路不运行 Python 或 Alembic。
 
-迁移 runner 不随 API 自动执行。合并包含 `backend-go/migrations/*.up.sql` 的变更后，必须在启动新版本 API 前执行一次迁移，并确认重复执行没有待应用版本：
+迁移 runner 不随 API 自动执行。合并包含 `backend/migrations/*.up.sql` 的变更后，必须在启动新版本 API 前执行一次迁移，并确认重复执行没有待应用版本：
 
 ```powershell
-Set-Location backend-go
+Set-Location backend
 go run ./cmd/migrate
 go run ./cmd/migrate
 Set-Location ..
@@ -168,7 +168,7 @@ docker compose logs --tail 200 backend
 仓库不永久保留验收测试源码。发布前按 [开发指南](development.md) 临时创建非网络验收用例，覆盖真实 PNG/JPEG 的上传、存储回读、多模态 Base64 传递和学习状态写入边界，运行并记录结果后删除：
 
 ```powershell
-Set-Location backend-go
+Set-Location backend
 go test ./internal/adapter/llm/einoagent -run 'TestAnswerImageSubmission' -count=1 -v
 ```
 
@@ -263,7 +263,7 @@ ROLLBACK_TAG="rollback-20260723_120000"
 BACKEND_IMAGE_ID="$(sed -n 's/^backend_image_id=//p' "${BACKUP_DIR}/previous-images.txt")"
 FRONTEND_IMAGE_ID="$(sed -n 's/^frontend_image_id=//p' "${BACKUP_DIR}/previous-images.txt")"
 docker image inspect "${BACKEND_IMAGE_ID}" "${FRONTEND_IMAGE_ID}" >/dev/null
-docker tag "${BACKEND_IMAGE_ID}" "${DOCKER_USERNAME}/backend-go:${ROLLBACK_TAG}"
+docker tag "${BACKEND_IMAGE_ID}" "${DOCKER_USERNAME}/backend:${ROLLBACK_TAG}"
 docker tag "${FRONTEND_IMAGE_ID}" "${DOCKER_USERNAME}/frontend:${ROLLBACK_TAG}"
 export IMAGE_VERSION="${ROLLBACK_TAG}"
 docker compose -f "${COMPOSE_FILE}" up -d backend frontend
