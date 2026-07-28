@@ -51,12 +51,28 @@ Copy-Item .env.example .env
 
 ## 构建与启动
 
+GitHub Actions 将两个应用服务作为独立镜像构建，避免混用 Dockerfile 或构建上下文：
+
+| 服务 | Dockerfile | 构建上下文 | GHCR 镜像 |
+|------|------------|------------|-----------|
+| Backend | `backend/Dockerfile` | `backend/` | `ghcr.io/fraternity-z/mathstudyplatform-backend` |
+| Frontend | `frontend/Dockerfile` | `frontend/` | `ghcr.io/fraternity-z/mathstudyplatform-frontend` |
+
+`.github/workflows/docker-build-check.yml` 在 push、Pull Request 和手动触发时只验证镜像构建，不登录或推送仓库。`.github/workflows/docker-release.yml` 仅手动触发，从 Actions 页面选择的 Git ref 构建并发布版本号、`latest` 和短提交哈希标签；正式版本号必须使用 `v1.0.0` 格式，任一服务已存在同版本标签时发布会终止，避免覆盖。
+
 ```powershell
 docker compose build
 docker compose up -d postgres redis
 ```
 
-数据库健康后执行 Go migration runner，再启动应用服务。仓库脚本 `scripts/deploy.sh` 和 `scripts/update.sh` 已按这一顺序处理；手工部署时可使用：
+数据库健康后执行 Go migration runner，再启动应用服务。首次生产部署使用 `scripts/deploy.sh`，已有环境更新使用 `scripts/update.sh`；两个脚本均直接拉取 GHCR 中独立的前后端镜像，并按这一顺序执行。私有 GHCR 包通过 `GHCR_USERNAME` 和 `GHCR_TOKEN` 环境变量登录，Token 不写入配置或日志。
+
+```bash
+sudo bash ./scripts/deploy.sh --version v1.0.0 --domain math.example.com
+sudo bash ./scripts/update.sh --version v1.1.0
+```
+
+首次部署脚本检测到已有 backend 或 frontend 容器时会拒绝继续，防止绕过更新备份。更新脚本要求完整的现有部署，会在停止应用写入后备份 PostgreSQL、`.env`、解析后的 Compose 配置、旧镜像 ID 和本地上传目录。两个脚本都在迁移前幂等启用 `vector` 扩展，因此 Compose 不再依赖独立的数据库初始化脚本。手工部署时可使用：
 
 ```powershell
 Set-Location backend
@@ -113,7 +129,7 @@ ORDER BY version;
 - TLS、HSTS、CSP 和其他安全响应头由边缘代理统一设置；
 - `/metrics` 和详细健康信息只对管理网络开放。
 
-`scripts/deploy.sh` 只会为首次部署或重新执行部署脚本时生成站点配置。已经部署的服务器不会因代码更新自动改写 `/etc/nginx`；应先用 `sudo nginx -T` 确认实际生效的站点文件，再将 `/api/` location 中的 `proxy_read_timeout` 调整为 `300s`，随后执行：
+`scripts/deploy.sh` 只在首次部署且传入 `--domain` 时生成站点配置；`scripts/update.sh` 不修改 Nginx。已经部署的服务器不会因代码更新自动改写 `/etc/nginx`；应先用 `sudo nginx -T` 确认实际生效的站点文件，再将 `/api/` location 中的 `proxy_read_timeout` 调整为 `300s`，随后执行：
 
 ```bash
 sudo nginx -t
@@ -217,7 +233,7 @@ go test ./internal/adapter/llm/einoagent -run 'TestLiveMathSolver' -count=1 -v
 
 ## 更新与回滚
 
-- 使用 `scripts/update.sh <镜像标签>` 或按“确认数据库、拉取镜像、停止应用写入、备份数据、迁移、启动新应用”的顺序更新。脚本确认 PostgreSQL 可用并拉取新镜像时旧应用仍保持运行，随后只停止 backend/frontend，不停止数据库和 Redis。
+- 使用 `scripts/update.sh --version <镜像标签>` 或按“确认数据库、拉取镜像、停止应用写入、备份数据、迁移、启动新应用”的顺序更新。脚本确认 PostgreSQL 可用并拉取新镜像时旧应用仍保持运行，随后只停止 backend/frontend，不停止数据库和 Redis。
 - 更新脚本在迁移前创建权限收紧的 `backups/<时间戳>/`，保存 `.env`、解析后的 Compose 配置、旧镜像引用及不可变镜像 ID、PostgreSQL custom-format dump，以及存在时的 `uploads.tar.gz`。可通过 `BACKUP_ROOT` 修改备份根目录。该目录被 Git 忽略，但包含生产凭据和业务数据，仍需限制访问并按运维保留策略清理。
 - `postgres.dump` 失败或为空时脚本不会执行迁移，并尝试重新启动原应用容器；迁移失败或新版本健康检查失败时应用保持停止，避免在未知 schema 或不健康状态下继续提供服务。
 - `uploads/` 不在默认路径时，通过 `MSP_UPLOADS_BACKUP_DIR` 指定宿主机持久化目录。使用 S3/七牛等外部对象存储时，仍需遵循对应供应商的版本与备份策略。
@@ -268,14 +284,15 @@ fi
 `previous-images.txt` 同时保存原镜像引用和容器实际使用的镜像 ID。需要回滚镜像时，先确认两个 ID 在本机仍存在，再把它们标记为同一个临时版本并启动应用：
 
 ```bash
-: "${DOCKER_USERNAME:?请先导出原镜像仓库用户名}"
-export DOCKER_USERNAME
+BACKEND_IMAGE="${BACKEND_IMAGE:-ghcr.io/fraternity-z/mathstudyplatform-backend}"
+FRONTEND_IMAGE="${FRONTEND_IMAGE:-ghcr.io/fraternity-z/mathstudyplatform-frontend}"
 ROLLBACK_TAG="rollback-20260723_120000"
 BACKEND_IMAGE_ID="$(sed -n 's/^backend_image_id=//p' "${BACKUP_DIR}/previous-images.txt")"
 FRONTEND_IMAGE_ID="$(sed -n 's/^frontend_image_id=//p' "${BACKUP_DIR}/previous-images.txt")"
 docker image inspect "${BACKEND_IMAGE_ID}" "${FRONTEND_IMAGE_ID}" >/dev/null
-docker tag "${BACKEND_IMAGE_ID}" "${DOCKER_USERNAME}/backend:${ROLLBACK_TAG}"
-docker tag "${FRONTEND_IMAGE_ID}" "${DOCKER_USERNAME}/frontend:${ROLLBACK_TAG}"
+docker tag "${BACKEND_IMAGE_ID}" "${BACKEND_IMAGE}:${ROLLBACK_TAG}"
+docker tag "${FRONTEND_IMAGE_ID}" "${FRONTEND_IMAGE}:${ROLLBACK_TAG}"
+export BACKEND_IMAGE FRONTEND_IMAGE
 export IMAGE_VERSION="${ROLLBACK_TAG}"
 docker compose -f "${COMPOSE_FILE}" up -d backend frontend
 ```

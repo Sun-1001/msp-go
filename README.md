@@ -67,7 +67,7 @@ Windows 也可以运行根目录的 `start.bat` 同时启动前后端。默认�
 ├── frontend/              # React + TypeScript 前端
 ├── backend/               # Go API、迁移和领域实现
 ├── docs/                  # 当前技术文档、待办和历史归档
-├── scripts/               # 初始化、部署和更新脚本
+├── scripts/               # 生产部署与更新脚本
 ├── docker-compose.yml     # PostgreSQL、Redis、Go API、前端编排
 ├── nginx-site.conf        # 站点反向代理配置
 └── .env.example           # 唯一环境变量模板

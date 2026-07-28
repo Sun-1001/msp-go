@@ -23,10 +23,7 @@ build/
 
 # 环境变量
 .env
-.env.local
-.env.*.local
-.env.development
-.env.test
+.env.*
 
 # 测试
 coverage/

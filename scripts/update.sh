@@ -1,187 +1,228 @@
-#!/bin/bash
-# 生产环境更新脚本
-# 用法: ./update.sh [版本号]
+#!/usr/bin/env bash
+# Backup and update an existing MathStudyPlatform deployment.
 
 set -Eeuo pipefail
+umask 077
 
-# 颜色输出
 RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
 BLUE='\033[0;34m'
 NC='\033[0m'
 
-# 配置
-VERSION=${1:-latest}
+VERSION=""
 COMPOSE_FILE="docker-compose.yml"
 ENV_FILE=".env"
 BACKUP_ROOT="${BACKUP_ROOT:-backups}"
-BACKUP_DIR="${BACKUP_ROOT}/$(date +%Y%m%d_%H%M%S)"
 UPLOADS_DIR="${MSP_UPLOADS_BACKUP_DIR:-uploads}"
+BACKEND_IMAGE="ghcr.io/fraternity-z/mathstudyplatform-backend"
+FRONTEND_IMAGE="ghcr.io/fraternity-z/mathstudyplatform-frontend"
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" > /dev/null 2>&1 && pwd)"
 PROJECT_ROOT="$(cd -- "${SCRIPT_DIR}/.." > /dev/null 2>&1 && pwd)"
 
+usage() {
+    cat <<'EOF'
+用法: sudo bash ./scripts/update.sh --version <标签>
+
+标签接受 latest、v1.0.0 或 sha-abcdef1。私有 GHCR 镜像可通过
+GHCR_USERNAME 和 GHCR_TOKEN 环境变量登录。
+EOF
+}
+
+while [ "$#" -gt 0 ]; do
+    case "$1" in
+        --version)
+            [ "$#" -ge 2 ] || { echo "--version 缺少参数" >&2; exit 2; }
+            VERSION="$2"
+            shift 2
+            ;;
+        -h|--help)
+            usage
+            exit 0
+            ;;
+        *)
+            echo "未知参数: $1" >&2
+            usage >&2
+            exit 2
+            ;;
+    esac
+done
+
+if ! [[ "$VERSION" =~ ^(latest|v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)|sha-[0-9a-f]{7,40})$ ]]; then
+    echo -e "${RED}必须使用 --version 指定 latest、v1.0.0 或 sha-abcdef1${NC}" >&2
+    exit 1
+fi
+if [ "$EUID" -ne 0 ]; then
+    echo -e "${RED}请使用 root 权限运行此脚本${NC}" >&2
+    exit 1
+fi
+
 cd "$PROJECT_ROOT"
-# shellcheck source=deployment-common.sh
-source "${SCRIPT_DIR}/deployment-common.sh"
-umask 077
 
-echo -e "${GREEN}=== MathStudyPlatform 更新部署 ===${NC}"
-echo -e "${YELLOW}版本: ${VERSION}${NC}"
+compose() {
+    "${DOCKER_COMPOSE[@]}" -f "$COMPOSE_FILE" "$@"
+}
 
-# 检查环境变量
-if [ -z "${DOCKER_USERNAME:-}" ]; then
-    echo -e "${RED}错误: DOCKER_USERNAME 环境变量未设置${NC}"
-    echo "请运行: export DOCKER_USERNAME=your-dockerhub-username"
-    exit 1
-fi
+wait_for_postgres() {
+    local max_attempts="${1:-30}" attempt
+    for ((attempt = 1; attempt <= max_attempts; attempt++)); do
+        if compose exec -T postgres sh -ec 'pg_isready -q -U "${POSTGRES_USER:-postgres}" -d "${POSTGRES_DB:-${POSTGRES_USER:-postgres}}"' > /dev/null 2>&1; then
+            return 0
+        fi
+        sleep 2
+    done
+    compose logs --tail=50 postgres >&2 || true
+    return 1
+}
 
-# 检查 docker-compose 文件
-if [ ! -f "$COMPOSE_FILE" ]; then
-    echo -e "${RED}错误: 找不到 ${COMPOSE_FILE}${NC}"
-    exit 1
-fi
-if [ ! -f "$ENV_FILE" ]; then
-    echo -e "${RED}错误: 找不到 ${ENV_FILE}${NC}"
-    exit 1
-fi
+wait_for_service() {
+    local service="$1" max_attempts="$2"
+    local attempt container_id state
+    for ((attempt = 1; attempt <= max_attempts; attempt++)); do
+        container_id="$(compose ps -q "$service" 2>/dev/null || true)"
+        if [ -n "$container_id" ]; then
+            state="$(docker inspect --format '{{if .State.Health}}{{.State.Health.Status}}{{else}}{{.State.Status}}{{end}}' "$container_id" 2>/dev/null || true)"
+            case "$state" in
+                healthy|running) return 0 ;;
+                unhealthy|dead|exited)
+                    compose logs --tail=50 "$service" >&2 || true
+                    return 1
+                    ;;
+            esac
+        fi
+        sleep 2
+    done
+    compose logs --tail=50 "$service" >&2 || true
+    return 1
+}
 
-# 优先使用 docker compose (v2)，回退到 docker-compose (v1)
-if docker compose version &> /dev/null; then
-    DOCKER_COMPOSE=(docker compose)
-elif command -v docker-compose &> /dev/null; then
-    DOCKER_COMPOSE=(docker-compose)
-else
-    echo -e "${RED}Docker Compose 未安装，请先安装 Docker Compose${NC}"
-    exit 1
-fi
+service_container_id() {
+    compose ps -a -q "$1" 2>/dev/null || true
+}
 
-# 记录当前配置和运行镜像。数据库与上传目录在停止应用写入后备份。
-echo -e "${BLUE}[1/9] 准备备份目录并记录当前版本...${NC}"
-BACKEND_WAS_RUNNING=false
-FRONTEND_WAS_RUNNING=false
-if service_is_running backend; then
-    BACKEND_WAS_RUNNING=true
-fi
-if service_is_running frontend; then
-    FRONTEND_WAS_RUNNING=true
-fi
-mkdir -p "$BACKUP_ROOT"
-if ! mkdir "$BACKUP_DIR"; then
-    echo -e "${RED}错误: 无法创建唯一备份目录 ${BACKUP_DIR}${NC}"
-    exit 1
-fi
-cp -- "$ENV_FILE" "$BACKUP_DIR/.env"
-compose config > "$BACKUP_DIR/docker-compose.resolved.yml"
-{
-    printf 'backend=%s\n' "$(service_image backend)"
-    printf 'backend_image_id=%s\n' "$(service_image_id backend)"
-    printf 'frontend=%s\n' "$(service_image frontend)"
-    printf 'frontend_image_id=%s\n' "$(service_image_id frontend)"
-    printf 'backend_was_running=%s\n' "$BACKEND_WAS_RUNNING"
-    printf 'frontend_was_running=%s\n' "$FRONTEND_WAS_RUNNING"
-} > "$BACKUP_DIR/previous-images.txt"
-echo -e "${GREEN}✓ 配置与当前镜像已记录到 ${BACKUP_DIR}${NC}"
+service_is_running() {
+    local container_id
+    container_id="$(service_container_id "$1")"
+    [ -n "$container_id" ] || return 1
+    [ "$(docker inspect --format '{{.State.Running}}' "$container_id" 2>/dev/null || true)" = "true" ]
+}
 
-# 确保数据库可访问；旧应用保持运行，直到新镜像拉取完成。
-echo -e "${BLUE}[2/9] 检查 PostgreSQL...${NC}"
-compose up -d postgres
-if ! wait_for_postgres "${POSTGRES_WAIT_ATTEMPTS:-30}"; then
-    echo -e "${RED}✗ PostgreSQL 未就绪，更新已中止，应用未停止${NC}"
-    exit 1
-fi
-echo -e "${GREEN}✓ PostgreSQL 已就绪${NC}"
+service_image_value() {
+    local service="$1" field="$2" container_id
+    container_id="$(service_container_id "$service")"
+    docker inspect --format "$field" "$container_id" 2>/dev/null || printf '%s\n' "unknown"
+}
 
-# 拉取最新镜像
-echo -e "${BLUE}[3/9] 拉取最新镜像...${NC}"
-docker pull "${DOCKER_USERNAME}/backend:${VERSION}"
-docker pull "${DOCKER_USERNAME}/frontend:${VERSION}"
-echo -e "${GREEN}✓ 镜像拉取完成${NC}"
+backup_postgres() {
+    local output_path="$1"
+    if ! compose exec -T postgres sh -ec 'exec pg_dump --format=custom --no-owner --no-privileges -U "${POSTGRES_USER:-postgres}" -d "${POSTGRES_DB:-${POSTGRES_USER:-postgres}}"' > "$output_path"; then
+        rm -f -- "$output_path"
+        return 1
+    fi
+    [ -s "$output_path" ] || { rm -f -- "$output_path"; return 1; }
+}
 
-# 导出环境变量
-echo -e "${BLUE}[4/9] 设置目标版本...${NC}"
-export DOCKER_USERNAME
-export IMAGE_VERSION="$VERSION"
-
-# 只停止应用，保持 PostgreSQL/Redis 容器和数据卷在线。
-echo -e "${BLUE}[5/9] 停止应用写入...${NC}"
-compose stop backend frontend
-echo -e "${GREEN}✓ 后端与前端已停止${NC}"
-
-restart_previous_apps_after_backup_failure() {
+restart_previous_apps() {
     local services=()
+    [ "$BACKEND_WAS_RUNNING" = true ] && services+=(backend)
+    [ "$FRONTEND_WAS_RUNNING" = true ] && services+=(frontend)
+    [ "${#services[@]}" -eq 0 ] || compose start "${services[@]}" || true
+}
 
-    echo -e "${YELLOW}备份失败，尝试按原容器配置恢复应用...${NC}"
-    if [ "$BACKEND_WAS_RUNNING" = true ]; then
-        services+=(backend)
-    fi
-    if [ "$FRONTEND_WAS_RUNNING" = true ]; then
-        services+=(frontend)
-    fi
-    if [ "${#services[@]}" -gt 0 ]; then
-        compose start "${services[@]}" || true
+persist_image_version() {
+    if grep -q '^IMAGE_VERSION=' "$ENV_FILE"; then
+        sed -i "s/^IMAGE_VERSION=.*/IMAGE_VERSION=${VERSION}/" "$ENV_FILE"
+    else
+        printf '\nIMAGE_VERSION=%s\n' "$VERSION" >> "$ENV_FILE"
     fi
 }
 
-# 数据库与 uploads 在应用停止后形成同一维护窗口内的可恢复快照。
-echo -e "${BLUE}[6/9] 备份 PostgreSQL 与上传目录...${NC}"
+echo -e "${GREEN}=== MathStudyPlatform 更新 ===${NC}"
+echo -e "${YELLOW}目标版本: ${VERSION}${NC}"
+
+command -v docker > /dev/null 2>&1 || { echo -e "${RED}Docker 未安装${NC}" >&2; exit 1; }
+if docker compose version > /dev/null 2>&1; then
+    DOCKER_COMPOSE=(docker compose)
+elif command -v docker-compose > /dev/null 2>&1; then
+    DOCKER_COMPOSE=(docker-compose)
+else
+    echo -e "${RED}Docker Compose 未安装${NC}" >&2
+    exit 1
+fi
+[ -f "$COMPOSE_FILE" ] || { echo -e "${RED}找不到 ${COMPOSE_FILE}${NC}" >&2; exit 1; }
+[ -f "$ENV_FILE" ] || { echo -e "${RED}找不到 ${ENV_FILE}，请先执行首次部署${NC}" >&2; exit 1; }
+if [ -z "$(service_container_id backend)" ] || [ -z "$(service_container_id frontend)" ]; then
+    echo -e "${RED}未检测到完整的现有部署，请先使用 scripts/deploy.sh${NC}" >&2
+    exit 1
+fi
+if [ -n "${GHCR_TOKEN:-}" ]; then
+    [ -n "${GHCR_USERNAME:-}" ] || { echo -e "${RED}设置 GHCR_TOKEN 时必须同时设置 GHCR_USERNAME${NC}" >&2; exit 1; }
+    printf '%s' "$GHCR_TOKEN" | docker login ghcr.io --username "$GHCR_USERNAME" --password-stdin
+fi
+
+BACKEND_WAS_RUNNING=false
+FRONTEND_WAS_RUNNING=false
+service_is_running backend && BACKEND_WAS_RUNNING=true
+service_is_running frontend && FRONTEND_WAS_RUNNING=true
+BACKUP_DIR="${BACKUP_ROOT}/$(date +%Y%m%d_%H%M%S)"
+mkdir -p "$BACKUP_ROOT"
+mkdir "$BACKUP_DIR"
+cp -- "$ENV_FILE" "$BACKUP_DIR/.env"
+compose config > "$BACKUP_DIR/docker-compose.resolved.yml"
+{
+    printf 'backend=%s\n' "$(service_image_value backend '{{.Config.Image}}')"
+    printf 'backend_image_id=%s\n' "$(service_image_value backend '{{.Image}}')"
+    printf 'frontend=%s\n' "$(service_image_value frontend '{{.Config.Image}}')"
+    printf 'frontend_image_id=%s\n' "$(service_image_value frontend '{{.Image}}')"
+    printf 'backend_was_running=%s\n' "$BACKEND_WAS_RUNNING"
+    printf 'frontend_was_running=%s\n' "$FRONTEND_WAS_RUNNING"
+} > "$BACKUP_DIR/previous-images.txt"
+
+echo -e "${BLUE}[1/6] 检查 PostgreSQL...${NC}"
+compose up -d postgres redis
+wait_for_postgres "${POSTGRES_WAIT_ATTEMPTS:-30}"
+
+echo -e "${BLUE}[2/6] 拉取目标镜像...${NC}"
+docker pull "${BACKEND_IMAGE}:${VERSION}"
+docker pull "${FRONTEND_IMAGE}:${VERSION}"
+
+echo -e "${BLUE}[3/6] 停止应用写入并备份...${NC}"
+compose stop backend frontend
 if ! backup_postgres "$BACKUP_DIR/postgres.dump"; then
-    echo -e "${RED}✗ PostgreSQL 备份失败，未执行迁移${NC}"
-    restart_previous_apps_after_backup_failure
+    echo -e "${RED}PostgreSQL 备份失败，未执行迁移${NC}" >&2
+    restart_previous_apps
     exit 1
 fi
 if [ -d "$UPLOADS_DIR" ]; then
     if ! tar -czf "$BACKUP_DIR/uploads.tar.gz" -C "$(dirname -- "$UPLOADS_DIR")" "$(basename -- "$UPLOADS_DIR")"; then
-        echo -e "${RED}✗ 上传目录备份失败，未执行迁移${NC}"
-        restart_previous_apps_after_backup_failure
+        echo -e "${RED}上传目录备份失败，未执行迁移${NC}" >&2
+        restart_previous_apps
         exit 1
     fi
 else
     printf 'Upload directory did not exist at backup time: %s\n' "$UPLOADS_DIR" > "$BACKUP_DIR/uploads.absent.txt"
 fi
-echo -e "${GREEN}✓ 数据备份完成: ${BACKUP_DIR}${NC}"
 
-# 启动基础依赖
-echo -e "${BLUE}[7/9] 确认基础容器...${NC}"
-compose up -d postgres redis
-echo -e "${GREEN}✓ 基础容器已启动${NC}"
+export BACKEND_IMAGE FRONTEND_IMAGE IMAGE_VERSION="$VERSION"
 
-if ! wait_for_postgres "${POSTGRES_WAIT_ATTEMPTS:-30}"; then
-    echo -e "${RED}✗ PostgreSQL 未就绪，未执行迁移；备份位于 ${BACKUP_DIR}${NC}"
-    restart_previous_apps_after_backup_failure
-    exit 1
-fi
-
-# 运行数据库迁移
-echo -e "${BLUE}[8/9] 执行 Go 数据库迁移...${NC}"
-echo -e "${YELLOW}更新脚本不运行 Python Alembic，改由 Go migration runner 应用数据库迁移。${NC}"
+echo -e "${BLUE}[4/6] 执行数据库迁移...${NC}"
+compose exec -T postgres sh -ec 'psql -v ON_ERROR_STOP=1 -U "${POSTGRES_USER:-postgres}" -d "${POSTGRES_DB:-${POSTGRES_USER:-postgres}}" -c "CREATE EXTENSION IF NOT EXISTS vector"'
 if ! compose run --rm --no-deps backend msp-migrate; then
-    echo -e "${RED}✗ 数据库迁移失败，应用保持停止；请检查日志和 ${BACKUP_DIR}/postgres.dump${NC}"
+    echo -e "${RED}数据库迁移失败，应用保持停止；备份位于 ${BACKUP_DIR}${NC}" >&2
     exit 1
 fi
-echo -e "${GREEN}✓ Go 数据库迁移完成${NC}"
 
-# 启动应用容器
-echo -e "${BLUE}[9/9] 启动并检查应用...${NC}"
+echo -e "${BLUE}[5/6] 启动目标版本...${NC}"
 compose up -d backend frontend
-echo -e "${GREEN}✓ 应用容器已启动${NC}"
 
-# 健康检查
-if wait_for_service backend "${BACKEND_WAIT_ATTEMPTS:-45}" && wait_for_service frontend "${FRONTEND_WAIT_ATTEMPTS:-30}"; then
-    echo -e "${GREEN}✓ 服务启动成功${NC}"
-    compose ps
-else
-    echo -e "${RED}✗ 服务启动失败；数据库备份位于 ${BACKUP_DIR}/postgres.dump${NC}"
-    compose logs --tail=50 backend frontend
+echo -e "${BLUE}[6/6] 检查应用健康状态...${NC}"
+if ! wait_for_service backend "${BACKEND_WAIT_ATTEMPTS:-45}" || ! wait_for_service frontend "${FRONTEND_WAIT_ATTEMPTS:-30}"; then
     compose stop backend frontend || true
-    echo -e "${YELLOW}后端与前端已停止，避免不健康的新版本继续提供服务。${NC}"
-    echo -e "${YELLOW}不要只回滚镜像：先确认旧版本兼容当前 schema，必要时按部署文档恢复数据库和 uploads。${NC}"
+    echo -e "${RED}应用健康检查失败，应用已停止；备份位于 ${BACKUP_DIR}${NC}" >&2
     exit 1
 fi
 
-echo -e "${GREEN}=== 更新部署完成 ===${NC}"
+persist_image_version
+echo -e "${GREEN}=== 更新完成 ===${NC}"
 echo -e "${GREEN}备份目录: ${BACKUP_DIR}${NC}"
-echo -e "${BLUE}常用命令:${NC}"
-echo "  查看日志: ${DOCKER_COMPOSE[*]} -f ${COMPOSE_FILE} logs -f"
-echo "  查看旧镜像: cat ${BACKUP_DIR}/previous-images.txt"
-echo "  恢复数据: 参见 docs/technical/deployment.md 的“更新与回滚”"
+compose ps

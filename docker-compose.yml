@@ -10,7 +10,6 @@ services:
       - "127.0.0.1:${POSTGRES_PORT:-5432}:5432"
     volumes:
       - postgres_data:/var/lib/postgresql
-      - ./scripts/init-db.sh:/docker-entrypoint-initdb.d/init-db.sh
     command:
       - "postgres"
       - "-c"
@@ -79,7 +78,7 @@ services:
 
   # Go backend service.
   backend:
-    image: ${DOCKER_USERNAME:-your-dockerhub-username}/backend:${IMAGE_VERSION:-latest}
+    image: ${BACKEND_IMAGE:-ghcr.io/fraternity-z/mathstudyplatform-backend}:${IMAGE_VERSION:-latest}
     build:
       context: ./backend
     container_name: msp_backend
@@ -120,7 +119,7 @@ services:
 
   # Frontend service.
   frontend:
-    image: ${DOCKER_USERNAME:-your-dockerhub-username}/frontend:${IMAGE_VERSION:-latest}
+    image: ${FRONTEND_IMAGE:-ghcr.io/fraternity-z/mathstudyplatform-frontend}:${IMAGE_VERSION:-latest}
     container_name: msp_frontend
     restart: unless-stopped
     ports:
