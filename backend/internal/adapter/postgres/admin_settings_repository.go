@@ -11,6 +11,7 @@ import (
 	"github.com/jackc/pgx/v5"
 
 	adminsettingsapp "mathstudy/backend/internal/application/adminsettings"
+	adminstorageapp "mathstudy/backend/internal/application/adminstorage"
 	"mathstudy/backend/internal/domain/user"
 	"mathstudy/backend/internal/platform/redact"
 )
@@ -20,7 +21,11 @@ var sensitiveExportFields = map[string]bool{
 }
 
 var sensitiveSystemSettingKeys = map[string]bool{
-	"smtp_password": true,
+	"smtp_password":            true,
+	"storage_qiniu_access_key": true,
+	"storage_qiniu_secret_key": true,
+	"storage_s3_access_key":    true,
+	"storage_s3_secret_key":    true,
 }
 
 // AdminSettingsRepository persists system settings and database management operations.
@@ -83,19 +88,46 @@ func (r AdminSettingsRepository) UpsertSettings(ctx context.Context, updates []a
 	return nil
 }
 
+// SaveStorageSettings atomically replaces the administrator-managed storage snapshot.
+func (r AdminSettingsRepository) SaveStorageSettings(ctx context.Context, updates []adminstorageapp.SettingUpdate) error {
+	return withRepositoryTx(ctx, "storage settings", r.Repository, func(base Repository) AdminSettingsRepository {
+		return AdminSettingsRepository{Repository: base}
+	}, func(tx AdminSettingsRepository) error {
+		for _, update := range updates {
+			if _, err := tx.DB().Exec(ctx, `
+				INSERT INTO public.system_settings (key, value, description, updated_at)
+				VALUES ($1, $2, $3, $4)
+				ON CONFLICT (key) DO UPDATE
+				SET value = EXCLUDED.value,
+					description = EXCLUDED.description,
+					updated_at = EXCLUDED.updated_at`,
+				update.Key,
+				update.Value,
+				update.Description,
+				update.UpdatedAt,
+			); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+}
+
 // ExportTable visits every row in one whitelisted table, excluding sensitive fields.
 func (r AdminSettingsRepository) ExportTable(ctx context.Context, table string, visit func(map[string]any) error) (int, error) {
 	if !safeTableName(table) {
 		return 0, fmt.Errorf("unsafe table name %q", table)
 	}
 	sql := "SELECT * FROM " + pgx.Identifier{"public", table}.Sanitize()
+	args := []any{}
 	switch table {
 	case "users":
 		sql += " WHERE role <> 'ADMIN'::public.userrole"
 	case "system_settings":
-		sql += " WHERE key <> 'smtp_password'"
+		sql += " WHERE key <> ALL($1)"
+		args = append(args, sensitiveSystemSettingKeyList())
 	}
-	rows, err := r.DB().Query(ctx, sql)
+	rows, err := r.DB().Query(ctx, sql, args...)
 	if err != nil {
 		return 0, err
 	}
@@ -122,6 +154,15 @@ func (r AdminSettingsRepository) ExportTable(ctx context.Context, table string, 
 		count++
 	}
 	return count, rows.Err()
+}
+
+func sensitiveSystemSettingKeyList() []string {
+	keys := make([]string, 0, len(sensitiveSystemSettingKeys))
+	for key := range sensitiveSystemSettingKeys {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	return keys
 }
 
 // ImportRows imports rows into one whitelisted table with ON CONFLICT DO NOTHING.

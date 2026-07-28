@@ -19,7 +19,16 @@ PostgreSQL、Redis 和 Go API 默认只绑定宿主机回环地址；前端默�
 Copy-Item .env.example .env
 ```
 
-生产环境至少要替换数据库密码、`JWT_SECRET_KEY`、`FERNET_SECRET_KEY`、初始管理员密码、CORS、管理网段和对象存储凭据。设置 `ENVIRONMENT=production`，不要把开发密钥或真实 `.env` 提交到仓库。启用公众号时还必须按消息模式设置 `WECHAT_OFFICIAL_ACCOUNT_*` 配置；`APP_SECRET`、`TOKEN` 和非明文模式使用的 `AES_KEY` 应由部署密钥系统或权限收紧的 `.env` 提供，不能写入镜像、Compose 文件或版本库。凭据出现在截图、日志或聊天记录中即视为泄露，应先在微信后台重置再部署。
+生产环境至少要替换数据库密码、`JWT_SECRET_KEY`、`FERNET_SECRET_KEY`、初始管理员密码、CORS 和管理网段。对象存储后端与云存储凭据不从 `.env` 读取，首次部署后由管理员在“系统设置 > 存储设置”中测试并保存；数据库中的 Access Key 和 Secret Key 使用 `FERNET_SECRET_KEY` 加密，因此该密钥必须稳定保存，不能在重启时轮换或留空。设置 `ENVIRONMENT=production`，不要把开发密钥或真实 `.env` 提交到仓库。启用公众号时还必须按消息模式设置 `WECHAT_OFFICIAL_ACCOUNT_*` 配置；`APP_SECRET`、`TOKEN` 和非明文模式使用的 `AES_KEY` 应由部署密钥系统或权限收紧的 `.env` 提供，不能写入镜像、Compose 文件或版本库。任何凭据出现在截图、日志或聊天记录中都视为泄露，应先在对应供应商控制台轮换再部署。
+
+对象存储运行配置遵循以下操作契约：
+
+- `system_settings` 是对象存储后端与云存储凭据的唯一运行时来源；数据库尚无配置时 API 可以启动，但上传和图片回读保持不可用，直到管理员保存配置。
+- `GET/PUT /api/v1/admin/settings/storage` 仅允许管理员访问；未保存时响应来源为 `unconfigured`，读取响应只返回凭据是否已配置，不返回明文或密文。
+- `UPLOADS_DIR` 只定义本地文件系统的服务器根目录；它不选择存储后端，也不构成云存储配置回退。
+- `POST /api/v1/admin/settings/storage/test` 使用当前草稿执行真实写入探测但不保存；保存操作也会先探测，失败时保留当前运行时后端。
+- 探测固定覆盖 `documents/.mathstudy-storage-connectivity-check.txt`，内容不含凭据，不会随测试次数累积对象。
+- 保存成功后新上传和 OCR 图片回读立即使用新后端；不会自动回退到旧后端，切换前应自行迁移仍需访问的历史对象。
 
 公众号配置项如下：
 
@@ -157,7 +166,7 @@ docker compose logs --tail 200 backend
 5. 启用公众号时，在微信后台将回调 URL 配置为 `https://<public-host>/api/v1/integrations/wechat/official-account/callback`，确认 GET 验证、关注/取关事件和文本绑定回调均成功。
 6. 分别使用测试学生和测试教师生成绑定口令并完成绑定，确认两端个人中心均显示已绑定/已关注；随后由管理员调用 `POST /api/v1/admin/wechat/test-message` 向两类账号发送服务端固定测试内容。
 7. 为私信、通知和答疑配置字段均为 `keyword1`、`keyword2`、`keyword3` 的模板及对应 ID，开启 `WECHAT_MESSAGE_REMINDERS_ENABLED=true` 后依次验证学生发教师、教师发学生的私信，教师班级通知，以及学生发起、师生回复的答疑。私信和答疑只展示空白规范化后的前 40 个 Unicode 字符并在截断时追加 `…`；通知只展示主题。再验证已读、通知已确认、解绑、取关和账号停用时任务转为 `skipped`。
-8. 文件上传、对象存储、外部 AI provider 和西电账户绑定按部署配置进行连通性验证；`ocr` Agent 必须选择支持图片输入的模型。
+8. 在管理员“存储设置”中分别执行目标后端的连接测试和保存，确认无需重启即可完成一次上传；外部 AI provider 和西电账户绑定也按部署配置进行连通性验证，`ocr` Agent 必须选择支持图片输入的模型。
 9. 分别提交真实 PNG、JPEG 图片和空白/低对比图片，确认成功路径只产生一次 attempt，并各执行一次 session、DKT 和 profile 更新；OCR/数学不确定或失败路径的这些写入均为零。图片 OCR 当前只接受 PNG、JPEG 和 GIF。
 10. 验证通用数学判定的 `correct`、`incorrect`、`indeterminate` 响应，以及解析生成不可用、超时、取消、无效输出和验证失败的 `failure.stage`、`failure.code`、`retryable` 契约。
 

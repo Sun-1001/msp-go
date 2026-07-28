@@ -125,7 +125,7 @@ go run ./cmd/migrate  # 重复执行应无待应用版本
 - JWT、Fernet、管理员初始化凭据
 - CORS 和管理端允许网段
 - Eino provider 的兼容配置
-- Local、Qiniu 或 S3 存储配置
+- 本地存储根目录 `UPLOADS_DIR`；对象存储后端和云存储凭据由管理员保存到数据库，不写入 `.env`
 - 西电账户绑定端点和超时
 - 微信公众号凭据、回调消息模式和外部请求超时
 

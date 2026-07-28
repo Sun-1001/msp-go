@@ -49,11 +49,11 @@ func NewS3Storage(cfg S3Config, client *http.Client) (*S3Storage, error) {
 	}
 	missing := make([]string, 0)
 	for key, value := range map[string]string{
-		"S3_ENDPOINT_URL": cfg.EndpointURL,
-		"S3_ACCESS_KEY":   cfg.AccessKey,
-		"S3_SECRET_KEY":   cfg.SecretKey,
-		"S3_BUCKET_NAME":  cfg.BucketName,
-		"S3_REGION":       cfg.Region,
+		"endpoint_url": cfg.EndpointURL,
+		"access_key":   cfg.AccessKey,
+		"secret_key":   cfg.SecretKey,
+		"bucket_name":  cfg.BucketName,
+		"region":       cfg.Region,
 	} {
 		if strings.TrimSpace(value) == "" {
 			missing = append(missing, key)
@@ -63,13 +63,13 @@ func NewS3Storage(cfg S3Config, client *http.Client) (*S3Storage, error) {
 		sort.Strings(missing)
 		return nil, fmt.Errorf("S3 storage config missing: %s", strings.Join(missing, ", "))
 	}
-	endpoint, err := normalizeStorageBaseURL("S3_ENDPOINT_URL", cfg.EndpointURL)
+	endpoint, err := normalizeStorageBaseURL("s3 endpoint_url", cfg.EndpointURL)
 	if err != nil {
 		return nil, err
 	}
 	cfg.EndpointURL = endpoint.String()
 	if strings.TrimSpace(cfg.PublicURLBase) != "" {
-		publicBase, err := normalizeStorageBaseURL("S3_PUBLIC_URL_BASE", cfg.PublicURLBase)
+		publicBase, err := normalizeStorageBaseURL("s3 public_url_base", cfg.PublicURLBase)
 		if err != nil {
 			return nil, err
 		}

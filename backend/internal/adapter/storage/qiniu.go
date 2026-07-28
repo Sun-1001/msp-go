@@ -52,11 +52,11 @@ func NewQiniuStorage(cfg QiniuConfig, client *http.Client) (*QiniuStorage, error
 	}
 	missing := make([]string, 0)
 	for key, value := range map[string]string{
-		"QINIU_ACCESS_KEY":  cfg.AccessKey,
-		"QINIU_SECRET_KEY":  cfg.SecretKey,
-		"QINIU_BUCKET_NAME": cfg.BucketName,
-		"QINIU_DOMAIN":      cfg.Domain,
-		"QINIU_UPLOAD_URL":  cfg.UploadURL,
+		"access_key":  cfg.AccessKey,
+		"secret_key":  cfg.SecretKey,
+		"bucket_name": cfg.BucketName,
+		"domain":      cfg.Domain,
+		"upload_url":  cfg.UploadURL,
 	} {
 		if strings.TrimSpace(value) == "" {
 			missing = append(missing, key)
@@ -66,14 +66,14 @@ func NewQiniuStorage(cfg QiniuConfig, client *http.Client) (*QiniuStorage, error
 		sort.Strings(missing)
 		return nil, fmt.Errorf("qiniu storage config missing: %s", strings.Join(missing, ", "))
 	}
-	domain, err := normalizeStorageBaseURL("QINIU_DOMAIN", cfg.Domain)
+	domain, err := normalizeStorageBaseURL("qiniu domain", cfg.Domain)
 	if err != nil {
 		return nil, err
 	}
 	cfg.Domain = domain.String()
 	uploadURL, err := outbound.NormalizePublicHTTPSBaseURL(cfg.UploadURL)
 	if err != nil {
-		return nil, fmt.Errorf("QINIU_UPLOAD_URL %w", err)
+		return nil, fmt.Errorf("qiniu upload_url %w", err)
 	}
 	cfg.UploadURL = uploadURL
 	return &QiniuStorage{

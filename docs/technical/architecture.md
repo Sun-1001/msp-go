@@ -89,7 +89,7 @@ backend/
 | Session/Exercise | 学习会话、题目生成、判题、诊断、错题和 DKT 更新 |
 | Progress/Portrait | 掌握度、学习路径、统计、知识图谱和学生画像 |
 | Classroom/Teacher | 班级、成员、题库、教学资源和教师分析 |
-| Resource/Upload | 资源元数据、收藏、上传和对象存储 |
+| Resource/Upload | 资源元数据、收藏、上传、对象存储和管理员运行时配置 |
 | AI Config | provider、model、凭据和 Agent 运行配置 |
 | Xidian/Security | 西电账户绑定、安全日志、告警、健康检查和指标 |
 
@@ -106,6 +106,7 @@ backend/
 
 - HTTP 使用标准库 `net/http` ServeMux；数据访问使用 pgx，Redis 使用 go-redis。
 - AI/Agent 通过 Eino 和 OpenAI-compatible provider 接入，运行配置持久化到数据库。
+- 对象存储仅使用管理员保存的加密数据库配置；未配置时运行时保持停用，保存前完成真实写入探测，成功后通过原子运行时快照即时切换，进行中的请求继续使用原快照，读取不会跨后端回退。
 - 数据库只追加经过评审的 Go forward migration，不自动执行 down migration。
 - Go API 是唯一后端进程入口，不保留 Python 运行时兼容层。
 - JWT HMAC 契约保持前后端兼容；邮件发送使用受配置和安全边界约束的 SMTP adapter。
@@ -116,7 +117,7 @@ backend/
 
 关键契约：
 
-- 图片作答只从当前 Local/Qiniu/S3 存储命名空间回读 PNG、JPEG 或 GIF，并在完整解码、OCR 置信度和数学判定均可靠后才开启事务；失败不产生 attempt、diagnosis、learning session、DKT 或 profile 更新。
+- 图片作答从当前写入后端及仍已配置的 Local/Qiniu/S3 命名空间回读 PNG、JPEG 或 GIF，并在完整解码、OCR 置信度和数学判定均可靠后才开启事务；失败不产生 attempt、diagnosis、learning session、DKT 或 profile 更新。
 - 判题结果只有 `correct`、`incorrect`、`indeterminate` 三态；本地确定性比较不能覆盖的代数、三角、极限、导数、积分、方程/解集、矩阵和证明题可交给 Eino Math Solver，服务不可用、超时、无效输出或低置信度统一返回带阶段、原因和重试语义的降级结果。
 - 无缓存解析时，Math Solver 不接收标准答案并独立求解；候选最终答案以及推导步骤需经过单独的 `solution_verification` 调用，未验证步骤不会返回给前端。
 - 自主出题模型不可用或结构化输出非法时返回 `503 AI_GENERATION_UNAVAILABLE`，不保存题目。

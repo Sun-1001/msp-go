@@ -96,24 +96,6 @@ type Config struct {
 	LogCleanupBatchSize int
 	LogMaxCount         int
 
-	StorageBackend string
-
-	QiniuAccessKey     string
-	QiniuSecretKey     string
-	QiniuBucketName    string
-	QiniuDomain        string
-	QiniuPrivateBucket bool
-	QiniuURLExpire     time.Duration
-	QiniuUploadURL     string
-	S3EndpointURL      string
-	S3AccessKey        string
-	S3SecretKey        string
-	S3BucketName       string
-	S3Region           string
-	S3PublicURLBase    string
-	S3PrivateBucket    bool
-	S3URLExpire        time.Duration
-
 	FernetSecretKey string
 
 	XidianIDsBase            string
@@ -217,22 +199,6 @@ func Load() (Config, error) {
 		LogDeleteAfterDays:        envInt("LOG_DELETE_AFTER_DAYS", 90),
 		LogCleanupBatchSize:       envInt("LOG_CLEANUP_BATCH_SIZE", 500),
 		LogMaxCount:               envInt("LOG_MAX_COUNT", 100000),
-		StorageBackend:            strings.ToLower(envString("STORAGE_BACKEND", "local")),
-		QiniuAccessKey:            envString("QINIU_ACCESS_KEY", ""),
-		QiniuSecretKey:            envString("QINIU_SECRET_KEY", ""),
-		QiniuBucketName:           envString("QINIU_BUCKET_NAME", ""),
-		QiniuDomain:               envString("QINIU_DOMAIN", ""),
-		QiniuPrivateBucket:        envBool("QINIU_PRIVATE_BUCKET", false),
-		QiniuURLExpire:            time.Duration(envInt("QINIU_URL_EXPIRE_SECONDS", 3600)) * time.Second,
-		QiniuUploadURL:            envString("QINIU_UPLOAD_URL", "https://upload.qiniup.com"),
-		S3EndpointURL:             envString("S3_ENDPOINT_URL", ""),
-		S3AccessKey:               envString("S3_ACCESS_KEY", ""),
-		S3SecretKey:               envString("S3_SECRET_KEY", ""),
-		S3BucketName:              envString("S3_BUCKET_NAME", ""),
-		S3Region:                  envString("S3_REGION", "us-east-1"),
-		S3PublicURLBase:           envString("S3_PUBLIC_URL_BASE", ""),
-		S3PrivateBucket:           envBool("S3_PRIVATE_BUCKET", false),
-		S3URLExpire:               time.Duration(envInt("S3_URL_EXPIRE_SECONDS", 3600)) * time.Second,
 		FernetSecretKey:           envString("FERNET_SECRET_KEY", ""),
 		XidianIDsBase:             envString("XIDIAN_IDS_BASE", "https://ids.xidian.edu.cn"),
 		XidianEhallBase:           envString("XIDIAN_EHALL_BASE", "https://ehall.xidian.edu.cn"),
@@ -288,6 +254,9 @@ func Load() (Config, error) {
 	}
 	if cfg.RedisFallbackCacheMaxSize <= 0 {
 		return Config{}, errors.New("REDIS_FALLBACK_CACHE_MAX_SIZE must be greater than 0")
+	}
+	if strings.TrimSpace(cfg.UploadsDir) == "" {
+		return Config{}, errors.New("UPLOADS_DIR must not be empty")
 	}
 	if !allowedJWTAlgorithms()[cfg.JWTAlgorithm] {
 		return Config{}, fmt.Errorf("JWT_ALGORITHM must be one of HS256, HS384, HS512, got %s", cfg.JWTAlgorithm)
@@ -348,9 +317,6 @@ func Load() (Config, error) {
 	}
 	if cfg.LogMaxCount <= 0 {
 		return Config{}, errors.New("LOG_MAX_COUNT must be greater than 0")
-	}
-	if err := validateStorageConfig(cfg); err != nil {
-		return Config{}, err
 	}
 	if err := validateXidianConfig(cfg); err != nil {
 		return Config{}, err
@@ -656,44 +622,6 @@ func strongConfigPassword(password string) bool {
 		}
 	}
 	return hasUpper && hasLower && hasDigit && hasSpecial
-}
-
-func validateStorageConfig(cfg Config) error {
-	switch cfg.StorageBackend {
-	case "local":
-		if strings.TrimSpace(cfg.UploadsDir) == "" {
-			return errors.New("UPLOADS_DIR must not be empty when STORAGE_BACKEND=local")
-		}
-	case "qiniu":
-		if err := requireConfigValues("Qiniu", map[string]string{
-			"QINIU_ACCESS_KEY":  cfg.QiniuAccessKey,
-			"QINIU_SECRET_KEY":  cfg.QiniuSecretKey,
-			"QINIU_BUCKET_NAME": cfg.QiniuBucketName,
-			"QINIU_DOMAIN":      cfg.QiniuDomain,
-			"QINIU_UPLOAD_URL":  cfg.QiniuUploadURL,
-		}); err != nil {
-			return err
-		}
-		if cfg.QiniuURLExpire <= 0 {
-			return errors.New("QINIU_URL_EXPIRE_SECONDS must be greater than 0")
-		}
-	case "s3":
-		if err := requireConfigValues("S3", map[string]string{
-			"S3_ENDPOINT_URL": cfg.S3EndpointURL,
-			"S3_ACCESS_KEY":   cfg.S3AccessKey,
-			"S3_SECRET_KEY":   cfg.S3SecretKey,
-			"S3_BUCKET_NAME":  cfg.S3BucketName,
-			"S3_REGION":       cfg.S3Region,
-		}); err != nil {
-			return err
-		}
-		if cfg.S3URLExpire <= 0 {
-			return errors.New("S3_URL_EXPIRE_SECONDS must be greater than 0")
-		}
-	default:
-		return fmt.Errorf("STORAGE_BACKEND must be one of local, qiniu, s3, got %s", cfg.StorageBackend)
-	}
-	return nil
 }
 
 func requireConfigValues(name string, values map[string]string) error {

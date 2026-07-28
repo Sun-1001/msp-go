@@ -31,6 +31,69 @@ export interface GeneralSettingsUpdate {
   system_description: string;
 }
 
+export type StorageBackend = 'local' | 'qiniu' | 's3';
+
+export interface QiniuStorageSettings {
+  bucket_name: string;
+  domain: string;
+  private_bucket: boolean;
+  url_expire_seconds: number;
+  upload_url: string;
+  access_key_configured: boolean;
+  secret_key_configured: boolean;
+  configured: boolean;
+}
+
+export interface S3StorageSettings {
+  endpoint_url: string;
+  bucket_name: string;
+  region: string;
+  public_url_base: string;
+  private_bucket: boolean;
+  url_expire_seconds: number;
+  access_key_configured: boolean;
+  secret_key_configured: boolean;
+  configured: boolean;
+}
+
+export interface StorageSettings {
+  backend: StorageBackend;
+  source: 'unconfigured' | 'database';
+  local: { configured: boolean };
+  qiniu: QiniuStorageSettings;
+  s3: S3StorageSettings;
+}
+
+export interface StorageSettingsUpdate {
+  backend: StorageBackend;
+  qiniu: {
+    access_key?: string;
+    secret_key?: string;
+    bucket_name: string;
+    domain: string;
+    private_bucket: boolean;
+    url_expire_seconds: number;
+    upload_url: string;
+  };
+  s3: {
+    endpoint_url: string;
+    access_key?: string;
+    secret_key?: string;
+    bucket_name: string;
+    region: string;
+    public_url_base: string;
+    private_bucket: boolean;
+    url_expire_seconds: number;
+  };
+}
+
+export interface StorageConnectionTestResponse {
+  success: boolean;
+  message: string;
+  backend: StorageBackend;
+  latency_ms: number;
+}
+
 // =============================================================================
 // 数据库管理类型
 // =============================================================================
@@ -165,6 +228,30 @@ export const systemSettingService = {
     const response = await apiClient.put<GeneralSettings>(
       '/admin/settings/general',
       settings
+    );
+    return response.data;
+  },
+
+  /** 获取当前生效的对象存储配置。 */
+  async getStorageSettings(): Promise<StorageSettings> {
+    const response = await apiClient.get<StorageSettings>('/admin/settings/storage');
+    return response.data;
+  },
+
+  /** 保存配置；后端探测成功后立即切换运行时存储。 */
+  async updateStorageSettings(settings: StorageSettingsUpdate): Promise<StorageSettings> {
+    const response = await apiClient.put<StorageSettings>('/admin/settings/storage', settings, {
+      timeout: 25_000,
+    });
+    return response.data;
+  },
+
+  /** 使用当前草稿执行真实写入探测，不保存配置。 */
+  async testStorageConnection(settings: StorageSettingsUpdate): Promise<StorageConnectionTestResponse> {
+    const response = await apiClient.post<StorageConnectionTestResponse>(
+      '/admin/settings/storage/test',
+      settings,
+      { timeout: 25_000 }
     );
     return response.data;
   },

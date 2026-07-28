@@ -19,6 +19,7 @@ import (
 	admininboxhttp "mathstudy/backend/internal/adapter/http/admininbox"
 	adminsettingshttp "mathstudy/backend/internal/adapter/http/adminsettings"
 	adminstatshttp "mathstudy/backend/internal/adapter/http/adminstats"
+	adminstoragehttp "mathstudy/backend/internal/adapter/http/adminstorage"
 	adminuserhttp "mathstudy/backend/internal/adapter/http/adminuser"
 	announcementhttp "mathstudy/backend/internal/adapter/http/announcement"
 	authhttp "mathstudy/backend/internal/adapter/http/auth"
@@ -50,6 +51,7 @@ import (
 	admininboxapp "mathstudy/backend/internal/application/admininbox"
 	adminsettingsapp "mathstudy/backend/internal/application/adminsettings"
 	adminstatsapp "mathstudy/backend/internal/application/adminstats"
+	adminstorageapp "mathstudy/backend/internal/application/adminstorage"
 	adminuserapp "mathstudy/backend/internal/application/adminuser"
 	airiskapp "mathstudy/backend/internal/application/airisk"
 	announcementapp "mathstudy/backend/internal/application/announcement"
@@ -307,11 +309,7 @@ func main() {
 		logger.Error("configure portrait handler", "error", err)
 		os.Exit(1)
 	}
-	uploadStorage, err := storageadapter.NewUploadStorage(cfg, logger)
-	if err != nil {
-		logger.Error("configure upload storage", "error", err)
-		os.Exit(1)
-	}
+	uploadStorage := storageadapter.NewRuntimeManager(cfg.UploadsDir)
 	exerciseRepo, err := adapterpostgres.NewExerciseRepository(dbPool)
 	if err != nil {
 		logger.Error("configure exercise repository", "error", err)
@@ -713,6 +711,25 @@ func main() {
 		logger.Error("configure admin settings handler", "error", err)
 		os.Exit(1)
 	}
+	adminStorageService, err := adminstorageapp.NewService(
+		adminSettingsRepo,
+		appCipher,
+		uploadStorage,
+		uploadStorage.LocalConfigured(),
+	)
+	if err != nil {
+		logger.Error("configure admin storage service", "error", err)
+		os.Exit(1)
+	}
+	if err := adminStorageService.ActivateStored(ctx); err != nil {
+		logger.Error("activate storage settings", "error", err)
+		os.Exit(1)
+	}
+	adminStorageHandler, err := adminstoragehttp.NewHandler(logger, adminStorageService, authService)
+	if err != nil {
+		logger.Error("configure admin storage handler", "error", err)
+		os.Exit(1)
+	}
 	securityLogRepo, err := adapterpostgres.NewSecurityLogRepository(dbPool)
 	if err != nil {
 		logger.Error("configure security log repository", "error", err)
@@ -898,6 +915,7 @@ func main() {
 			adminAIConfigHandler.Register(mux, cfg.APIV1Prefix+"/admin/ai-config")
 			adminStatsHandler.Register(mux, cfg.APIV1Prefix+"/admin/stats")
 			adminSettingsHandler.Register(mux, cfg.APIV1Prefix+"/admin/settings")
+			adminStorageHandler.Register(mux, cfg.APIV1Prefix+"/admin/settings")
 			adminEmailHandler.Register(mux, cfg.APIV1Prefix+"/admin/settings")
 			securityLogHandler.Register(mux, cfg.APIV1Prefix+"/admin/security-logs")
 			knowledgeHandler.Register(mux, cfg.APIV1Prefix+"/admin/knowledge")
