@@ -27,6 +27,7 @@ type PreviewItem struct {
 
 // Summary aggregates pending counts and the five most recent message-center items.
 type Summary struct {
+	// ConversationCount is the total number of unread private messages.
 	ConversationCount int           `json:"conversation_count"`
 	NoticeCount       int           `json:"notice_count"`
 	ThreadCount       int           `json:"thread_count"`

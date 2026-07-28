@@ -36,10 +36,10 @@ func (r MessageCenterRepository) studentSummary(ctx context.Context, studentID s
 	var summary messagecenterapp.Summary
 	if err := r.DB().QueryRow(ctx, `
 		SELECT
-			(SELECT COUNT(*) FROM public.conversations c
+			(SELECT COUNT(*) FROM public.conversation_messages cm
+			 JOIN public.conversations c ON c.id = cm.conversation_id
 			 WHERE c.student_id = $1 AND c.student_archived = false
-			   AND EXISTS (SELECT 1 FROM public.conversation_messages cm
-			               WHERE cm.conversation_id = c.id AND cm.sender_role = 'teacher' AND cm.read_at IS NULL)),
+			   AND cm.sender_role = 'teacher' AND cm.read_at IS NULL),
 			(SELECT COUNT(*) FROM public.notice_recipients nr
 			 WHERE nr.student_id = $1
 			   AND NOT EXISTS (SELECT 1 FROM public.notice_confirmations nc
@@ -57,7 +57,7 @@ func (r MessageCenterRepository) studentSummary(ctx context.Context, studentID s
 		FROM (
 			SELECT c.id, 'conversation'::text AS type,
 				LEFT(COALESCE(u.display_name, u.username), 120) AS title,
-					LEFT(COALESCE((SELECT cm.text FROM public.conversation_messages cm WHERE cm.conversation_id = c.id ORDER BY cm.created_at DESC, cm.id DESC LIMIT 1), '新的私信'), 240) AS summary,
+					LEFT(COALESCE((SELECT CASE WHEN cm.text <> '' THEN cm.text WHEN jsonb_array_length(cm.attachments) > 0 THEN '[附件]' ELSE '' END FROM public.conversation_messages cm WHERE cm.conversation_id = c.id ORDER BY cm.created_at DESC, cm.id DESC LIMIT 1), '新的私信'), 240) AS summary,
 				c.last_message_at AS occurred_at,
 				EXISTS (SELECT 1 FROM public.conversation_messages cm WHERE cm.conversation_id = c.id AND cm.sender_role = 'teacher' AND cm.read_at IS NULL) AS pending
 			FROM public.conversations c
@@ -94,10 +94,10 @@ func (r MessageCenterRepository) teacherSummary(ctx context.Context, teacherID s
 	var summary messagecenterapp.Summary
 	if err := r.DB().QueryRow(ctx, `
 		SELECT
-			(SELECT COUNT(*) FROM public.conversations c
+			(SELECT COUNT(*) FROM public.conversation_messages cm
+			 JOIN public.conversations c ON c.id = cm.conversation_id
 			 WHERE c.teacher_id = $1 AND c.teacher_archived = false
-			   AND EXISTS (SELECT 1 FROM public.conversation_messages cm
-			               WHERE cm.conversation_id = c.id AND cm.sender_role = 'student' AND cm.read_at IS NULL)),
+			   AND cm.sender_role = 'student' AND cm.read_at IS NULL),
 			(SELECT COUNT(*) FROM public.notices n
 			 WHERE n.teacher_id = $1
 			   AND EXISTS (SELECT 1 FROM public.notice_recipients nr
@@ -114,7 +114,7 @@ func (r MessageCenterRepository) teacherSummary(ctx context.Context, teacherID s
 		FROM (
 			SELECT c.id, 'conversation'::text AS type,
 				LEFT(COALESCE(u.display_name, u.username), 120) AS title,
-					LEFT(COALESCE((SELECT cm.text FROM public.conversation_messages cm WHERE cm.conversation_id = c.id ORDER BY cm.created_at DESC, cm.id DESC LIMIT 1), '新的私信'), 240) AS summary,
+					LEFT(COALESCE((SELECT CASE WHEN cm.text <> '' THEN cm.text WHEN jsonb_array_length(cm.attachments) > 0 THEN '[附件]' ELSE '' END FROM public.conversation_messages cm WHERE cm.conversation_id = c.id ORDER BY cm.created_at DESC, cm.id DESC LIMIT 1), '新的私信'), 240) AS summary,
 				c.last_message_at AS occurred_at,
 				EXISTS (SELECT 1 FROM public.conversation_messages cm WHERE cm.conversation_id = c.id AND cm.sender_role = 'student' AND cm.read_at IS NULL) AS pending
 			FROM public.conversations c

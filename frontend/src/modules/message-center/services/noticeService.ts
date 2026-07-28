@@ -1,5 +1,6 @@
 import { apiClient } from '@/libs/http/apiClient';
 import { buildQueryString } from '@/modules/message-center/services/queryParams';
+import type { MessageAttachment } from '@/modules/message-center/attachmentTypes';
 
 export interface StudentNoticeListItem {
   id: string;
@@ -11,7 +12,7 @@ export interface StudentNoticeListItem {
 
 export interface StudentNoticeItem extends StudentNoticeListItem {
   body: string;
-  attachments: string[];
+  attachments: MessageAttachment[];
 }
 
 export interface TeacherNoticeListItem {
@@ -26,6 +27,7 @@ export interface TeacherNoticeListItem {
 export interface TeacherNoticeItem extends TeacherNoticeListItem {
   body: string;
   unconfirmed_students: string[];
+  attachments: MessageAttachment[];
 }
 
 export interface ListResponse<T extends StudentNoticeListItem | TeacherNoticeListItem = StudentNoticeListItem | TeacherNoticeListItem> {
@@ -59,6 +61,7 @@ export const noticeService = {
     class_id: string;
     title: string;
     body: string;
+    attachments?: MessageAttachment[];
   }): Promise<TeacherNoticeItem> {
     const { data } = await apiClient.post<TeacherNoticeItem>(BASE, body);
     return data;
@@ -68,8 +71,8 @@ export const noticeService = {
     await apiClient.post(`${BASE}/${id}/confirm`);
   },
 
-  async remind(id: string): Promise<{ unconfirmed_students: string[]; count: number }> {
-    const { data } = await apiClient.post<{ unconfirmed_students: string[]; count: number }>(`${BASE}/${id}/remind`);
+  async remind(id: string): Promise<{ unconfirmed_students: string[]; count: number; queued_count: number }> {
+    const { data } = await apiClient.post<{ unconfirmed_students: string[]; count: number; queued_count: number }>(`${BASE}/${id}/remind`);
     return data;
   },
 };

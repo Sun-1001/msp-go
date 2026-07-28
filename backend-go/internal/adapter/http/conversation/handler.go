@@ -9,6 +9,7 @@ import (
 
 	authapp "mathstudy/backend-go/internal/application/auth"
 	conversationapp "mathstudy/backend-go/internal/application/conversation"
+	"mathstudy/backend-go/internal/application/messageattachment"
 	"mathstudy/backend-go/internal/domain/user"
 	"mathstudy/backend-go/internal/platform/httpauth"
 	"mathstudy/backend-go/internal/platform/httpjson"
@@ -22,8 +23,8 @@ type Service interface {
 	ListConversations(ctx context.Context, userID string, role user.Role, search string, status string, className string, page int, pageSize int) (conversationapp.ListResponse, error)
 	GetConversation(ctx context.Context, userID string, conversationID string, page int, pageSize int) (conversationapp.ConversationDetail, error)
 	AcknowledgeConversationRead(ctx context.Context, userID string, conversationID string, throughMessageID string) error
-	CreateConversation(ctx context.Context, creatorID string, creatorRole user.Role, targetID string, subject string, initialMessage string) (conversationapp.ConversationDetail, error)
-	SendMessage(ctx context.Context, conversationID string, senderID string, senderRole string, text string) (conversationapp.Message, error)
+	CreateConversation(ctx context.Context, creatorID string, creatorRole user.Role, targetID string, subject string, initialMessage string, attachments []messageattachment.Attachment) (conversationapp.ConversationDetail, error)
+	SendMessage(ctx context.Context, conversationID string, senderID string, senderRole string, text string, attachments []messageattachment.Attachment) (conversationapp.Message, error)
 	ArchiveConversation(ctx context.Context, conversationID string, userID string, role user.Role) error
 	ListTeacherContacts(ctx context.Context, studentID string) ([]conversationapp.Contact, error)
 	ListStudentContacts(ctx context.Context, teacherID string) ([]conversationapp.Contact, error)
@@ -195,9 +196,10 @@ func (h *Handler) acknowledgeRead(w http.ResponseWriter, r *http.Request) {
 }
 
 type createConversationRequest struct {
-	TargetID       string `json:"target_id"`
-	Subject        string `json:"subject"`
-	InitialMessage string `json:"initial_message"`
+	TargetID       string                         `json:"target_id"`
+	Subject        string                         `json:"subject"`
+	InitialMessage string                         `json:"initial_message"`
+	Attachments    []messageattachment.Attachment `json:"attachments"`
 }
 
 func (h *Handler) createConversation(w http.ResponseWriter, r *http.Request) {
@@ -216,7 +218,7 @@ func (h *Handler) createConversation(w http.ResponseWriter, r *http.Request) {
 		writeConvError(w, http.StatusUnprocessableEntity, "VALIDATION_ERROR", "target_id 不能为空")
 		return
 	}
-	response, err := h.service.CreateConversation(r.Context(), principal.UserID, principal.Role, req.TargetID, req.Subject, req.InitialMessage)
+	response, err := h.service.CreateConversation(r.Context(), principal.UserID, principal.Role, req.TargetID, req.Subject, req.InitialMessage, req.Attachments)
 	if err != nil {
 		if errors.Is(err, conversationapp.ErrInvalidInput) {
 			writeConvError(w, http.StatusUnprocessableEntity, "VALIDATION_ERROR", "target_id、subject 或 initial_message 长度或格式无效")
@@ -242,7 +244,8 @@ func (h *Handler) createConversation(w http.ResponseWriter, r *http.Request) {
 }
 
 type sendMessageRequest struct {
-	Text string `json:"text"`
+	Text        string                         `json:"text"`
+	Attachments []messageattachment.Attachment `json:"attachments"`
 }
 
 func (h *Handler) sendMessage(w http.ResponseWriter, r *http.Request) {
@@ -257,12 +260,12 @@ func (h *Handler) sendMessage(w http.ResponseWriter, r *http.Request) {
 	if !httpjson.DecodeStrictOrBadRequest(w, r, maxJSONBodyBytes, &req) {
 		return
 	}
-	if strings.TrimSpace(req.Text) == "" {
-		writeConvError(w, http.StatusUnprocessableEntity, "VALIDATION_ERROR", "text 不能为空")
+	if strings.TrimSpace(req.Text) == "" && len(req.Attachments) == 0 {
+		writeConvError(w, http.StatusUnprocessableEntity, "VALIDATION_ERROR", "消息文字和附件不能同时为空")
 		return
 	}
 	senderRole := string(principal.Role)
-	response, err := h.service.SendMessage(r.Context(), r.PathValue("id"), principal.UserID, senderRole, req.Text)
+	response, err := h.service.SendMessage(r.Context(), r.PathValue("id"), principal.UserID, senderRole, req.Text, req.Attachments)
 	if err != nil {
 		if errors.Is(err, conversationapp.ErrInvalidInput) {
 			writeConvError(w, http.StatusUnprocessableEntity, "VALIDATION_ERROR", "消息长度或格式无效")

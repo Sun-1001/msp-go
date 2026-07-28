@@ -8,6 +8,7 @@ import (
 	"unicode"
 	"unicode/utf8"
 
+	"mathstudy/backend-go/internal/application/messageattachment"
 	"mathstudy/backend-go/internal/domain/user"
 )
 
@@ -39,9 +40,9 @@ type Repository interface {
 	// AcknowledgeConversationRead marks messages through a server-provided message cutoff.
 	AcknowledgeConversationRead(ctx context.Context, conversationID string, userID string, throughMessageID string) (bool, error)
 	// CreateConversation creates a new conversation between a student and teacher.
-	CreateConversation(ctx context.Context, creatorID string, creatorRole user.Role, targetID string, subject string, initialMessage string, now time.Time) (ConversationDetail, error)
+	CreateConversation(ctx context.Context, creatorID string, creatorRole user.Role, targetID string, subject string, initialMessage string, attachments []messageattachment.Attachment, now time.Time) (ConversationDetail, error)
 	// SendMessage adds a message to a conversation.
-	SendMessage(ctx context.Context, conversationID string, senderID string, senderRole string, text string, now time.Time) (Message, error)
+	SendMessage(ctx context.Context, conversationID string, senderID string, senderRole string, text string, attachments []messageattachment.Attachment, now time.Time) (Message, error)
 	// ArchiveConversation archives a conversation for one participant.
 	ArchiveConversation(ctx context.Context, conversationID string, userID string, role user.Role) (bool, error)
 	// ListTeacherContacts returns teachers the student can message.
@@ -54,11 +55,12 @@ type Repository interface {
 
 // Message is a single message in a conversation.
 type Message struct {
-	ID              string    `json:"id"`
-	From            string    `json:"from"`
-	Text            string    `json:"text"`
-	Time            time.Time `json:"time"`
-	ReadByRecipient *bool     `json:"read_by_recipient,omitempty"`
+	ID              string                         `json:"id"`
+	From            string                         `json:"from"`
+	Text            string                         `json:"text"`
+	Time            time.Time                      `json:"time"`
+	ReadByRecipient *bool                          `json:"read_by_recipient,omitempty"`
+	Attachments     []messageattachment.Attachment `json:"attachments"`
 }
 
 // Contact is a user available to start a conversation with.
@@ -170,27 +172,30 @@ func (s *Service) AcknowledgeConversationRead(ctx context.Context, userID string
 }
 
 // CreateConversation creates a new student-teacher conversation.
-func (s *Service) CreateConversation(ctx context.Context, creatorID string, creatorRole user.Role, targetID string, subject string, initialMessage string) (ConversationDetail, error) {
+func (s *Service) CreateConversation(ctx context.Context, creatorID string, creatorRole user.Role, targetID string, subject string, initialMessage string, attachments []messageattachment.Attachment) (ConversationDetail, error) {
 	targetID = strings.TrimSpace(targetID)
 	subject = strings.TrimSpace(subject)
 	initialMessage = strings.TrimSpace(initialMessage)
-	if (creatorRole != user.RoleStudent && creatorRole != user.RoleTeacher) || !validIdentifier(targetID) ||
+	normalizedAttachments, err := messageattachment.Normalize(attachments)
+	if err != nil || (creatorRole != user.RoleStudent && creatorRole != user.RoleTeacher) || !validIdentifier(targetID) ||
 		utf8.RuneCountInString(subject) > maxSubjectRunes || utf8.RuneCountInString(initialMessage) > maxMessageRunes ||
 		!validText(subject) || !validText(initialMessage) {
 		return ConversationDetail{}, ErrInvalidInput
 	}
-	return s.repo.CreateConversation(ctx, creatorID, creatorRole, targetID, subject, initialMessage, time.Now())
+	return s.repo.CreateConversation(ctx, creatorID, creatorRole, targetID, subject, initialMessage, normalizedAttachments, time.Now())
 }
 
 // SendMessage sends a message in an existing conversation.
-func (s *Service) SendMessage(ctx context.Context, conversationID string, senderID string, senderRole string, text string) (Message, error) {
+func (s *Service) SendMessage(ctx context.Context, conversationID string, senderID string, senderRole string, text string, attachments []messageattachment.Attachment) (Message, error) {
 	conversationID = strings.TrimSpace(conversationID)
 	text = strings.TrimSpace(text)
+	normalizedAttachments, err := messageattachment.Normalize(attachments)
 	if !validIdentifier(conversationID) || (senderRole != string(user.RoleStudent) && senderRole != string(user.RoleTeacher)) ||
-		text == "" || utf8.RuneCountInString(text) > maxMessageRunes || !validText(text) {
+		err != nil || (text == "" && len(normalizedAttachments) == 0) ||
+		utf8.RuneCountInString(text) > maxMessageRunes || !validText(text) {
 		return Message{}, ErrInvalidInput
 	}
-	return s.repo.SendMessage(ctx, conversationID, senderID, senderRole, text, time.Now())
+	return s.repo.SendMessage(ctx, conversationID, senderID, senderRole, text, normalizedAttachments, time.Now())
 }
 
 // ArchiveConversation archives a conversation for the requesting participant.

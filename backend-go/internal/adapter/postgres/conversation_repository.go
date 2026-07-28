@@ -10,6 +10,7 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 
 	conversationapp "mathstudy/backend-go/internal/application/conversation"
+	"mathstudy/backend-go/internal/application/messageattachment"
 	wechatreminder "mathstudy/backend-go/internal/application/wechatreminder"
 	"mathstudy/backend-go/internal/domain/user"
 )
@@ -80,7 +81,7 @@ func (r ConversationRepository) listStudentConversations(ctx context.Context, st
 	rows, err := r.DB().Query(ctx, `
 		SELECT c.id, c.teacher_id, u.display_name, u.username, c.subject, c.last_message_at, c.student_archived,
 			COALESCE(cnv.unread_count, 0),
-			(SELECT LEFT(text, 200) FROM public.conversation_messages WHERE conversation_id = c.id ORDER BY created_at DESC, id DESC LIMIT 1)
+			(SELECT LEFT(CASE WHEN text <> '' THEN text WHEN jsonb_array_length(attachments) > 0 THEN '[附件]' ELSE '' END, 200) FROM public.conversation_messages WHERE conversation_id = c.id ORDER BY created_at DESC, id DESC LIMIT 1)
 		FROM public.conversations c
 		JOIN public.users u ON u.id = c.teacher_id
 		LEFT JOIN LATERAL (
@@ -174,7 +175,7 @@ func (r ConversationRepository) listTeacherConversations(ctx context.Context, te
 
 	rows, err := r.DB().Query(ctx, `
 		SELECT c.id, c.student_id, u.display_name, u.username, c.subject, c.last_message_at,
-			(SELECT LEFT(text, 200) FROM public.conversation_messages WHERE conversation_id = c.id ORDER BY created_at DESC, id DESC LIMIT 1),
+			(SELECT LEFT(CASE WHEN text <> '' THEN text WHEN jsonb_array_length(attachments) > 0 THEN '[附件]' ELSE '' END, 200) FROM public.conversation_messages WHERE conversation_id = c.id ORDER BY created_at DESC, id DESC LIMIT 1),
 			EXISTS(SELECT 1 FROM public.conversation_messages cm WHERE cm.conversation_id = c.id AND cm.sender_role = 'student' AND cm.read_at IS NULL) AS unread,
 			COALESCE((SELECT cm2.sender_role = 'student' FROM public.conversation_messages cm2 WHERE cm2.conversation_id = c.id ORDER BY cm2.created_at DESC, cm2.id DESC LIMIT 1), false) AS pending_reply
 		FROM public.conversations c
@@ -271,7 +272,7 @@ func (r ConversationRepository) GetConversation(ctx context.Context, conversatio
 	detail.MessagesPage, detail.MessagesSize = page, pgPage.Limit
 	// Load the newest page, then restore chronological order for the UI.
 	msgRows, err := r.DB().Query(ctx, `
-		SELECT cm.id, cm.sender_role, cm.text, cm.created_at, cm.read_at
+		SELECT cm.id, cm.sender_role, cm.text, cm.created_at, cm.read_at, cm.attachments
 		FROM public.conversation_messages cm
 		WHERE cm.conversation_id = $1
 		ORDER BY cm.created_at DESC, cm.id DESC
@@ -287,7 +288,12 @@ func (r ConversationRepository) GetConversation(ctx context.Context, conversatio
 	for msgRows.Next() {
 		var msg conversationapp.Message
 		var readAt pgtype.Timestamp
-		if err := msgRows.Scan(&msg.ID, &msg.From, &msg.Text, &msg.Time, &readAt); err != nil {
+		var attachmentsJSON []byte
+		if err := msgRows.Scan(&msg.ID, &msg.From, &msg.Text, &msg.Time, &readAt, &attachmentsJSON); err != nil {
+			return conversationapp.ConversationDetail{}, false, err
+		}
+		msg.Attachments, err = messageattachment.Decode(attachmentsJSON)
+		if err != nil {
 			return conversationapp.ConversationDetail{}, false, err
 		}
 		msg.Time = messageCenterWallTime(msg.Time)
@@ -339,7 +345,7 @@ func (r ConversationRepository) AcknowledgeConversationRead(ctx context.Context,
 }
 
 // CreateConversation creates a conversation and its first message.
-func (r ConversationRepository) CreateConversation(ctx context.Context, creatorID string, creatorRole user.Role, targetID string, subject string, initialMessage string, _ time.Time) (conversationapp.ConversationDetail, error) {
+func (r ConversationRepository) CreateConversation(ctx context.Context, creatorID string, creatorRole user.Role, targetID string, subject string, initialMessage string, attachments []messageattachment.Attachment, _ time.Time) (conversationapp.ConversationDetail, error) {
 	if creatorRole != user.RoleStudent && creatorRole != user.RoleTeacher {
 		return conversationapp.ConversationDetail{}, conversationapp.ErrForbidden
 	}
@@ -348,6 +354,10 @@ func (r ConversationRepository) CreateConversation(ctx context.Context, creatorI
 		studentID, teacherID = targetID, creatorID
 	}
 	convID, err := newUUID()
+	if err != nil {
+		return conversationapp.ConversationDetail{}, err
+	}
+	attachmentsJSON, err := messageattachment.Encode(attachments)
 	if err != nil {
 		return conversationapp.ConversationDetail{}, err
 	}
@@ -379,7 +389,7 @@ func (r ConversationRepository) CreateConversation(ctx context.Context, creatorI
 		return conversationapp.ConversationDetail{}, conversationapp.ErrForbidden
 	}
 
-	hasInitialMessage := strings.TrimSpace(initialMessage) != ""
+	hasInitialMessage := strings.TrimSpace(initialMessage) != "" || len(attachments) > 0
 	archiveColumn := "student_archived"
 	if creatorRole == user.RoleTeacher {
 		archiveColumn = "teacher_archived"
@@ -443,16 +453,16 @@ func (r ConversationRepository) CreateConversation(ctx context.Context, creatorI
 		}
 		var messageAt time.Time
 		err = tx.QueryRow(ctx, `
-			INSERT INTO public.conversation_messages (id, conversation_id, sender_id, sender_role, text, created_at)
+			INSERT INTO public.conversation_messages (id, conversation_id, sender_id, sender_role, text, attachments, created_at)
 			VALUES (
-				$1, $2, $3, $4, $5,
+				$1, $2, $3, $4, $5, $6,
 				GREATEST(
 					clock_timestamp() AT TIME ZONE 'Asia/Shanghai',
-					$6::timestamp without time zone + interval '1 microsecond'
+					$7::timestamp without time zone + interval '1 microsecond'
 				)
 			)
 			RETURNING created_at`,
-			msgID, convID, creatorID, string(creatorRole), initialMessage, parentLastMessageAt,
+			msgID, convID, creatorID, string(creatorRole), initialMessage, string(attachmentsJSON), parentLastMessageAt,
 		).Scan(&messageAt)
 		if err != nil {
 			return conversationapp.ConversationDetail{}, err
@@ -511,8 +521,12 @@ func (r ConversationRepository) CreateConversation(ctx context.Context, creatorI
 }
 
 // SendMessage adds a message, restores visibility, and updates last_message_at.
-func (r ConversationRepository) SendMessage(ctx context.Context, conversationID string, senderID string, senderRole string, text string, _ time.Time) (conversationapp.Message, error) {
+func (r ConversationRepository) SendMessage(ctx context.Context, conversationID string, senderID string, senderRole string, text string, attachments []messageattachment.Attachment, _ time.Time) (conversationapp.Message, error) {
 	msgID, err := newUUID()
+	if err != nil {
+		return conversationapp.Message{}, err
+	}
+	attachmentsJSON, err := messageattachment.Encode(attachments)
 	if err != nil {
 		return conversationapp.Message{}, err
 	}
@@ -562,16 +576,16 @@ func (r ConversationRepository) SendMessage(ctx context.Context, conversationID 
 
 	var messageAt time.Time
 	err = tx.QueryRow(ctx, `
-		INSERT INTO public.conversation_messages (id, conversation_id, sender_id, sender_role, text, created_at)
+		INSERT INTO public.conversation_messages (id, conversation_id, sender_id, sender_role, text, attachments, created_at)
 		VALUES (
-			$1, $2, $3, $4, $5,
+			$1, $2, $3, $4, $5, $6,
 			GREATEST(
 				clock_timestamp() AT TIME ZONE 'Asia/Shanghai',
-				$6::timestamp without time zone + interval '1 microsecond'
+				$7::timestamp without time zone + interval '1 microsecond'
 			)
 		)
 		RETURNING created_at`,
-		msgID, conversationID, senderID, senderRole, text, parentLastMessageAt,
+		msgID, conversationID, senderID, senderRole, text, string(attachmentsJSON), parentLastMessageAt,
 	).Scan(&messageAt)
 	if err != nil {
 		return conversationapp.Message{}, err
@@ -604,10 +618,11 @@ func (r ConversationRepository) SendMessage(ctx context.Context, conversationID 
 	}
 
 	return conversationapp.Message{
-		ID:   msgID,
-		From: senderRole,
-		Text: text,
-		Time: messageCenterWallTime(messageAt),
+		ID:          msgID,
+		From:        senderRole,
+		Text:        text,
+		Time:        messageCenterWallTime(messageAt),
+		Attachments: attachments,
 	}, nil
 }
 
