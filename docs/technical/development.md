@@ -115,7 +115,7 @@ go run ./cmd/migrate
 go run ./cmd/migrate  # 重复执行应无待应用版本
 ```
 
-不要重建或修改 `0001_initial_schema.up.sql` 来承载增量变化。生产回滚依赖备份恢复或经过评审的补偿性 forward migration，详见 [迁移策略](../../backend/migrations/README.md)。
+当前首次生产基线固定为 `0001` 至 `0004` 四个领域分组，新增变化从 `0005` 起追加。若本地数据库执行过重整前的旧开发链 `0001` 至 `0015`，且数据可丢弃，应删除并重建目标数据库后再运行 runner；不得只删除迁移记录。生产回滚依赖备份恢复或经过评审的补偿性 forward migration，详见 [迁移策略](../../backend/migrations/README.md)。
 
 ## 环境配置
 
@@ -164,7 +164,7 @@ WECHAT_QA_MESSAGE_TEMPLATE_ID=
 
 若测试号页面没有消息加解密模式选项，使用 `plain`。不要自行编造 `AES_KEY`，兼容模式和安全模式必须使用微信后台对应的 `EncodingAESKey`。
 
-公众号绑定、师生消息提醒和消息中心北京时间默认值由单一 `backend/migrations/0013_wechat_official_account.up.sql` 交付。规范数据库从版本 12 升级时，第一次运行应只记录 `version=13, name=wechat_official_account`，第二次应无待应用版本；全新数据库会按顺序应用版本 1-13。若某个本地或仓库外数据库曾运行未提交的旧 `wechat_user_bindings`、`wechat_message_reminders` 或 `message_center_beijing_time`，必须先核对实际 schema 并校准 `go_schema_migrations`；不得删除 version 13 后重跑合并迁移，否则会重复创建现有表。
+消息中心结构和北京时间默认值由 `backend/migrations/0003_communication.up.sql` 交付，微信公众号绑定和提醒任务由 `0004_delivery_integrations.up.sql` 交付。全新数据库第一次运行当前基线应记录版本 `1` 至 `4`，第二次应无待应用版本。若本地数据库仍记录重整前的旧开发迁移版本，按迁移策略删除并重建临时数据库；不可丢弃的数据库不得直接运行这组基线。
 
 ```powershell
 Set-Location backend
@@ -230,6 +230,6 @@ https://<temporary-host>/api/v1/integrations/wechat/official-account/callback
 
 站内消息写入与提醒任务入队位于同一 PostgreSQL 事务，微信 HTTP 调用始终发生在提交后的 worker 中。worker 使用租约和 `FOR UPDATE SKIP LOCKED` 支持多实例接管，并在每次实际发送前以 owner 条件续租；等待期间租约已经过期或已被其他实例接管时不会继续调用微信。如果进程在微信接受消息后、写入 `sent` 前退出，模板消息接口缺少项目可控的幂等键，极端情况下仍可能重复发送一次提醒。`sent`、`skipped` 和 `dead` 任务保留 30 天，worker 每小时最多分 10 批清理 10000 条过期终态任务。
 
-首次把不含提醒代码的旧版本升级到本版本时，不要让旧实例和已启用提醒的新实例长期混跑。应先执行 `0014`，排空并停止旧实例流量，完成全部新实例部署后再统一设置 `WECHAT_MESSAGE_REMINDERS_ENABLED=true`；否则旧实例仍可提交站内消息，但它不具备提醒入队代码，无法事后自动回填对应任务。
+若后续从不含提醒入队代码的应用版本升级，不要让旧实例和已启用提醒的新实例长期混跑。应先执行包含提醒任务表的 forward migration，排空并停止旧实例流量，完成全部新实例部署后再统一设置 `WECHAT_MESSAGE_REMINDERS_ENABLED=true`；否则旧实例仍可提交站内消息，但它不具备提醒入队代码，无法事后自动回填对应任务。
 
 管理员 `test-message` 仍使用客服消息接口和固定文本，受账号权限、频率及用户最近交互窗口约束。私信、通知和答疑业务提醒改用模板消息接口，不依赖管理员测试接口的客服窗口，但必须拥有对应模板消息权限，且模板 ID 和字段结构必须与同一 AppID 下的微信后台模板一致。测试号成功不代表正式账号天然具备相同权限。

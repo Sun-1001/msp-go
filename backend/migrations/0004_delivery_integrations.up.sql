@@ -1,6 +1,5 @@
--- 0013: WeChat Official Account bindings, message reminders, and message-center time semantics.
+-- WeChat delivery jobs and administrator-managed email templates.
 
--- Subscription rows may exist before a user completes the one-time binding flow.
 CREATE TABLE public.wechat_user_bindings (
     id character varying(36) PRIMARY KEY,
     app_id character varying(64) NOT NULL,
@@ -16,10 +15,9 @@ CREATE TABLE public.wechat_user_bindings (
 );
 
 CREATE UNIQUE INDEX uq_wechat_user_bindings_app_user
-    ON public.wechat_user_bindings USING btree (app_id, user_id)
+    ON public.wechat_user_bindings (app_id, user_id)
     WHERE user_id IS NOT NULL;
 
--- Reminder jobs store semantic event references, never business content or provider credentials.
 CREATE TABLE public.wechat_message_reminder_jobs (
     id bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
     app_id character varying(64) NOT NULL,
@@ -59,44 +57,31 @@ CREATE TABLE public.wechat_message_reminder_jobs (
 );
 
 CREATE INDEX ix_wechat_message_reminder_pending_due
-    ON public.wechat_message_reminder_jobs
-        (app_id, next_attempt_at, created_at, id)
+    ON public.wechat_message_reminder_jobs (app_id, next_attempt_at, created_at, id)
     WHERE status = 'pending';
-
 CREATE INDEX ix_wechat_message_reminder_expired_lease
-    ON public.wechat_message_reminder_jobs
-        (app_id, lease_expires_at, id)
+    ON public.wechat_message_reminder_jobs (app_id, lease_expires_at, id)
     WHERE status = 'processing';
-
 CREATE INDEX ix_wechat_message_reminder_finished_retention
-    ON public.wechat_message_reminder_jobs
-        (app_id, finished_at, id)
+    ON public.wechat_message_reminder_jobs (app_id, finished_at, id)
     WHERE status IN ('sent', 'skipped', 'dead');
-
 CREATE INDEX ix_wechat_message_reminder_recipient
     ON public.wechat_message_reminder_jobs (recipient_user_id);
 
--- Message-center business timestamps are Beijing wall time. Reminder scheduling remains UTC.
-ALTER TABLE public.conversations
-    ALTER COLUMN last_message_at SET DEFAULT (CURRENT_TIMESTAMP AT TIME ZONE 'Asia/Shanghai'),
-    ALTER COLUMN created_at SET DEFAULT (CURRENT_TIMESTAMP AT TIME ZONE 'Asia/Shanghai'),
-    ALTER COLUMN updated_at SET DEFAULT (CURRENT_TIMESTAMP AT TIME ZONE 'Asia/Shanghai');
+CREATE TABLE public.email_templates (
+    event character varying(64) NOT NULL,
+    locale character varying(16) NOT NULL,
+    subject character varying(200) NOT NULL,
+    html_body text NOT NULL,
+    updated_by character varying(36) REFERENCES public.users(id) ON DELETE SET NULL,
+    updated_at timestamp without time zone DEFAULT now() NOT NULL,
+    CONSTRAINT pk_email_templates PRIMARY KEY (event, locale),
+    CONSTRAINT ck_email_templates_event_not_blank CHECK (btrim(event) <> ''),
+    CONSTRAINT ck_email_templates_locale_not_blank CHECK (btrim(locale) <> ''),
+    CONSTRAINT ck_email_templates_subject_not_blank CHECK (btrim(subject) <> ''),
+    CONSTRAINT ck_email_templates_html_body_not_blank CHECK (btrim(html_body) <> '')
+);
 
-ALTER TABLE public.conversation_messages
-    ALTER COLUMN created_at SET DEFAULT (CURRENT_TIMESTAMP AT TIME ZONE 'Asia/Shanghai');
-
-ALTER TABLE public.notices
-    ALTER COLUMN created_at SET DEFAULT (CURRENT_TIMESTAMP AT TIME ZONE 'Asia/Shanghai');
-
-ALTER TABLE public.notice_confirmations
-    ALTER COLUMN confirmed_at SET DEFAULT (CURRENT_TIMESTAMP AT TIME ZONE 'Asia/Shanghai');
-
-ALTER TABLE public.notice_recipients
-    ALTER COLUMN created_at SET DEFAULT (CURRENT_TIMESTAMP AT TIME ZONE 'Asia/Shanghai');
-
-ALTER TABLE public.question_threads
-    ALTER COLUMN created_at SET DEFAULT (CURRENT_TIMESTAMP AT TIME ZONE 'Asia/Shanghai'),
-    ALTER COLUMN updated_at SET DEFAULT (CURRENT_TIMESTAMP AT TIME ZONE 'Asia/Shanghai');
-
-ALTER TABLE public.question_thread_messages
-    ALTER COLUMN created_at SET DEFAULT (CURRENT_TIMESTAMP AT TIME ZONE 'Asia/Shanghai');
+CREATE INDEX ix_email_templates_updated_by
+    ON public.email_templates (updated_by)
+    WHERE updated_by IS NOT NULL;

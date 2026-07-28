@@ -1,5 +1,5 @@
--- Generated from Python Alembic head 0019_performance_indexes_phase3.
--- Compact Go-owned one-step schema migration for a clean database.
+-- Production baseline: identity, learning, content, AI configuration, and security.
+-- This migration is intended for a clean database and contains only final-state objects.
 
 SET statement_timeout = 0;
 SET lock_timeout = 0;
@@ -145,6 +145,7 @@ CREATE TABLE public.agent_model_configs (
     id character varying(36) NOT NULL,
     agent_type character varying(50) NOT NULL,
     model_id character varying(36),
+    model_key character varying(100),
     temperature_override double precision,
     max_tokens_override integer,
     top_p_override double precision,
@@ -154,9 +155,6 @@ CREATE TABLE public.agent_model_configs (
     is_active boolean NOT NULL,
     created_at timestamp without time zone DEFAULT now() NOT NULL,
     updated_at timestamp without time zone DEFAULT now() NOT NULL
-);
-CREATE TABLE public.alembic_version (
-    version_num character varying(32) NOT NULL
 );
 CREATE TABLE public.class_enrollments (
     id character varying(36) NOT NULL,
@@ -172,15 +170,6 @@ CREATE TABLE public.classes (
     description text,
     created_at timestamp without time zone NOT NULL,
     updated_at timestamp without time zone NOT NULL
-);
-CREATE TABLE public.concept_bkt_params (
-    concept_id character varying(128) NOT NULL,
-    p_l0 double precision DEFAULT '0.25'::double precision NOT NULL,
-    p_t double precision DEFAULT '0.12'::double precision NOT NULL,
-    p_g double precision DEFAULT '0.2'::double precision NOT NULL,
-    p_s double precision DEFAULT '0.1'::double precision NOT NULL,
-    created_at timestamp without time zone DEFAULT now() NOT NULL,
-    updated_at timestamp without time zone DEFAULT now() NOT NULL
 );
 CREATE TABLE public.content_acl (
     content_id character varying(36) NOT NULL,
@@ -219,7 +208,8 @@ CREATE TABLE public.content_audit (
 CREATE TABLE public.contents (
     id character varying(36) NOT NULL,
     type public.contenttype NOT NULL,
-    owner_teacher_id character varying(36) NOT NULL,
+    owner_teacher_id character varying(36),
+    generated_by_student_id character varying(36),
     status public.contentstatus NOT NULL,
     title character varying(500) NOT NULL,
     body text NOT NULL,
@@ -325,6 +315,8 @@ CREATE TABLE public.llm_providers (
     base_url character varying(500) NOT NULL,
     encrypted_api_key text NOT NULL,
     is_active boolean NOT NULL,
+    priority integer DEFAULT 0 NOT NULL,
+    weight integer DEFAULT 100 NOT NULL,
     description text,
     created_at timestamp without time zone DEFAULT now() NOT NULL,
     updated_at timestamp without time zone DEFAULT now() NOT NULL
@@ -374,7 +366,7 @@ CREATE TABLE public.session_messages (
     related_content_id character varying(36),
     created_at timestamp without time zone NOT NULL
 );
-CREATE TABLE public.student_concept_bkt_states (
+CREATE TABLE public.student_concept_dkt_states (
     id character varying(36) NOT NULL,
     student_id character varying(36) NOT NULL,
     concept_id character varying(128) NOT NULL,
@@ -383,12 +375,17 @@ CREATE TABLE public.student_concept_bkt_states (
     attempt_count integer DEFAULT 0 NOT NULL,
     correct_count integer DEFAULT 0 NOT NULL,
     incorrect_count integer DEFAULT 0 NOT NULL,
-    p_l0 double precision DEFAULT '0.25'::double precision NOT NULL,
-    p_t double precision DEFAULT '0.12'::double precision NOT NULL,
-    p_g double precision DEFAULT '0.2'::double precision NOT NULL,
-    p_s double precision DEFAULT '0.1'::double precision NOT NULL,
+    sequence_length integer DEFAULT 0 NOT NULL,
+    attention_weight double precision DEFAULT 0 NOT NULL,
+    last_exercise_id character varying,
     last_outcome boolean,
     last_attempt_at timestamp without time zone,
+    created_at timestamp without time zone DEFAULT now() NOT NULL,
+    updated_at timestamp without time zone DEFAULT now() NOT NULL
+);
+CREATE TABLE public.student_learning_goals (
+    student_id character varying(36) NOT NULL,
+    target_node_id character varying(36) NOT NULL,
     created_at timestamp without time zone DEFAULT now() NOT NULL,
     updated_at timestamp without time zone DEFAULT now() NOT NULL
 );
@@ -438,26 +435,13 @@ CREATE TABLE public.xidian_accounts (
     id character varying(36) NOT NULL,
     user_id character varying(36) NOT NULL,
     username character varying(50) NOT NULL,
-    encrypted_password text NOT NULL,
-    is_postgraduate boolean,
     status character varying(20) DEFAULT 'active'::character varying NOT NULL,
     last_verified_at timestamp without time zone,
     created_at timestamp without time zone NOT NULL,
-    updated_at timestamp without time zone NOT NULL,
-    session_cookies json,
-    cookies_updated_at timestamp without time zone
-);
-CREATE TABLE public.xidian_snapshots (
-    id character varying(36) NOT NULL,
-    user_id character varying(36) NOT NULL,
-    data_type character varying(20) NOT NULL,
-    semester_code character varying(20),
-    payload json DEFAULT '{}'::json NOT NULL,
-    fetched_at timestamp without time zone NOT NULL
+    updated_at timestamp without time zone NOT NULL
 );
 
 -- Seed data
-INSERT INTO public.alembic_version (version_num) VALUES ('0019_performance_indexes_phase3');
 INSERT INTO public.knowledge_nodes (id, name, name_en, node_type, description, chapter, section, difficulty, latex_formula, tags, created_at, updated_at) VALUES ('b810b819-4bc9-4469-a22f-035b73dc138c', '极限', 'Limit', 'CONCEPT', '极限是微积分的基础概念，描述函数在某点附近的变化趋势。', '第一章', '1.1', 0.4, '\lim_{x \to a} f(x) = L', '["基础概念", "微积分"]', '2026-04-18 12:43:27.62304', '2026-04-18 12:43:27.62304');
 INSERT INTO public.knowledge_nodes (id, name, name_en, node_type, description, chapter, section, difficulty, latex_formula, tags, created_at, updated_at) VALUES ('88dd49ff-dd01-4e13-ae7b-75f4d4e9360e', '导数', 'Derivative', 'CONCEPT', '导数描述函数在某点的瞬时变化率，是微分学的核心概念。', '第二章', '2.1', 0.5, 'f''(x) = \lim_{h \to 0} \frac{f(x+h) - f(x)}{h}', '["基础概念", "微分学"]', '2026-04-18 12:43:27.62304', '2026-04-18 12:43:27.62304');
 INSERT INTO public.knowledge_nodes (id, name, name_en, node_type, description, chapter, section, difficulty, latex_formula, tags, created_at, updated_at) VALUES ('d018e683-6770-4b1a-a2df-d5537b141908', '洛必达法则', 'L''Hôpital''s Rule', 'THEOREM', '洛必达法则用于求解不定式极限，通过求导简化计算。', '第二章', '2.3', 0.6, '\lim_{x \to a} \frac{f(x)}{g(x)} = \lim_{x \to a} \frac{f''(x)}{g''(x)}', '["定理", "极限计算"]', '2026-04-18 12:43:27.62304', '2026-04-18 12:43:27.62304');
@@ -479,14 +463,10 @@ INSERT INTO public.system_settings (key, value, description, updated_at) VALUES 
 -- Primary and unique constraints
 ALTER TABLE ONLY public.agent_model_configs
     ADD CONSTRAINT agent_model_configs_pkey PRIMARY KEY (id);
-ALTER TABLE ONLY public.alembic_version
-    ADD CONSTRAINT alembic_version_pkc PRIMARY KEY (version_num);
 ALTER TABLE ONLY public.class_enrollments
     ADD CONSTRAINT class_enrollments_pkey PRIMARY KEY (id);
 ALTER TABLE ONLY public.classes
     ADD CONSTRAINT classes_pkey PRIMARY KEY (id);
-ALTER TABLE ONLY public.concept_bkt_params
-    ADD CONSTRAINT concept_bkt_params_pkey PRIMARY KEY (concept_id);
 ALTER TABLE ONLY public.content_acl
     ADD CONSTRAINT content_acl_pkey PRIMARY KEY (content_id, teacher_id);
 ALTER TABLE ONLY public.content_assets
@@ -497,6 +477,12 @@ ALTER TABLE ONLY public.content_audit
     ADD CONSTRAINT content_audit_pkey PRIMARY KEY (id);
 ALTER TABLE ONLY public.contents
     ADD CONSTRAINT contents_pkey PRIMARY KEY (id);
+ALTER TABLE ONLY public.contents
+    ADD CONSTRAINT ck_contents_exactly_one_owner
+        CHECK ((owner_teacher_id IS NOT NULL) <> (generated_by_student_id IS NOT NULL));
+ALTER TABLE ONLY public.contents
+    ADD CONSTRAINT ck_contents_student_generated_problem
+        CHECK (generated_by_student_id IS NULL OR type = 'PROBLEM'::public.contenttype);
 ALTER TABLE ONLY public.diagnosis_reports
     ADD CONSTRAINT diagnosis_reports_attempt_id_key UNIQUE (attempt_id);
 ALTER TABLE ONLY public.diagnosis_reports
@@ -515,6 +501,10 @@ ALTER TABLE ONLY public.llm_models
     ADD CONSTRAINT llm_models_pkey PRIMARY KEY (id);
 ALTER TABLE ONLY public.llm_providers
     ADD CONSTRAINT llm_providers_pkey PRIMARY KEY (id);
+ALTER TABLE ONLY public.llm_providers
+    ADD CONSTRAINT ck_llm_providers_priority_range CHECK (priority >= 0 AND priority <= 1000);
+ALTER TABLE ONLY public.llm_providers
+    ADD CONSTRAINT ck_llm_providers_weight_range CHECK (weight >= 1 AND weight <= 1000);
 ALTER TABLE ONLY public.outbox_events
     ADD CONSTRAINT outbox_events_pkey PRIMARY KEY (id);
 ALTER TABLE ONLY public.password_reset_requests
@@ -523,8 +513,10 @@ ALTER TABLE ONLY public.security_logs
     ADD CONSTRAINT security_logs_pkey PRIMARY KEY (id);
 ALTER TABLE ONLY public.session_messages
     ADD CONSTRAINT session_messages_pkey PRIMARY KEY (id);
-ALTER TABLE ONLY public.student_concept_bkt_states
-    ADD CONSTRAINT student_concept_bkt_states_pkey PRIMARY KEY (id);
+ALTER TABLE ONLY public.student_concept_dkt_states
+    ADD CONSTRAINT student_concept_dkt_states_pkey PRIMARY KEY (id);
+ALTER TABLE ONLY public.student_learning_goals
+    ADD CONSTRAINT student_learning_goals_pkey PRIMARY KEY (student_id);
 ALTER TABLE ONLY public.student_profiles
     ADD CONSTRAINT student_profiles_pkey PRIMARY KEY (id);
 ALTER TABLE ONLY public.student_profiles
@@ -537,23 +529,24 @@ ALTER TABLE ONLY public.class_enrollments
     ADD CONSTRAINT uq_class_enrollment_student UNIQUE (student_id);
 ALTER TABLE ONLY public.llm_models
     ADD CONSTRAINT uq_provider_model UNIQUE (provider_id, model_id);
-ALTER TABLE ONLY public.student_concept_bkt_states
-    ADD CONSTRAINT uq_student_concept_bkt_state UNIQUE (student_id, concept_id);
+ALTER TABLE ONLY public.student_concept_dkt_states
+    ADD CONSTRAINT uq_student_concept_dkt_state UNIQUE (student_id, concept_id);
 ALTER TABLE ONLY public.user_favorites
     ADD CONSTRAINT user_favorites_pkey PRIMARY KEY (id);
 ALTER TABLE ONLY public.users
     ADD CONSTRAINT users_pkey PRIMARY KEY (id);
 ALTER TABLE ONLY public.xidian_accounts
     ADD CONSTRAINT xidian_accounts_pkey PRIMARY KEY (id);
-ALTER TABLE ONLY public.xidian_snapshots
-    ADD CONSTRAINT xidian_snapshots_pkey PRIMARY KEY (id);
+ALTER TABLE ONLY public.agent_model_configs
+    ADD CONSTRAINT ck_agent_model_configs_model_key
+        CHECK (model_key IS NULL OR btrim(model_key) <> '');
 
 -- Indexes
 CREATE UNIQUE INDEX ix_agent_model_configs_agent_type ON public.agent_model_configs USING btree (agent_type);
 CREATE INDEX ix_agent_model_configs_model_id ON public.agent_model_configs USING btree (model_id);
-CREATE INDEX ix_bkt_concept ON public.student_concept_bkt_states USING btree (concept_id);
-CREATE INDEX ix_bkt_student ON public.student_concept_bkt_states USING btree (student_id);
-CREATE INDEX ix_bkt_updated_at ON public.student_concept_bkt_states USING btree (updated_at);
+CREATE INDEX ix_agent_model_configs_model_key ON public.agent_model_configs USING btree (model_key);
+CREATE INDEX ix_dkt_concept ON public.student_concept_dkt_states USING btree (concept_id);
+CREATE INDEX ix_dkt_updated_at ON public.student_concept_dkt_states USING btree (updated_at);
 CREATE INDEX ix_class_enrollments_class_id ON public.class_enrollments USING btree (class_id);
 CREATE UNIQUE INDEX ix_class_enrollments_student_id ON public.class_enrollments USING btree (student_id);
 CREATE UNIQUE INDEX ix_classes_code ON public.classes USING btree (code);
@@ -572,6 +565,8 @@ CREATE INDEX ix_contents_deleted_at ON public.contents USING btree (deleted_at);
 CREATE INDEX ix_contents_owner_deleted ON public.contents USING btree (owner_teacher_id, deleted_at);
 CREATE INDEX ix_contents_owner_status ON public.contents USING btree (owner_teacher_id, status);
 CREATE INDEX ix_contents_owner_teacher_id ON public.contents USING btree (owner_teacher_id);
+CREATE INDEX ix_contents_student_generated ON public.contents USING btree (generated_by_student_id, created_at DESC)
+    WHERE generated_by_student_id IS NOT NULL AND deleted_at IS NULL;
 CREATE INDEX ix_contents_published ON public.contents USING btree (status, deleted_at);
 CREATE INDEX ix_contents_status ON public.contents USING btree (status);
 CREATE INDEX ix_contents_status_deleted_type ON public.contents USING btree (status, deleted_at, type);
@@ -590,7 +585,9 @@ CREATE INDEX ix_learning_sessions_student_active ON public.learning_sessions USI
 CREATE INDEX ix_learning_sessions_student_id ON public.learning_sessions USING btree (student_id);
 CREATE INDEX ix_learning_sessions_student_started ON public.learning_sessions USING btree (student_id, started_at);
 CREATE INDEX ix_llm_models_provider_id ON public.llm_models USING btree (provider_id);
-CREATE UNIQUE INDEX ix_llm_providers_code ON public.llm_providers USING btree (code);
+CREATE INDEX ix_llm_models_active_logical_name ON public.llm_models USING btree (name, provider_id) WHERE is_active;
+CREATE INDEX ix_llm_providers_active_priority ON public.llm_providers USING btree (priority DESC, id) WHERE is_active;
+CREATE INDEX ix_llm_providers_code ON public.llm_providers USING btree (code);
 CREATE UNIQUE INDEX ix_llm_providers_name ON public.llm_providers USING btree (name);
 CREATE INDEX ix_outbox_events_processed_at ON public.outbox_events USING btree (processed_at);
 CREATE INDEX ix_outbox_events_type ON public.outbox_events USING btree (type);
@@ -609,7 +606,8 @@ CREATE INDEX ix_security_logs_severity ON public.security_logs USING btree (seve
 CREATE INDEX ix_security_logs_user_created ON public.security_logs USING btree (user_id, created_at);
 CREATE INDEX ix_security_logs_user_id ON public.security_logs USING btree (user_id);
 CREATE INDEX ix_session_messages_session_id ON public.session_messages USING btree (session_id);
-CREATE INDEX ix_student_concept_bkt_student ON public.student_concept_bkt_states USING btree (student_id);
+CREATE INDEX ix_student_concept_dkt_student ON public.student_concept_dkt_states USING btree (student_id);
+CREATE INDEX ix_student_learning_goals_target_node_id ON public.student_learning_goals USING btree (target_node_id);
 CREATE INDEX ix_user_favorites_content_id ON public.user_favorites USING btree (content_id);
 CREATE UNIQUE INDEX ix_user_favorites_user_content ON public.user_favorites USING btree (user_id, content_id);
 CREATE INDEX ix_user_favorites_user_id ON public.user_favorites USING btree (user_id);
@@ -623,7 +621,6 @@ CREATE INDEX ix_users_status_role ON public.users USING btree (status, role);
 CREATE UNIQUE INDEX ix_users_username ON public.users USING btree (username);
 CREATE UNIQUE INDEX ix_xidian_accounts_user_id ON public.xidian_accounts USING btree (user_id);
 CREATE INDEX ix_xidian_accounts_username ON public.xidian_accounts USING btree (username);
-CREATE INDEX ix_xidian_snapshots_user_type_fetched ON public.xidian_snapshots USING btree (user_id, data_type, fetched_at);
 
 -- Foreign key constraints
 ALTER TABLE ONLY public.agent_model_configs
@@ -646,6 +643,8 @@ ALTER TABLE ONLY public.content_attempts
     ADD CONSTRAINT content_attempts_student_id_fkey FOREIGN KEY (student_id) REFERENCES public.users(id);
 ALTER TABLE ONLY public.contents
     ADD CONSTRAINT contents_owner_teacher_id_fkey FOREIGN KEY (owner_teacher_id) REFERENCES public.users(id);
+ALTER TABLE ONLY public.contents
+    ADD CONSTRAINT contents_generated_by_student_id_fkey FOREIGN KEY (generated_by_student_id) REFERENCES public.users(id);
 ALTER TABLE ONLY public.diagnosis_reports
     ADD CONSTRAINT diagnosis_reports_attempt_id_fkey FOREIGN KEY (attempt_id) REFERENCES public.content_attempts(id) ON DELETE CASCADE;
 ALTER TABLE ONLY public.import_jobs
@@ -664,8 +663,12 @@ ALTER TABLE ONLY public.security_logs
     ADD CONSTRAINT security_logs_user_id_fkey FOREIGN KEY (user_id) REFERENCES public.users(id) ON DELETE SET NULL;
 ALTER TABLE ONLY public.session_messages
     ADD CONSTRAINT session_messages_session_id_fkey FOREIGN KEY (session_id) REFERENCES public.learning_sessions(id);
-ALTER TABLE ONLY public.student_concept_bkt_states
-    ADD CONSTRAINT student_concept_bkt_states_student_id_fkey FOREIGN KEY (student_id) REFERENCES public.users(id) ON DELETE CASCADE;
+ALTER TABLE ONLY public.student_concept_dkt_states
+    ADD CONSTRAINT student_concept_dkt_states_student_id_fkey FOREIGN KEY (student_id) REFERENCES public.users(id) ON DELETE CASCADE;
+ALTER TABLE ONLY public.student_learning_goals
+    ADD CONSTRAINT student_learning_goals_student_id_fkey FOREIGN KEY (student_id) REFERENCES public.users(id) ON DELETE CASCADE;
+ALTER TABLE ONLY public.student_learning_goals
+    ADD CONSTRAINT student_learning_goals_target_node_id_fkey FOREIGN KEY (target_node_id) REFERENCES public.knowledge_nodes(id) ON DELETE CASCADE;
 ALTER TABLE ONLY public.student_profiles
     ADD CONSTRAINT student_profiles_student_id_fkey FOREIGN KEY (student_id) REFERENCES public.users(id);
 ALTER TABLE ONLY public.user_favorites
@@ -674,5 +677,3 @@ ALTER TABLE ONLY public.user_favorites
     ADD CONSTRAINT user_favorites_user_id_fkey FOREIGN KEY (user_id) REFERENCES public.users(id) ON DELETE CASCADE;
 ALTER TABLE ONLY public.xidian_accounts
     ADD CONSTRAINT xidian_accounts_user_id_fkey FOREIGN KEY (user_id) REFERENCES public.users(id);
-ALTER TABLE ONLY public.xidian_snapshots
-    ADD CONSTRAINT xidian_snapshots_user_id_fkey FOREIGN KEY (user_id) REFERENCES public.users(id);

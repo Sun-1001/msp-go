@@ -126,4 +126,4 @@ backend/
 
 ## 数据与迁移
 
-PostgreSQL 是业务数据源，Redis 用于缓存和运行时辅助状态。数据库结构由 `backend/migrations/` 中的 Go forward migration 管理；历史 Alembic 链已退出当前工作区。迁移规则见 [Go 数据库迁移策略](../../backend/migrations/README.md)。
+PostgreSQL 是业务数据源，Redis 用于缓存和运行时辅助状态。数据库结构由 `backend/migrations/` 中的 Go forward migration 管理；首次生产基线按基础结构、AI 风控、站内通信和外部通知四个领域分组，发布后的变化只追加新版本。历史 Alembic 链和开发期增量链已退出当前工作区。迁移规则见 [Go 数据库迁移策略](../../backend/migrations/README.md)。
