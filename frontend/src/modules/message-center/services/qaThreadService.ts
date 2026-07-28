@@ -1,11 +1,13 @@
 import { apiClient } from '@/libs/http/apiClient';
 import { buildQueryString } from '@/modules/message-center/services/queryParams';
+import type { MessageAttachment } from '@/modules/message-center/attachmentTypes';
 
 export interface ThreadMessage {
   id: string;
   from: string;
   text: string;
   time: string;
+  attachments: MessageAttachment[];
 }
 
 export interface StudentThreadItem {
@@ -96,6 +98,7 @@ export const qaThreadService = {
     teacher_id?: string;
     content: string;
     source?: string;
+    attachments?: MessageAttachment[];
   }): Promise<ThreadDetail> {
     const { data } = await apiClient.post<ThreadDetail>(BASE, body);
     return data;
@@ -110,8 +113,8 @@ export const qaThreadService = {
     return data;
   },
 
-  async sendMessage(id: string, text: string): Promise<ThreadMessage> {
-    const { data } = await apiClient.post<ThreadMessage>(`${BASE}/${id}/messages`, { text });
+  async sendMessage(id: string, text: string, attachments: MessageAttachment[] = []): Promise<ThreadMessage> {
+    const { data } = await apiClient.post<ThreadMessage>(`${BASE}/${id}/messages`, { text, attachments });
     return data;
   },
 

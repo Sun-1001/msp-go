@@ -1,5 +1,6 @@
 import { apiClient } from '@/libs/http/apiClient';
 import { buildQueryString } from '@/modules/message-center/services/queryParams';
+import type { MessageAttachment } from '@/modules/message-center/attachmentTypes';
 
 export interface Message {
   id: string;
@@ -7,6 +8,7 @@ export interface Message {
   text: string;
   time: string;
   read_by_recipient?: boolean;
+  attachments: MessageAttachment[];
 }
 
 export interface ConversationItem {
@@ -78,13 +80,14 @@ export const conversationService = {
     target_id: string;
     subject?: string;
     initial_message?: string;
+    attachments?: MessageAttachment[];
   }): Promise<ConversationDetail> {
     const { data } = await apiClient.post<ConversationDetail>(BASE, body);
     return data;
   },
 
-  async sendMessage(id: string, text: string): Promise<Message> {
-    const { data } = await apiClient.post<Message>(`${BASE}/${id}/messages`, { text });
+  async sendMessage(id: string, text: string, attachments: MessageAttachment[] = []): Promise<Message> {
+    const { data } = await apiClient.post<Message>(`${BASE}/${id}/messages`, { text, attachments });
     return data;
   },
 

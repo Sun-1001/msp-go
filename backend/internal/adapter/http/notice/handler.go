@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	authapp "mathstudy/backend/internal/application/auth"
+	"mathstudy/backend/internal/application/messageattachment"
 	noticeapp "mathstudy/backend/internal/application/notice"
 	"mathstudy/backend/internal/domain/user"
 	"mathstudy/backend/internal/platform/httpauth"
@@ -21,8 +22,9 @@ import (
 type Service interface {
 	ListNotices(ctx context.Context, userID string, role user.Role, search string, status string, className string, page int, pageSize int) (noticeapp.ListResponse, error)
 	GetNotice(ctx context.Context, userID string, noticeID string, role user.Role) (any, error)
-	CreateNotice(ctx context.Context, teacherID string, classID string, title string, body string) (noticeapp.TeacherNoticeItem, error)
+	CreateNotice(ctx context.Context, teacherID string, classID string, title string, body string, attachments []messageattachment.Attachment) (noticeapp.TeacherNoticeItem, error)
 	ConfirmNotice(ctx context.Context, noticeID string, studentID string) error
+	RemindUnconfirmed(ctx context.Context, noticeID string, teacherID string) (noticeapp.ReminderResult, error)
 }
 
 // Authenticator decodes access tokens.
@@ -82,6 +84,7 @@ func (h *Handler) Register(mux *http.ServeMux, prefix string) {
 	mux.HandleFunc("GET "+prefix+"/{id}", h.getNotice)
 	mux.HandleFunc("GET "+prefix, h.listNotices)
 	mux.HandleFunc("POST "+prefix+"/{id}/confirm", h.confirmNotice)
+	mux.HandleFunc("POST "+prefix+"/{id}/remind", h.remindUnconfirmed)
 }
 
 const (
@@ -147,9 +150,10 @@ func (h *Handler) getNotice(w http.ResponseWriter, r *http.Request) {
 }
 
 type createNoticeRequest struct {
-	ClassID string `json:"class_id"`
-	Title   string `json:"title"`
-	Body    string `json:"body"`
+	ClassID     string                         `json:"class_id"`
+	Title       string                         `json:"title"`
+	Body        string                         `json:"body"`
+	Attachments []messageattachment.Attachment `json:"attachments"`
 }
 
 func (h *Handler) createNotice(w http.ResponseWriter, r *http.Request) {
@@ -168,7 +172,7 @@ func (h *Handler) createNotice(w http.ResponseWriter, r *http.Request) {
 		writeNoticeError(w, http.StatusUnprocessableEntity, "VALIDATION_ERROR", "class_id 和 title 不能为空")
 		return
 	}
-	response, err := h.service.CreateNotice(r.Context(), principal.UserID, req.ClassID, req.Title, req.Body)
+	response, err := h.service.CreateNotice(r.Context(), principal.UserID, req.ClassID, req.Title, req.Body, req.Attachments)
 	if err != nil {
 		if errors.Is(err, noticeapp.ErrInvalidInput) {
 			writeNoticeError(w, http.StatusUnprocessableEntity, "VALIDATION_ERROR", "通知标题、正文或班级 ID 长度或格式无效")
@@ -211,6 +215,32 @@ func (h *Handler) confirmNotice(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	httpjson.Write(w, http.StatusOK, map[string]string{"status": "confirmed"})
+}
+
+func (h *Handler) remindUnconfirmed(w http.ResponseWriter, r *http.Request) {
+	principal, ok := h.requireTeacher(w, r)
+	if !ok {
+		return
+	}
+	if !h.allowWrite(w, r, principal.UserID) {
+		return
+	}
+	response, err := h.service.RemindUnconfirmed(r.Context(), r.PathValue("id"), principal.UserID)
+	if err != nil {
+		switch {
+		case errors.Is(err, noticeapp.ErrInvalidInput):
+			writeNoticeError(w, http.StatusUnprocessableEntity, "VALIDATION_ERROR", "通知 ID 无效")
+		case errors.Is(err, noticeapp.ErrNotFound):
+			writeNoticeError(w, http.StatusNotFound, "NOT_FOUND", "通知不存在")
+		case errors.Is(err, noticeapp.ErrReminderUnavailable):
+			writeNoticeError(w, http.StatusConflict, "REMINDER_UNAVAILABLE", "消息提醒服务尚未启用")
+		default:
+			h.logError("remind unconfirmed notice recipients failed", err)
+			writeNoticeError(w, http.StatusInternalServerError, "INTERNAL_ERROR", "提醒未确认学生失败")
+		}
+		return
+	}
+	httpjson.Write(w, http.StatusOK, response)
 }
 
 func (h *Handler) allowWrite(w http.ResponseWriter, r *http.Request, userID string) bool {

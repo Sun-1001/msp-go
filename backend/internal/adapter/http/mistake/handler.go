@@ -23,6 +23,7 @@ type Service interface {
 	MarkAsMastered(context.Context, string, string) (mistakeapp.MarkAsMasteredResponse, error)
 	DeleteMistake(context.Context, string, string) (mistakeapp.DeleteResponse, error)
 	GetReviewExercise(context.Context, string, string, string) (mistakeapp.ReviewExerciseResponse, error)
+	GetReviewExerciseByAttempt(context.Context, string, string) (mistakeapp.ReviewExerciseResponse, error)
 }
 
 // Authenticator decodes Go/Python-compatible access tokens.
@@ -56,6 +57,7 @@ func (h *Handler) Register(mux *http.ServeMux, prefix string) {
 	mux.HandleFunc("GET "+prefix, h.list)
 	mux.HandleFunc("GET "+prefix+"/statistics", h.statistics)
 	mux.HandleFunc("GET "+prefix+"/review/next", h.reviewNext)
+	mux.HandleFunc("GET "+prefix+"/{attempt_id}/review", h.reviewByAttempt)
 	mux.HandleFunc("GET "+prefix+"/{attempt_id}", h.detail)
 	mux.HandleFunc("POST "+prefix+"/{attempt_id}/master", h.markAsMastered)
 	mux.HandleFunc("DELETE "+prefix+"/{attempt_id}", h.delete)
@@ -169,6 +171,24 @@ func (h *Handler) reviewNext(w http.ResponseWriter, r *http.Request) {
 		}
 		h.logMistakeError("get review exercise failed", err)
 		writeMistakeError(w, http.StatusInternalServerError, "INTERNAL_ERROR", "获取复习题目失败")
+		return
+	}
+	httpjson.Write(w, http.StatusOK, response)
+}
+
+func (h *Handler) reviewByAttempt(w http.ResponseWriter, r *http.Request) {
+	principal, ok := h.requirePrincipal(w, r)
+	if !ok {
+		return
+	}
+	response, err := h.service.GetReviewExerciseByAttempt(r.Context(), principal.UserID, r.PathValue("attempt_id"))
+	if err != nil {
+		if errors.Is(err, mistakeapp.ErrNotFound) {
+			writeMistakeError(w, http.StatusNotFound, "NOT_FOUND", "错题记录不存在或不可重做")
+			return
+		}
+		h.logMistakeError("get mistake review exercise failed", err)
+		writeMistakeError(w, http.StatusInternalServerError, "INTERNAL_ERROR", "获取错题重做内容失败")
 		return
 	}
 	httpjson.Write(w, http.StatusOK, response)

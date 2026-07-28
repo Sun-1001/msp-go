@@ -14,6 +14,7 @@ import (
 
 	authapp "mathstudy/backend/internal/application/auth"
 	uploadapp "mathstudy/backend/internal/application/upload"
+	"mathstudy/backend/internal/domain/user"
 	"mathstudy/backend/internal/platform/httpauth"
 	"mathstudy/backend/internal/platform/httpjson"
 	"mathstudy/backend/internal/platform/ratelimit"
@@ -31,6 +32,7 @@ const (
 type Service interface {
 	SaveImage(context.Context, io.Reader, uploadapp.FileMeta) (uploadapp.Response, error)
 	SaveResourceFile(context.Context, io.Reader, uploadapp.FileMeta) (uploadapp.Response, error)
+	SaveMessageFile(context.Context, io.Reader, uploadapp.FileMeta) (uploadapp.Response, error)
 }
 
 // Authenticator decodes Go/Python-compatible access tokens.
@@ -95,6 +97,7 @@ func NewHandler(logger *slog.Logger, service Service, auth Authenticator, option
 func (h *Handler) Register(mux *http.ServeMux, prefix string) {
 	mux.HandleFunc("POST "+prefix+"/image", h.image)
 	mux.HandleFunc("POST "+prefix+"/resource", h.resource)
+	mux.HandleFunc("POST "+prefix+"/message-file", h.messageFile)
 }
 
 func (h *Handler) image(w http.ResponseWriter, r *http.Request) {
@@ -117,6 +120,17 @@ func (h *Handler) resource(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	h.upload(w, r, uploadapp.MaxResourceSize, h.service.SaveResourceFile, "上传资源文件失败")
+}
+
+func (h *Handler) messageFile(w http.ResponseWriter, r *http.Request) {
+	principal, ok := h.requireMessageFileUploader(w, r)
+	if !ok {
+		return
+	}
+	if !h.allowUpload(w, r, principal) {
+		return
+	}
+	h.upload(w, r, uploadapp.MaxMessageFileSize, h.service.SaveMessageFile, "上传消息文件失败")
 }
 
 func (h *Handler) upload(w http.ResponseWriter, r *http.Request, maxSize int64, save func(context.Context, io.Reader, uploadapp.FileMeta) (uploadapp.Response, error), fallback string) {
@@ -159,6 +173,16 @@ func (h *Handler) requireTeacher(w http.ResponseWriter, r *http.Request) (authap
 	return httpauth.RequireBearerAccess(
 		w, r, h.auth.DecodeAccessToken, authapp.IsTeacherOrAdmin,
 		"权限不足，需要教师权限", writeUploadError,
+	)
+}
+
+func (h *Handler) requireMessageFileUploader(w http.ResponseWriter, r *http.Request) (authapp.Principal, bool) {
+	return httpauth.RequireBearerAccess(
+		w, r, h.auth.DecodeAccessToken,
+		func(principal authapp.Principal) bool {
+			return authapp.IsStudent(principal) || principal.Role == user.RoleTeacher
+		},
+		"权限不足，仅学生或教师可以上传消息文件", writeUploadError,
 	)
 }
 

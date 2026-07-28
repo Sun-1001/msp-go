@@ -5,6 +5,7 @@ import type { RouteConfig } from './index';
 const ExercisePage = lazy(() => import('@/pages/student/ExercisePage').then(m => ({ default: m.ExercisePage })));
 const SessionChatPage = lazy(() => import('@/pages/student/SessionChatPage').then(m => ({ default: m.default })));
 const MistakeBookPage = lazy(() => import('@/pages/student/MistakeBookPage').then(m => ({ default: m.MistakeBookPage })));
+const MistakeRedoPage = lazy(() => import('@/pages/student/MistakeRedoPage').then(m => ({ default: m.MistakeRedoPage })));
 const KnowledgeGraphPage = lazy(() => import('@/pages/student/KnowledgeGraphPage').then(m => ({ default: m.KnowledgeGraphPage })));
 const LearningPathPage = lazy(() => import('@/pages/student/LearningPathPage').then(m => ({ default: m.LearningPathPage })));
 const DiagnosisReportPage = lazy(() => import('@/pages/student/DiagnosisReportPage').then(m => ({ default: m.DiagnosisReportPage })));
@@ -23,6 +24,7 @@ export const studentRoutes: RouteConfig[] = [
   { path: '/session/:sessionId', component: SessionChatPage, title: '学习会话', protected: true, requiredRole: 'student' },
   { path: '/messages', component: MessageCenterPage, title: '消息中心', protected: true, requiredRole: 'student' },
   { path: '/mistake-book', component: MistakeBookPage, title: '错题本', protected: true, requiredRole: 'student' },
+  { path: '/mistake-book/:attemptId/redo', component: MistakeRedoPage, title: '错题重做', protected: true, requiredRole: 'student' },
   { path: '/knowledge-graph', component: KnowledgeGraphPage, title: '知识图谱', protected: true, requiredRole: 'student' },
   { path: '/learning-path', component: LearningPathPage, title: '学习路径', protected: true, requiredRole: 'student' },
   { path: '/diagnosis/:id', component: DiagnosisReportPage, title: '诊断报告', protected: true, requiredRole: 'student' },

@@ -8,6 +8,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
 
+	"mathstudy/backend/internal/application/messageattachment"
 	qathreadapp "mathstudy/backend/internal/application/qathread"
 	wechatreminder "mathstudy/backend/internal/application/wechatreminder"
 	"mathstudy/backend/internal/domain/user"
@@ -326,7 +327,7 @@ func (r QAThreadRepository) loadThreadMessages(ctx context.Context, threadID str
 		return nil, 0, "", err
 	}
 	rows, err := r.DB().Query(ctx, `
-		SELECT id, sender_role, text, created_at
+		SELECT id, sender_role, text, created_at, attachments
 		FROM public.question_thread_messages
 		WHERE thread_id = $1
 		ORDER BY created_at DESC, id DESC LIMIT $2 OFFSET $3`, threadID, pgPage.Limit, pgPage.Offset)
@@ -337,7 +338,12 @@ func (r QAThreadRepository) loadThreadMessages(ctx context.Context, threadID str
 	msgs := make([]qathreadapp.Message, 0)
 	for rows.Next() {
 		var m qathreadapp.Message
-		if err := rows.Scan(&m.ID, &m.From, &m.Text, &m.Time); err != nil {
+		var attachmentsJSON []byte
+		if err := rows.Scan(&m.ID, &m.From, &m.Text, &m.Time, &attachmentsJSON); err != nil {
+			return nil, 0, "", err
+		}
+		m.Attachments, err = messageattachment.Decode(attachmentsJSON)
+		if err != nil {
 			return nil, 0, "", err
 		}
 		m.Time = messageCenterWallTime(m.Time)
@@ -401,12 +407,19 @@ func extractTitle(content string, maxLen int) string {
 }
 
 // CreateThread creates a new question thread with the first message.
-func (r QAThreadRepository) CreateThread(ctx context.Context, studentID string, teacherID string, content string, source string, _ time.Time) (qathreadapp.ThreadDetail, error) {
+func (r QAThreadRepository) CreateThread(ctx context.Context, studentID string, teacherID string, content string, source string, attachments []messageattachment.Attachment, _ time.Time) (qathreadapp.ThreadDetail, error) {
 	threadID, err := newUUID()
 	if err != nil {
 		return qathreadapp.ThreadDetail{}, err
 	}
+	attachmentsJSON, err := messageattachment.Encode(attachments)
+	if err != nil {
+		return qathreadapp.ThreadDetail{}, err
+	}
 	title := extractTitle(content, 30)
+	if title == "" && len(attachments) > 0 {
+		title = "附件问题"
+	}
 	threadContext := content
 	firstMsg := content
 	if strings.Contains(content, "【原题】") {
@@ -507,16 +520,16 @@ func (r QAThreadRepository) CreateThread(ctx context.Context, studentID string, 
 	}
 	var messageAt time.Time
 	err = tx.QueryRow(ctx, `
-		INSERT INTO public.question_thread_messages (id, thread_id, sender_id, sender_role, text, created_at)
+		INSERT INTO public.question_thread_messages (id, thread_id, sender_id, sender_role, text, attachments, created_at)
 		VALUES (
-			$1, $2, $3, 'student', $4,
+			$1, $2, $3, 'student', $4, $5,
 			GREATEST(
 				clock_timestamp() AT TIME ZONE 'Asia/Shanghai',
-				$5::timestamp without time zone + interval '1 microsecond'
+				$6::timestamp without time zone + interval '1 microsecond'
 			)
 		)
 		RETURNING created_at`,
-		msgID, threadID, studentID, firstMsg, parentUpdatedAt,
+		msgID, threadID, studentID, firstMsg, string(attachmentsJSON), parentUpdatedAt,
 	).Scan(&messageAt)
 	if err != nil {
 		return qathreadapp.ThreadDetail{}, err
@@ -551,7 +564,7 @@ func (r QAThreadRepository) CreateThread(ctx context.Context, studentID string, 
 		Source:               source,
 		Context:              threadContext,
 		Status:               "待回复",
-		Messages:             []qathreadapp.Message{{ID: msgID, From: "student", Text: firstMsg, Time: messageCenterWallTime(messageAt)}},
+		Messages:             []qathreadapp.Message{{ID: msgID, From: "student", Text: firstMsg, Time: messageCenterWallTime(messageAt), Attachments: attachments}},
 		MessagesTotal:        1,
 		MessagesPage:         1,
 		MessagesSize:         50,
@@ -560,8 +573,12 @@ func (r QAThreadRepository) CreateThread(ctx context.Context, studentID string, 
 }
 
 // CreateThreadMessage adds a message to a thread and updates status.
-func (r QAThreadRepository) CreateThreadMessage(ctx context.Context, threadID string, senderID string, senderRole string, text string, _ time.Time) (qathreadapp.Message, error) {
+func (r QAThreadRepository) CreateThreadMessage(ctx context.Context, threadID string, senderID string, senderRole string, text string, attachments []messageattachment.Attachment, _ time.Time) (qathreadapp.Message, error) {
 	msgID, err := newUUID()
+	if err != nil {
+		return qathreadapp.Message{}, err
+	}
+	attachmentsJSON, err := messageattachment.Encode(attachments)
 	if err != nil {
 		return qathreadapp.Message{}, err
 	}
@@ -611,16 +628,16 @@ func (r QAThreadRepository) CreateThreadMessage(ctx context.Context, threadID st
 
 	var messageAt time.Time
 	err = tx.QueryRow(ctx, `
-		INSERT INTO public.question_thread_messages (id, thread_id, sender_id, sender_role, text, created_at)
+		INSERT INTO public.question_thread_messages (id, thread_id, sender_id, sender_role, text, attachments, created_at)
 		VALUES (
-			$1, $2, $3, $4, $5,
+			$1, $2, $3, $4, $5, $6,
 			GREATEST(
 				clock_timestamp() AT TIME ZONE 'Asia/Shanghai',
-				$6::timestamp without time zone + interval '1 microsecond'
+				$7::timestamp without time zone + interval '1 microsecond'
 			)
 		)
 		RETURNING created_at`,
-		msgID, threadID, senderID, senderRole, text, parentUpdatedAt,
+		msgID, threadID, senderID, senderRole, text, string(attachmentsJSON), parentUpdatedAt,
 	).Scan(&messageAt)
 	if err != nil {
 		return qathreadapp.Message{}, err
@@ -652,7 +669,7 @@ func (r QAThreadRepository) CreateThreadMessage(ctx context.Context, threadID st
 		return qathreadapp.Message{}, err
 	}
 
-	return qathreadapp.Message{ID: msgID, From: senderRole, Text: text, Time: messageCenterWallTime(messageAt)}, nil
+	return qathreadapp.Message{ID: msgID, From: senderRole, Text: text, Time: messageCenterWallTime(messageAt), Attachments: attachments}, nil
 }
 
 // UpdateThreadStatus updates a thread's status (teacher only).

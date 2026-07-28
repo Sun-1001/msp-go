@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { useLocation, useSearchParams } from 'react-router-dom';
 import { MainLayout } from '@/components/layout/MainLayout';
 import { Badge } from '@/components/ui/Badge';
@@ -6,22 +6,23 @@ import { Button } from '@/components/ui/Button';
 import { Card, CardContent } from '@/components/ui/Card';
 import { Input } from '@/components/ui/Input';
 import { Modal } from '@/components/ui/Modal';
-import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/Tabs';
+import { Tabs, TabsContent, TabsList } from '@/components/ui/Tabs';
 import { useToast } from '@/components/ui/Toast';
 import {
   Bell,
   Archive,
   ArrowLeft,
-  CheckCircle2,
+  Check,
   HelpCircle,
   Loader2,
   Megaphone,
   MessageSquare,
   Plus,
   Search,
-  Send,
+  SquareCheckBig,
   Users,
   UserRound,
+  X,
 } from 'lucide-react';
 import { cn } from '@/libs/utils/cn';
 import { formatRelativeTime } from '@/libs/utils/dateFormat';
@@ -52,20 +53,25 @@ import {
 } from '@/modules/message-center/components/useObservedVisibility';
 import {
   fetchLoadedPageRange,
+  fetchCompleteOffsetMessageHistory,
   fetchStableOffsetMessageWindow,
   hasMinimumGlobalSearchCharacters,
   latestPageChanged,
   mergeByID,
   mergeLatestPageByID,
   mergeMessagesByID,
-  selectListItemID,
+  matchesAllKeywords,
 } from '@/modules/message-center/pageUtils';
-import { TabCount } from '@/modules/message-center/TabCount';
+import { MessageCenterSideTab } from '@/modules/message-center/MessageCenterSideTab';
+import { MessageCenterFilterMenu } from '@/modules/message-center/MessageCenterFilterMenu';
+import { MessageAttachmentPicker } from '@/modules/message-center/MessageAttachmentPicker';
+import { MessageAttachments } from '@/modules/message-center/MessageAttachments';
+import { MessageComposer } from '@/modules/message-center/MessageComposer';
+import type { MessageAttachment } from '@/modules/message-center/attachmentTypes';
 
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
-const privateStatuses = ['全部', '未读', '待回复'];
 const noticeStatuses = ['全部', '有未确认', '全部确认'];
 const answerStatuses = ['全部', '待回复', '已回复', '已解决', '需跟进'];
 const listPageSize = 50;
@@ -74,6 +80,15 @@ interface ListLoadOptions {
   refreshLoadedPages?: boolean;
   signal?: AbortSignal;
 }
+
+type ConversationScrollIntent =
+  | { type: 'bottom'; conversationID: string }
+  | { type: 'preserve'; conversationID: string; scrollHeight: number; scrollTop: number };
+
+function isConversationViewportNearBottom(viewport: HTMLDivElement): boolean {
+  return viewport.scrollHeight - viewport.scrollTop - viewport.clientHeight <= 80;
+}
+
 const threadStatusVariant: Record<string, 'warning' | 'default' | 'success' | 'secondary'> = {
   '待回复': 'warning',
   '已回复': 'default',
@@ -145,18 +160,35 @@ export const MessageCenterPage: React.FC = () => {
   const [activeConv, setActiveConv] = useState<ConversationDetail | null>(null);
   const [activeConvId, setActiveConvId] = useState(initialTab === 'private' ? initialItemID : '');
   const activeConvIDRef = useRef(activeConvId);
-  const conversationListModeRef = useRef(false);
+  const conversationListModeRef = useRef(!activeConvId);
   const conversationDetailLoadingRef = useRef(Boolean(activeConvId));
   const [conversationDetailLoading, setConversationDetailLoading] = useState(Boolean(activeConvId));
   const [conversationDetailError, setConversationDetailError] = useState('');
   const [messageDrafts, setMessageDrafts] = useState<Record<string, string>>({});
   const messageDraft = activeConvId ? messageDrafts[activeConvId] ?? '' : '';
+  const [messageAttachmentDrafts, setMessageAttachmentDrafts] = useState<Record<string, MessageAttachment[]>>({});
+  const messageAttachments = useMemo(
+    () => activeConvId ? messageAttachmentDrafts[activeConvId] ?? [] : [],
+    [activeConvId, messageAttachmentDrafts],
+  );
+  const [messageUploading, setMessageUploading] = useState(false);
   const [sendingMsg, setSendingMsg] = useState(false);
   const [loadingOlderMessages, setLoadingOlderMessages] = useState(false);
   const loadingOlderMessagesRef = useRef(false);
+  const conversationViewportRef = useRef<HTMLDivElement>(null);
+  const conversationScrollIntentRef = useRef<ConversationScrollIntent | null>(
+    activeConvId ? { type: 'bottom', conversationID: activeConvId } : null,
+  );
+  const conversationSearchLoadingRef = useRef(false);
+  const [conversationSearchOpen, setConversationSearchOpen] = useState(false);
+  const [conversationMessageSearch, setConversationMessageSearch] = useState('');
+  const [loadingConversationSearch, setLoadingConversationSearch] = useState(false);
+  const [conversationSearchError, setConversationSearchError] = useState('');
   const [conversationPage, setConversationPage] = useState(1);
   const [conversationTotal, setConversationTotal] = useState(0);
-  const [privateStatus, setPrivateStatus] = useState('全部');
+  const [conversationSelectionMode, setConversationSelectionMode] = useState(false);
+  const [selectedConversationIds, setSelectedConversationIds] = useState<string[]>([]);
+  const [archivingConversations, setArchivingConversations] = useState(false);
 
   // new conversation
   const [studentContacts, setStudentContacts] = useState<Contact[]>([]);
@@ -165,6 +197,8 @@ export const MessageCenterPage: React.FC = () => {
   const [contactSearch, setContactSearch] = useState('');
   const [globalSearchResults, setGlobalSearchResults] = useState<Contact[]>([]);
   const [newConvDraft, setNewConvDraft] = useState('');
+  const [newConvAttachments, setNewConvAttachments] = useState<MessageAttachment[]>([]);
+  const [newConvUploading, setNewConvUploading] = useState(false);
   const [creatingConv, setCreatingConv] = useState(false);
 
   // notices
@@ -179,10 +213,13 @@ export const MessageCenterPage: React.FC = () => {
   const [noticeModalOpen, setNoticeModalOpen] = useState(false);
   const [noticeTitle, setNoticeTitle] = useState('');
   const [noticeBody, setNoticeBody] = useState('');
+  const [noticeAttachments, setNoticeAttachments] = useState<MessageAttachment[]>([]);
+  const [noticeUploading, setNoticeUploading] = useState(false);
   const [noticeClassID, setNoticeClassID] = useState('');
   const [publishing, setPublishing] = useState(false);
   const [noticePage, setNoticePage] = useState(1);
   const [noticeTotal, setNoticeTotal] = useState(0);
+  const [remindingNoticeID, setRemindingNoticeID] = useState('');
 
   // threads
   const [threads, setThreads] = useState<TeacherThreadItem[]>([]);
@@ -195,6 +232,12 @@ export const MessageCenterPage: React.FC = () => {
   const [answerStatus, setAnswerStatus] = useState('全部');
   const [answerDrafts, setAnswerDrafts] = useState<Record<string, string>>({});
   const answerDraft = activeThreadId ? answerDrafts[activeThreadId] ?? '' : '';
+  const [answerAttachmentDrafts, setAnswerAttachmentDrafts] = useState<Record<string, MessageAttachment[]>>({});
+  const answerAttachments = useMemo(
+    () => activeThreadId ? answerAttachmentDrafts[activeThreadId] ?? [] : [],
+    [activeThreadId, answerAttachmentDrafts],
+  );
+  const [answerUploading, setAnswerUploading] = useState(false);
   const [sendingAnswer, setSendingAnswer] = useState(false);
   const [updatingThreadStatusId, setUpdatingThreadStatusId] = useState('');
   const [loadingOlderThreadMessages, setLoadingOlderThreadMessages] = useState(false);
@@ -210,10 +253,10 @@ export const MessageCenterPage: React.FC = () => {
   const conversationTotalRef = useRef(conversationTotal);
   const noticeTotalRef = useRef(noticeTotal);
   const threadTotalRef = useRef(threadTotal);
-  const conversationQueryRef = useRef(`${serverSearch}\u0000${privateStatus}`);
+  const conversationQueryRef = useRef(serverSearch);
   const noticeQueryRef = useRef(`${serverSearch}\u0000${noticeStatus}`);
   const threadQueryRef = useRef(`${serverSearch}\u0000${answerStatus}`);
-  conversationQueryRef.current = `${serverSearch}\u0000${privateStatus}`;
+  conversationQueryRef.current = serverSearch;
   noticeQueryRef.current = `${serverSearch}\u0000${noticeStatus}`;
   threadQueryRef.current = `${serverSearch}\u0000${answerStatus}`;
   convItemsRef.current = convItems;
@@ -236,6 +279,7 @@ export const MessageCenterPage: React.FC = () => {
     setContactSearch('');
     setGlobalSearchResults([]);
     setNewConvDraft('');
+	setNewConvAttachments([]);
   }, []);
 
   const closeNewConversationModal = useCallback(() => {
@@ -251,14 +295,20 @@ export const MessageCenterPage: React.FC = () => {
   }, []);
 
   const activateConversation = useCallback((id: string): boolean => {
-    if (id) conversationListModeRef.current = false;
+    conversationListModeRef.current = !id;
+    conversationScrollIntentRef.current = id ? { type: 'bottom', conversationID: id } : null;
     if (activeConvIDRef.current === id) return false;
     activeConvIDRef.current = id;
     conversationRequest.current++;
     loadingOlderMessagesRef.current = false;
+    conversationSearchLoadingRef.current = false;
     setActiveConvId(id);
     setActiveConv(null);
     setLoadingOlderMessages(false);
+    setConversationSearchOpen(false);
+    setConversationMessageSearch('');
+    setLoadingConversationSearch(false);
+    setConversationSearchError('');
     conversationDetailLoadingRef.current = Boolean(id);
     setConversationDetailLoading(Boolean(id));
     setConversationDetailError('');
@@ -308,6 +358,15 @@ export const MessageCenterPage: React.FC = () => {
     return () => window.clearTimeout(timer);
   }, [searchTerm]);
 
+  useEffect(() => {
+    setConversationSelectionMode(false);
+    setSelectedConversationIds([]);
+  }, [serverSearch]);
+
+  useEffect(() => {
+    setSelectedConversationIds((current) => current.filter((id) => convItems.some((conversation) => conversation.id === id)));
+  }, [convItems]);
+
   // load real class names from class service on mount
   useEffect(() => {
     let active = true;
@@ -325,21 +384,20 @@ export const MessageCenterPage: React.FC = () => {
 
   // ---- load data ------------------------------------------------------
   const loadConversations = useCallback(async (page = 1, append = false, preserveLoadedPages = false, options: ListLoadOptions = {}) => {
-    const queryKey = `${serverSearch}\u0000${privateStatus}`;
+    const queryKey = serverSearch;
     if (queryKey !== conversationQueryRef.current) return true;
     const request = ++conversationListRequest.current;
     try {
-      const status = privateStatus === '全部' ? '' : privateStatus;
       let response = options.refreshLoadedPages
-        ? await fetchLoadedPageRange(conversationPage, listPageSize, (loadedPage) => conversationService.list({ search: serverSearch, status, page: loadedPage, page_size: listPageSize }, options.signal))
-        : await conversationService.list({ search: serverSearch, status, page, page_size: listPageSize }, options.signal);
+        ? await fetchLoadedPageRange(conversationPage, listPageSize, (loadedPage) => conversationService.list({ search: serverSearch, page: loadedPage, page_size: listPageSize }, options.signal))
+        : await conversationService.list({ search: serverSearch, page, page_size: listPageSize }, options.signal);
       if (options.signal?.aborted || request !== conversationListRequest.current || queryKey !== conversationQueryRef.current) return true;
       const refreshShiftedWindow = !options.refreshLoadedPages
         && preserveLoadedPages
         && conversationPage > 1
         && latestPageChanged(convItemsRef.current, response.items, conversationTotalRef.current, response.total);
       if (refreshShiftedWindow) {
-        response = await fetchLoadedPageRange(conversationPage, listPageSize, (loadedPage) => conversationService.list({ search: serverSearch, status, page: loadedPage, page_size: listPageSize }, options.signal));
+        response = await fetchLoadedPageRange(conversationPage, listPageSize, (loadedPage) => conversationService.list({ search: serverSearch, page: loadedPage, page_size: listPageSize }, options.signal));
         if (options.signal?.aborted || request !== conversationListRequest.current || queryKey !== conversationQueryRef.current) return true;
       }
       const replaceLoadedPages = options.refreshLoadedPages || refreshShiftedWindow;
@@ -366,37 +424,39 @@ export const MessageCenterPage: React.FC = () => {
       if (!append) {
         const deepLinkID = consumePendingDeepLink('private');
         if (deepLinkID) activateConversation(deepLinkID);
-        else if (!conversationListModeRef.current) {
-          if (!preserveLoadedPages && !replaceLoadedPages) activateConversation(selectListItemID(activeConvIDRef.current, items.map((item) => item.id), ''));
-          else if (!activeConvIDRef.current) activateConversation(items[0]?.id ?? '');
-        }
+        else if (conversationListModeRef.current && activeConvIDRef.current) activateConversation('');
       }
       return true;
     } catch { return options.signal?.aborted || request !== conversationListRequest.current || queryKey !== conversationQueryRef.current; }
-  }, [activateConversation, consumePendingDeepLink, conversationPage, serverSearch, privateStatus]);
+  }, [activateConversation, consumePendingDeepLink, conversationPage, serverSearch]);
 
-	const loadConvDetail = useCallback(async (id: string, preserveLoadedMessages = false) => {
-			const request = ++conversationRequest.current;
-			conversationDetailLoadingRef.current = true;
-			setConversationDetailLoading(true);
-			setConversationDetailError('');
-			try {
-				const d = await conversationService.get(id);
-				if (request === conversationRequest.current && activeConvIDRef.current === id) {
-					setActiveConv((current) => preserveLoadedMessages && current?.id === d.id ? {
-						...d,
-						messages: mergeMessagesByID(current.messages, d.messages),
-						messages_page: current.messages_page,
-						messages_page_size: current.messages_page_size,
-					} : d);
-					conversationDetailLoadingRef.current = false;
-					setConversationDetailLoading(false);
-				}
+  const loadConvDetail = useCallback(async (id: string, preserveLoadedMessages = false) => {
+    const request = ++conversationRequest.current;
+    conversationDetailLoadingRef.current = true;
+    if (!preserveLoadedMessages) {
+      conversationScrollIntentRef.current = { type: 'bottom', conversationID: id };
+      setConversationDetailLoading(true);
+    }
+    setConversationDetailError('');
+    try {
+      const d = await conversationService.get(id);
+      if (request === conversationRequest.current && activeConvIDRef.current === id) {
+        setActiveConv((current) => preserveLoadedMessages && current?.id === d.id ? {
+          ...d,
+          messages: mergeMessagesByID(current.messages, d.messages),
+          messages_page: current.messages_page,
+          messages_page_size: current.messages_page_size,
+        } : d);
+        conversationDetailLoadingRef.current = false;
+        setConversationDetailLoading(false);
+      }
       return true;
     } catch {
       if (request === conversationRequest.current && activeConvIDRef.current === id) {
-        setActiveConv(null);
-        setConversationDetailError('私信详情加载失败，请稍后重试。');
+        if (!preserveLoadedMessages) {
+          setActiveConv(null);
+          setConversationDetailError('私信详情加载失败，请稍后重试。');
+        }
         conversationDetailLoadingRef.current = false;
         setConversationDetailLoading(false);
       }
@@ -459,6 +519,7 @@ export const MessageCenterPage: React.FC = () => {
         target_id: selectedStudentId,
         subject: student?.scope ?? '',
         initial_message: newConvDraft.trim(),
+		attachments: newConvAttachments,
       });
       closeNewConversationModal();
       await loadConversations();
@@ -468,7 +529,7 @@ export const MessageCenterPage: React.FC = () => {
       toast({ type: 'error', title: '创建私信失败，请稍后重试' });
     }
     finally { setCreatingConv(false); }
-  }, [activateConversation, closeNewConversationModal, selectedStudentId, studentContacts, newConvDraft, creatingConv, loadConversations, toast]);
+  }, [activateConversation, closeNewConversationModal, selectedStudentId, studentContacts, newConvDraft, newConvAttachments, creatingConv, loadConversations, toast]);
 
   const loadNoticeDetail = useCallback(async (id: string): Promise<boolean> => {
     const request = ++noticeRequest.current;
@@ -529,8 +590,6 @@ export const MessageCenterPage: React.FC = () => {
       if (!append) {
         const deepLinkID = consumePendingDeepLink('notices');
         if (deepLinkID) activateNotice(deepLinkID);
-        else if (!preserveLoadedPages && !replaceLoadedPages) activateNotice(selectListItemID(activeNoticeIDRef.current, items.map((item) => item.id), ''));
-        else if (!activeNoticeIDRef.current) activateNotice(items[0]?.id ?? '');
       }
       return true;
     } catch { return options.signal?.aborted || request !== noticeListRequest.current || queryKey !== noticeQueryRef.current; }
@@ -570,8 +629,6 @@ export const MessageCenterPage: React.FC = () => {
       if (!append) {
         const deepLinkID = consumePendingDeepLink('answers');
         if (deepLinkID) activateThread(deepLinkID);
-        else if (!preserveLoadedPages && !replaceLoadedPages) activateThread(selectListItemID(activeThreadIDRef.current, items.map((item) => item.id), ''));
-        else if (!activeThreadIDRef.current) activateThread(items[0]?.id ?? '');
       }
       return true;
     } catch { return options.signal?.aborted || request !== threadListRequest.current || queryKey !== threadQueryRef.current; }
@@ -624,6 +681,19 @@ export const MessageCenterPage: React.FC = () => {
     setActiveConv(null);
     void loadConvDetail(activeConvId);
   }, [activeConvId, activeTab, loadConvDetail]);
+
+  useLayoutEffect(() => {
+    const viewport = conversationViewportRef.current;
+    const intent = conversationScrollIntentRef.current;
+    if (!viewport || !intent || !activeConv || activeConv.id !== activeConvId || intent.conversationID !== activeConv.id) return;
+
+    if (intent.type === 'bottom') {
+      viewport.scrollTop = viewport.scrollHeight;
+    } else {
+      viewport.scrollTop = Math.max(0, intent.scrollTop + viewport.scrollHeight - intent.scrollHeight);
+    }
+    if (conversationScrollIntentRef.current === intent) conversationScrollIntentRef.current = null;
+  }, [activeConv, activeConvId]);
 
   useEffect(() => {
     const throughMessageID = activeConv?.read_through_message_id;
@@ -708,7 +778,7 @@ export const MessageCenterPage: React.FC = () => {
 
   useEffect(() => {
     if (initialLoad) return;
-    const queryKey = `${activeTab}\u0000${serverSearch}\u0000${privateStatus}\u0000${noticeStatus}\u0000${answerStatus}`;
+    const queryKey = `${activeTab}\u0000${serverSearch}\u0000${noticeStatus}\u0000${answerStatus}`;
     if (lastListQuery.current === queryKey) return;
     lastListQuery.current = queryKey;
     let active = true;
@@ -722,17 +792,17 @@ export const MessageCenterPage: React.FC = () => {
     };
     void load();
     return () => { active = false; };
-  }, [activeTab, answerStatus, initialLoad, loadConversations, loadNotices, loadThreads, noticeStatus, privateStatus, serverSearch]);
+  }, [activeTab, answerStatus, initialLoad, loadConversations, loadNotices, loadThreads, noticeStatus, serverSearch]);
 
   const pollMessageCenter = useCallback(async (signal: AbortSignal) => {
-    if (signal.aborted || initialLoad || document.hidden || loadingMoreListRef.current || loadingOlderMessagesRef.current || loadingOlderThreadMessagesRef.current || conversationDetailLoadingRef.current || noticeDetailLoadingRef.current || threadDetailLoadingRef.current || threadStatusUpdateRef.current) return;
+    if (signal.aborted || initialLoad || document.hidden || loadingMoreListRef.current || loadingOlderMessagesRef.current || conversationSearchLoadingRef.current || loadingOlderThreadMessagesRef.current || conversationDetailLoadingRef.current || noticeDetailLoadingRef.current || threadDetailLoadingRef.current || threadStatusUpdateRef.current) return;
     await Promise.all([
       loadConversations(1, false, true, { signal }),
       loadNotices(1, false, true, { signal }),
       loadThreads(1, false, true, { signal }),
     ]);
     if (signal.aborted || noticeDetailLoadingRef.current) return;
-    if (document.hidden || loadingMoreListRef.current || loadingOlderMessagesRef.current || loadingOlderThreadMessagesRef.current || conversationDetailLoadingRef.current || threadDetailLoadingRef.current || threadStatusUpdateRef.current) return;
+    if (document.hidden || loadingMoreListRef.current || loadingOlderMessagesRef.current || conversationSearchLoadingRef.current || loadingOlderThreadMessagesRef.current || conversationDetailLoadingRef.current || threadDetailLoadingRef.current || threadStatusUpdateRef.current) return;
     const currentConversationID = activeConvIDRef.current;
     const currentNoticeID = activeNoticeIDRef.current;
     const currentThreadID = activeThreadIDRef.current;
@@ -741,6 +811,10 @@ export const MessageCenterPage: React.FC = () => {
       try {
         const detail = await conversationService.get(currentConversationID, undefined, signal);
         if (signal.aborted || document.hidden || request !== conversationRequest.current || activeConvIDRef.current !== currentConversationID) return;
+        const viewport = conversationViewportRef.current;
+        if (!conversationSearchOpen && viewport && isConversationViewportNearBottom(viewport)) {
+          conversationScrollIntentRef.current = { type: 'bottom', conversationID: currentConversationID };
+        }
         setActiveConv((current) => current?.id === detail.id ? {
           ...detail,
           messages: mergeMessagesByID(current.messages, detail.messages),
@@ -774,7 +848,7 @@ export const MessageCenterPage: React.FC = () => {
         } : current);
       } catch { /* retain the last successfully loaded detail */ }
     }
-  }, [activeTab, initialLoad, loadConversations, loadNotices, loadThreads]);
+  }, [activeTab, conversationSearchOpen, initialLoad, loadConversations, loadNotices, loadThreads]);
 
   useSerialPolling(pollMessageCenter, 30_000);
 
@@ -809,31 +883,44 @@ export const MessageCenterPage: React.FC = () => {
 
   const sendPrivateMessage = useCallback(async (e?: React.FormEvent<HTMLFormElement>) => {
     e?.preventDefault();
-    if (!activeConv || activeConv.id !== activeConvId || !messageDraft.trim() || sendingMsg) return;
+    if (!activeConv || activeConv.id !== activeConvId || (!messageDraft.trim() && messageAttachments.length === 0) || sendingMsg || messageUploading) return;
     const conversationID = activeConv.id;
     const submittedDraft = messageDraft;
+    const submittedAttachments = messageAttachments;
     conversationRequest.current++;
     conversationListRequest.current++;
     setSendingMsg(true);
     try {
-      await conversationService.sendMessage(conversationID, submittedDraft.trim());
+      await conversationService.sendMessage(conversationID, submittedDraft.trim(), submittedAttachments);
       setMessageDrafts((current) => {
         if ((current[conversationID] ?? '') !== submittedDraft) return current;
         const next = { ...current };
         delete next[conversationID];
         return next;
       });
-      if (activeConvIDRef.current === conversationID) await loadConvDetail(conversationID, true);
+      setMessageAttachmentDrafts((current) => {
+        if (current[conversationID] !== submittedAttachments) return current;
+        const next = { ...current };
+        delete next[conversationID];
+        return next;
+      });
+      if (activeConvIDRef.current === conversationID) {
+        conversationScrollIntentRef.current = { type: 'bottom', conversationID };
+        const refreshed = await loadConvDetail(conversationID, true);
+        if (!refreshed && conversationScrollIntentRef.current?.conversationID === conversationID) {
+          conversationScrollIntentRef.current = null;
+        }
+      }
       await loadConversations(1, false, false, { refreshLoadedPages: true });
       refreshMessageCenterSummaryAfterMutation();
     } catch {
       toast({ type: 'error', title: '发送私信失败，请稍后重试' });
     }
     finally { setSendingMsg(false); }
-  }, [activeConv, activeConvId, messageDraft, sendingMsg, loadConvDetail, loadConversations, toast]);
+  }, [activeConv, activeConvId, messageAttachments, messageDraft, messageUploading, sendingMsg, loadConvDetail, loadConversations, toast]);
 
   const loadOlderConversationMessages = useCallback(async () => {
-    if (!activeConv || activeConv.id !== activeConvIDRef.current || loadingOlderMessagesRef.current || activeConv.messages.length >= activeConv.messages_total) return;
+    if (!activeConv || activeConv.id !== activeConvIDRef.current || loadingOlderMessagesRef.current || conversationSearchLoadingRef.current || activeConv.messages.length >= activeConv.messages_total) return;
     const conversationID = activeConv.id;
     const request = ++conversationRequest.current;
     loadingOlderMessagesRef.current = true;
@@ -865,6 +952,15 @@ export const MessageCenterPage: React.FC = () => {
         messages = stableWindow.messages;
         messagesTotal = stableWindow.total;
       }
+      const viewport = conversationViewportRef.current;
+      if (viewport && activeConvIDRef.current === conversationID) {
+        conversationScrollIntentRef.current = {
+          type: 'preserve',
+          conversationID,
+          scrollHeight: viewport.scrollHeight,
+          scrollTop: viewport.scrollTop,
+        };
+      }
       setActiveConv((current) => current?.id === detail.id ? {
         ...detail,
         read_through_message_id: current.read_through_message_id,
@@ -882,6 +978,50 @@ export const MessageCenterPage: React.FC = () => {
     }
   }, [activeConv, toast]);
 
+  const toggleConversationSearch = useCallback(async () => {
+    if (!activeConv || activeConv.id !== activeConvIDRef.current || conversationSearchLoadingRef.current) return;
+    if (conversationSearchOpen) {
+      setConversationSearchOpen(false);
+      setConversationMessageSearch('');
+      setConversationSearchError('');
+      return;
+    }
+
+    const conversationID = activeConv.id;
+    setConversationSearchOpen(true);
+    setConversationMessageSearch('');
+    setConversationSearchError('');
+    if (activeConv.messages.length >= activeConv.messages_total) return;
+
+    const request = ++conversationRequest.current;
+    const pageSize = 100;
+    conversationSearchLoadingRef.current = true;
+    setLoadingConversationSearch(true);
+    try {
+      const history = await fetchCompleteOffsetMessageHistory(activeConv.messages_total, pageSize, async (messagesPage) => {
+        const detail = await conversationService.get(conversationID, { messages_page: messagesPage, messages_page_size: pageSize });
+        return { messages: detail.messages, messages_total: detail.messages_total };
+      });
+      if (request !== conversationRequest.current || activeConvIDRef.current !== conversationID) return;
+      setActiveConv((current) => current?.id === conversationID ? {
+        ...current,
+        messages: history.messages,
+        messages_total: history.total,
+        messages_page: history.page,
+        messages_page_size: pageSize,
+      } : current);
+    } catch {
+      if (request === conversationRequest.current && activeConvIDRef.current === conversationID) {
+        setConversationSearchError('完整聊天记录加载失败，当前仅搜索已加载的消息。');
+      }
+    } finally {
+      if (activeConvIDRef.current === conversationID) {
+        conversationSearchLoadingRef.current = false;
+        setLoadingConversationSearch(false);
+      }
+    }
+  }, [activeConv, conversationSearchOpen]);
+
   const loadMoreConversations = useCallback(async () => {
     if (loadingMoreListRef.current || convItems.length >= conversationTotal) return;
     loadingMoreListRef.current = true;
@@ -895,29 +1035,44 @@ export const MessageCenterPage: React.FC = () => {
     }
   }, [convItems.length, conversationTotal, loadConversations, conversationPage, toast]);
 
-  const archiveConversation = useCallback(async (id: string) => {
+  const archiveSelectedConversations = useCallback(async () => {
+    if (archivingConversations || selectedConversationIds.length === 0) return;
+    const requestedIDs = [...selectedConversationIds];
+    setArchivingConversations(true);
     conversationListRequest.current++;
     try {
-      await conversationService.archive(id);
-      setMessageDrafts((current) => {
-        if (!(id in current)) return current;
-        const nextDrafts = { ...current };
-        delete nextDrafts[id];
-        return nextDrafts;
-      });
-      clearItemDeepLink('private');
-      const next = convItems.find((conversation) => conversation.id !== id);
-      await loadConversations();
-      if (next) {
-        activateConversation(next.id);
-      } else {
-        activateConversation('');
+      const results = await Promise.allSettled(requestedIDs.map((id) => conversationService.archive(id)));
+      const archivedIDs = new Set(requestedIDs.filter((_, index) => results[index].status === 'fulfilled'));
+      const failedIDs = requestedIDs.filter((id) => !archivedIDs.has(id));
+
+      if (archivedIDs.size > 0) {
+        setMessageDrafts((current) => {
+          const nextDrafts = { ...current };
+          archivedIDs.forEach((id) => delete nextDrafts[id]);
+          return nextDrafts;
+        });
+        setMessageAttachmentDrafts((current) => {
+          const nextDrafts = { ...current };
+          archivedIDs.forEach((id) => delete nextDrafts[id]);
+          return nextDrafts;
+        });
+        clearItemDeepLink('private');
+        if (archivedIDs.has(activeConvIDRef.current)) activateConversation('');
+        await loadConversations();
+        refreshMessageCenterSummaryAfterMutation();
       }
-      refreshMessageCenterSummaryAfterMutation();
-    } catch {
-      toast({ type: 'error', title: '归档私信失败，请稍后重试' });
+
+      if (failedIDs.length > 0) {
+        setSelectedConversationIds(failedIDs);
+        toast({ type: 'error', title: archivedIDs.size > 0 ? '部分私信归档失败，请重试' : '归档私信失败，请稍后重试' });
+      } else {
+        setSelectedConversationIds([]);
+        setConversationSelectionMode(false);
+      }
+    } finally {
+      setArchivingConversations(false);
     }
-  }, [activateConversation, clearItemDeepLink, convItems, loadConversations, toast]);
+  }, [activateConversation, archivingConversations, clearItemDeepLink, loadConversations, selectedConversationIds, toast]);
 
   // ---- actions: notices -----------------------------------------------
   const publishNotice = useCallback(async () => {
@@ -929,9 +1084,10 @@ export const MessageCenterPage: React.FC = () => {
     noticeListRequest.current++;
     setPublishing(true);
     try {
-      await noticeService.create({ class_id: noticeClassID, title: noticeTitle.trim(), body: noticeBody.trim() });
+      await noticeService.create({ class_id: noticeClassID, title: noticeTitle.trim(), body: noticeBody.trim(), attachments: noticeAttachments });
       setNoticeTitle('');
       setNoticeBody('');
+      setNoticeAttachments([]);
       setNoticeModalOpen(false);
       await loadNotices(1, false, false, { refreshLoadedPages: true });
       refreshMessageCenterSummaryAfterMutation();
@@ -939,20 +1095,47 @@ export const MessageCenterPage: React.FC = () => {
       toast({ type: 'error', title: '发布通知失败，请稍后重试' });
     }
     finally { setPublishing(false); }
-  }, [noticeTitle, noticeBody, noticeClassID, publishing, loadNotices, toast]);
+  }, [noticeTitle, noticeBody, noticeAttachments, noticeClassID, publishing, loadNotices, toast]);
+
+  const remindUnconfirmedStudents = useCallback(async (noticeID: string) => {
+    if (remindingNoticeID) return;
+    setRemindingNoticeID(noticeID);
+    try {
+      const result = await noticeService.remind(noticeID);
+      if (result.count === 0) {
+        toast({ type: 'success', title: '该通知已由全部学生确认' });
+      } else if (result.queued_count > 0) {
+        toast({ type: 'success', title: `已为 ${result.count} 位未确认学生提交提醒` });
+      } else {
+        toast({ type: 'success', title: `${result.count} 位未确认学生的提醒已在队列中` });
+      }
+      if (activeNoticeIDRef.current === noticeID) await loadNoticeDetail(noticeID);
+    } catch {
+      toast({ type: 'error', title: '提醒未确认学生失败，请检查消息提醒服务是否已启用' });
+    } finally {
+      setRemindingNoticeID('');
+    }
+  }, [loadNoticeDetail, remindingNoticeID, toast]);
 
   // ---- actions: threads -----------------------------------------------
   const replyThread = useCallback(async () => {
-    if (!answerDraft.trim() || !activeThread || activeThread.id !== activeThreadId || sendingAnswer) return;
+    if ((!answerDraft.trim() && answerAttachments.length === 0) || !activeThread || activeThread.id !== activeThreadId || sendingAnswer || answerUploading) return;
     const threadID = activeThread.id;
     const submittedDraft = answerDraft;
+    const submittedAttachments = answerAttachments;
     threadRequest.current++;
     threadListRequest.current++;
     setSendingAnswer(true);
     try {
-      await qaThreadService.sendMessage(threadID, submittedDraft.trim());
+      await qaThreadService.sendMessage(threadID, submittedDraft.trim(), submittedAttachments);
       setAnswerDrafts((current) => {
         if ((current[threadID] ?? '') !== submittedDraft) return current;
+        const next = { ...current };
+        delete next[threadID];
+        return next;
+      });
+      setAnswerAttachmentDrafts((current) => {
+        if (current[threadID] !== submittedAttachments) return current;
         const next = { ...current };
         delete next[threadID];
         return next;
@@ -964,7 +1147,7 @@ export const MessageCenterPage: React.FC = () => {
       toast({ type: 'error', title: '发送答复失败，请稍后重试' });
     }
     finally { setSendingAnswer(false); }
-  }, [activeThread, answerDraft, activeThreadId, sendingAnswer, loadThreadDetail, loadThreads, toast]);
+  }, [activeThread, answerAttachments, answerDraft, answerUploading, activeThreadId, sendingAnswer, loadThreadDetail, loadThreads, toast]);
 
   const loadOlderThreadMessages = useCallback(async () => {
     if (!activeThread || activeThread.id !== activeThreadIDRef.current || loadingOlderThreadMessagesRef.current || activeThread.messages.length >= activeThread.messages_total) return;
@@ -1116,6 +1299,12 @@ export const MessageCenterPage: React.FC = () => {
     setListLoadError(loaded ? '' : '当前列表加载失败，请稍后重试。');
   }, [activeTab, loadConversations, loadNotices, loadThreads]);
 
+  const visibleConversationMessages = useMemo(() => {
+    if (!activeConv) return [];
+    if (!conversationSearchOpen || !conversationMessageSearch.trim()) return activeConv.messages;
+    return activeConv.messages.filter((message) => matchesAllKeywords(message.text, conversationMessageSearch));
+  }, [activeConv, conversationMessageSearch, conversationSearchOpen]);
+
   // ---- render ---------------------------------------------------------
   if (initialLoad && loading) {
     return (
@@ -1150,48 +1339,99 @@ export const MessageCenterPage: React.FC = () => {
           value={activeTab}
           keepMounted={false}
           onValueChange={(value) => {
+            if (value === 'notices') activateNotice('');
+            if (value === 'answers') activateThread('');
             setActiveTab(value);
             setSearchTerm('');
             setServerSearch('');
+            setConversationSelectionMode(false);
+            setSelectedConversationIds([]);
             setSearchParams({ tab: value });
           }}
         >
-          <TabsList className="mb-5 h-auto rounded-xl border border-surface-200 bg-white p-1.5 shadow-sm dark:border-surface-700 dark:bg-surface-900">
-            <TabsTrigger value="private" className="rounded-lg px-4 py-2"><MessageSquare className="mr-2 h-4 w-4" />私信<TabCount count={tabCounts.private} /></TabsTrigger>
-            <TabsTrigger value="notices" className="rounded-lg px-4 py-2"><Bell className="mr-2 h-4 w-4" />通知<TabCount count={tabCounts.notices} /></TabsTrigger>
-            <TabsTrigger value="answers" className="rounded-lg px-4 py-2"><HelpCircle className="mr-2 h-4 w-4" />答疑<TabCount count={tabCounts.answers} /></TabsTrigger>
-          </TabsList>
+          <div className="flex">
+            <TabsList
+              aria-label="消息分类"
+              aria-orientation="vertical"
+              className="h-auto min-h-[620px] w-12 shrink-0 flex-col justify-start gap-2 self-stretch rounded-xl border border-surface-200 bg-surface-100 p-1 shadow-sm sm:w-14 sm:p-2 dark:border-surface-700 dark:bg-surface-900"
+            >
+              <MessageCenterSideTab value="private" label="私信" count={tabCounts.private} icon={MessageSquare} />
+              <MessageCenterSideTab value="notices" label="通知" count={tabCounts.notices} icon={Bell} />
+              <MessageCenterSideTab value="answers" label="答疑" count={tabCounts.answers} icon={HelpCircle} />
+            </TabsList>
+
+            <div className="min-w-0 flex-1">
 
           {/* ============================================================ PRIVATE */}
           <TabsContent value="private" className="mt-0">
-            <div className="mb-4 flex flex-wrap gap-2">
-              {privateStatuses.map((s) => (
-                <Button key={s} variant={privateStatus === s ? 'primary' : 'outline'} size="sm" onClick={() => setPrivateStatus(s)}>{s}</Button>
-              ))}
-            </div>
-            <div className="grid min-h-[620px] grid-cols-1 gap-4 lg:grid-cols-[300px_1fr]">
-              <Card className={cn('overflow-hidden rounded-2xl border-surface-200/80 shadow-sm dark:border-surface-700', activeConvId ? 'hidden lg:block' : '')}>
-                <CardContent className="p-0">
-                  <div className="border-b border-surface-100 p-3 dark:border-surface-800">
-                    <Button className="w-full" onClick={() => { resetNewConversationForm(); void loadStudentContacts(); setNewConvOpen(true); }}>
-                      <Plus className="mr-2 h-4 w-4" />新建对话
+            <div className="grid h-[620px] min-h-0 grid-cols-1 lg:grid-cols-[300px_1fr]">
+              <Card className={cn('min-h-0 overflow-hidden rounded-2xl border-surface-200/80 shadow-sm dark:border-surface-700', activeConvId ? 'hidden lg:block' : '')}>
+                <CardContent className="flex h-full min-h-0 flex-col p-0">
+                  <div className="flex h-16 shrink-0 items-center gap-2 border-b border-surface-100 px-3 dark:border-surface-800">
+                    <h2 className="min-w-0 flex-1 truncate text-lg font-semibold text-surface-900 dark:text-surface-100">
+                      {conversationSelectionMode ? `已选择 ${selectedConversationIds.length}` : '历史会话'}
+                    </h2>
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="icon"
+                      className={cn('h-9 w-9 shrink-0', conversationSelectionMode && 'bg-primary-50 text-primary-600 dark:bg-primary-950/30 dark:text-primary-400')}
+                      onClick={() => {
+                        setConversationSelectionMode((current) => !current);
+                        setSelectedConversationIds([]);
+                      }}
+                      disabled={archivingConversations || convItems.length === 0}
+                      aria-label={conversationSelectionMode ? '退出多选' : '多选会话'}
+                      aria-pressed={conversationSelectionMode}
+                      title={conversationSelectionMode ? '退出多选' : '多选会话'}
+                    >
+                      <SquareCheckBig className="h-5 w-5" />
                     </Button>
+                    {conversationSelectionMode ? (
+                      <Button size="sm" className="shrink-0 px-3" onClick={archiveSelectedConversations} disabled={selectedConversationIds.length === 0 || archivingConversations}>
+                        {archivingConversations ? <Loader2 className="mr-1 h-4 w-4 animate-spin" /> : <Archive className="mr-1 h-4 w-4" />}
+                        归档
+                      </Button>
+                    ) : (
+                      <Button
+                        size="sm"
+                        className="shrink-0 px-3"
+                        onClick={() => { resetNewConversationForm(); void loadStudentContacts(); setNewConvOpen(true); }}
+                        aria-label="新建私信"
+                        title="新建私信"
+                      >
+                        <Plus className="mr-1 h-4 w-4" />
+                        新建
+                      </Button>
+                    )}
                   </div>
-                  {convItems.map((c) => (
-                    <button key={c.id} type="button" onClick={() => openConversation(c.id)}
-                      className={cn(
-                        'w-full border-b border-surface-100 px-3 py-2 text-left last:border-b-0 hover:bg-surface-50 dark:border-surface-800 dark:hover:bg-surface-800',
-                        activeConvId === c.id && 'bg-primary-50 dark:bg-primary-950/30',
-                      )}>
-                      <div className="flex items-center gap-3"><span className="grid h-10 w-10 shrink-0 place-items-center rounded-full border border-surface-300 bg-white text-surface-800 shadow-sm dark:border-surface-600 dark:bg-surface-900 dark:text-surface-100"><UserRound className="h-5 w-5" /></span><div className="min-w-0 flex-1"><div className="truncate text-sm font-medium text-surface-900 dark:text-surface-100">{c.studentName}</div><div className="mt-0.5 truncate text-xs text-surface-500 dark:text-surface-400">{c.lastMessage || c.className}</div></div><div className="flex shrink-0 flex-col items-end gap-1 text-xs"><span className="text-surface-400">{c.lastTime}</span><span className={c.unread ? 'text-red-500' : c.pendingReply ? 'text-amber-600 dark:text-amber-400' : 'text-emerald-600 dark:text-emerald-400'}>{c.unread ? '未读' : c.pendingReply ? '未回复' : '已回复'}</span></div></div>
-                    </button>
-                  ))}
-                  {convItems.length < conversationTotal && <Button variant="outline" size="sm" className="m-3 w-[calc(100%-1.5rem)]" onClick={loadMoreConversations} disabled={loadingMoreList !== ''}>{loadingMoreList === 'conversations' ? '加载中…' : '加载更多对话'}</Button>}
+                  <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain">
+                    {convItems.map((c) => (
+                      <button key={c.id} type="button" disabled={conversationSelectionMode && archivingConversations} onClick={() => {
+                        if (!conversationSelectionMode) {
+                          openConversation(c.id);
+                          return;
+                        }
+                        setSelectedConversationIds((current) => current.includes(c.id)
+                          ? current.filter((id) => id !== c.id)
+                          : [...current, c.id]);
+                      }}
+                        aria-pressed={conversationSelectionMode ? selectedConversationIds.includes(c.id) : undefined}
+                        className={cn(
+                          'w-full border-b border-surface-100 px-3 py-2 text-left last:border-b-0 hover:bg-surface-50 disabled:pointer-events-none disabled:opacity-60 dark:border-surface-800 dark:hover:bg-surface-800',
+                          !conversationSelectionMode && activeConvId === c.id && 'bg-primary-50 dark:bg-primary-950/30',
+                          conversationSelectionMode && selectedConversationIds.includes(c.id) && 'bg-primary-50 dark:bg-primary-950/30',
+                        )}>
+                        <div className="flex items-center gap-3"><span className={cn('grid shrink-0 place-items-center border', conversationSelectionMode ? 'h-5 w-5 rounded' : 'h-10 w-10 rounded-full shadow-sm', conversationSelectionMode && selectedConversationIds.includes(c.id) ? 'border-primary-600 bg-primary-600 text-white' : 'border-surface-300 bg-white text-surface-800 dark:border-surface-600 dark:bg-surface-900 dark:text-surface-100')}>{conversationSelectionMode ? selectedConversationIds.includes(c.id) && <Check className="h-3.5 w-3.5" /> : <UserRound className="h-5 w-5" />}</span><div className="min-w-0 flex-1"><div className="truncate text-sm font-medium text-surface-900 dark:text-surface-100">{c.studentName}</div><div className="mt-0.5 truncate text-xs text-surface-500 dark:text-surface-400">{c.lastMessage || c.className}</div></div><div className="flex shrink-0 flex-col items-end gap-1 text-xs"><span className="text-surface-400">{c.lastTime}</span><span className={c.unread ? 'text-red-500' : c.pendingReply ? 'text-amber-600 dark:text-amber-400' : 'text-emerald-600 dark:text-emerald-400'}>{c.unread ? '未读' : c.pendingReply ? '未回复' : '已回复'}</span></div></div>
+                      </button>
+                    ))}
+                    {convItems.length < conversationTotal && <Button variant="outline" size="sm" className="m-3 w-[calc(100%-1.5rem)]" onClick={loadMoreConversations} disabled={loadingMoreList !== ''}>{loadingMoreList === 'conversations' ? '加载中…' : '加载更多对话'}</Button>}
+                  </div>
                 </CardContent>
               </Card>
 
-              <Card className={cn('overflow-hidden rounded-2xl border-surface-200/80 shadow-sm dark:border-surface-700', !activeConvId ? 'hidden lg:block' : '')}>
-                <CardContent className="flex h-full flex-col p-0">
+              <Card className={cn('min-h-0 overflow-hidden rounded-2xl border-surface-200/80 shadow-sm dark:border-surface-700', !activeConvId ? 'hidden lg:block' : '')}>
+                <CardContent className="flex h-full min-h-0 flex-col p-0">
                   {conversationDetailLoading ? (
                     <div className="flex min-h-64 flex-col items-center justify-center gap-3 p-6">
                       <Loader2 className="h-6 w-6 animate-spin text-primary-500" />
@@ -1207,27 +1447,52 @@ export const MessageCenterPage: React.FC = () => {
                     </div>
                   ) : activeConv && activeConv.id === activeConvId ? (
                     <>
-                      <div ref={conversationDetailRef} className="border-b border-surface-100 p-3 sm:p-4 dark:border-surface-800">
+                      <div ref={conversationDetailRef} className="shrink-0 border-b border-surface-100 p-3 sm:p-4 dark:border-surface-800">
                         <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
                           <div>
                             <Button variant="ghost" size="sm" className="mb-2 -ml-2 lg:hidden" onClick={showConversationList}><ArrowLeft className="mr-1 h-4 w-4" />返回列表</Button>
                             <div className="text-lg font-semibold text-surface-900 dark:text-surface-100">{activeConv.student_name}</div>
                             <div className="text-sm text-surface-500 dark:text-surface-400">{activeConv.class_name}</div>
                           </div>
-                          <Button variant="outline" size="sm" onClick={() => archiveConversation(activeConv.id)}>
-                            <Archive className="mr-2 h-4 w-4" />归档
-                          </Button>
+                          <div className="flex w-full items-center justify-end gap-2 sm:w-auto">
+                            {conversationSearchOpen && (
+                              <div role="search" className="relative min-w-0 flex-1 sm:w-64 sm:flex-none">
+                                <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-surface-400" />
+                                <Input
+                                  autoFocus
+                                  value={conversationMessageSearch}
+                                  onChange={(event) => setConversationMessageSearch(event.target.value)}
+                                  placeholder={`查找与 ${activeConv.student_name} 的聊天内容`}
+                                  className={cn('pl-9 pr-16', conversationSearchError && 'border-amber-500 focus-visible:ring-amber-500')}
+                                />
+                                <span
+                                  title={conversationSearchError || undefined}
+                                  className={cn('pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-xs text-surface-500 dark:text-surface-400', conversationSearchError && 'text-amber-600 dark:text-amber-400')}
+                                >
+                                  {conversationSearchError ? '加载失败' : loadingConversationSearch ? '载入中…' : conversationMessageSearch.trim() ? `${visibleConversationMessages.length} 条` : `共 ${activeConv.messages_total} 条`}
+                                </span>
+                              </div>
+                            )}
+                            <Button variant="outline" size="sm" className="shrink-0" onClick={() => void toggleConversationSearch()} disabled={loadingConversationSearch}>
+                              {loadingConversationSearch ? <Loader2 className="h-4 w-4 animate-spin sm:mr-2" /> : conversationSearchOpen ? <X className="h-4 w-4 sm:mr-2" /> : <Search className="mr-2 h-4 w-4" />}
+                              <span className={conversationSearchOpen ? 'hidden sm:inline' : ''}>{loadingConversationSearch ? '载入记录' : conversationSearchOpen ? '关闭查找' : '查找聊天记录'}</span>
+                            </Button>
+                          </div>
                         </div>
                       </div>
-                      <div className="flex-1 space-y-4 overflow-y-auto p-5">
-                        {activeConv.messages.length < activeConv.messages_total && <Button variant="outline" size="sm" className="w-full" onClick={loadOlderConversationMessages} disabled={loadingOlderMessages}>{loadingOlderMessages ? '加载中…' : '加载更早消息'}</Button>}
-                        {activeConv.messages.map((msg) => (
+                      <div ref={conversationViewportRef} className="min-h-0 flex-1 space-y-4 overflow-y-auto overscroll-contain p-5">
+                        {!conversationSearchOpen && activeConv.messages.length < activeConv.messages_total && <Button variant="outline" size="sm" className="w-full" onClick={loadOlderConversationMessages} disabled={loadingOlderMessages}>{loadingOlderMessages ? '加载中…' : '加载更早消息'}</Button>}
+                        {conversationSearchOpen && conversationMessageSearch.trim() && !loadingConversationSearch && visibleConversationMessages.length === 0 && (
+                          <div className="flex min-h-32 items-center justify-center text-sm text-surface-500 dark:text-surface-400">未找到匹配的聊天记录</div>
+                        )}
+                        {visibleConversationMessages.map((msg) => (
                           <div key={msg.id} className="flex w-full">
                             <div className={cn('max-w-[80%]', msg.from === 'teacher' ? 'ml-auto text-right' : 'mr-auto')}>
-                              <div className={cn(
+                              {msg.text && <div className={cn(
                                 'inline-block rounded-lg px-4 py-3 text-sm',
                                 msg.from === 'teacher' ? 'bg-primary-600 text-white' : 'bg-surface-100 text-surface-800 dark:bg-surface-800 dark:text-surface-100',
-                              )}>{msg.text}</div>
+                              )}>{msg.text}</div>}
+                              <MessageAttachments attachments={msg.attachments} />
                               <div className={cn('mt-1 flex gap-2 text-xs text-surface-400', msg.from === 'teacher' ? 'justify-end' : 'justify-start')}>
                                 <span>{formatRelativeTime(msg.time)}</span>
                                 {msg.from === 'teacher' && <span>{msg.read_by_recipient ? '学生已读' : '学生未读'}</span>}
@@ -1236,26 +1501,33 @@ export const MessageCenterPage: React.FC = () => {
                           </div>
                         ))}
                       </div>
-                      <div className="border-t border-surface-100 p-4 dark:border-surface-800">
-                        <form className="flex gap-2" onSubmit={sendPrivateMessage}>
-                          <Input
-                            value={messageDraft}
-                            onChange={(e) => {
-                              const conversationID = activeConvIDRef.current;
-                              if (!conversationID) return;
-                              const value = e.target.value;
-                              setMessageDrafts((current) => ({ ...current, [conversationID]: value }));
-                            }}
-                            placeholder="输入给学生的回复"
-                          />
-                          <Button type="submit" size="icon" aria-label="发送" disabled={sendingMsg}>
-                            {sendingMsg ? <Loader2 className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />}
-                          </Button>
-                        </form>
+                      <div className="shrink-0 border-t border-surface-100 p-4 dark:border-surface-800">
+                        <MessageComposer
+                          key={activeConvId}
+                          value={messageDraft}
+                          onChange={(value) => {
+                            const conversationID = activeConvId;
+                            if (conversationID) setMessageDrafts((current) => ({ ...current, [conversationID]: value }));
+                          }}
+                          attachments={messageAttachments}
+                          onAttachmentsChange={(attachments) => {
+                            const conversationID = activeConvId;
+                            if (conversationID) setMessageAttachmentDrafts((current) => ({ ...current, [conversationID]: attachments }));
+                          }}
+                          onUploadingChange={setMessageUploading}
+                          onError={(message) => toast({ type: 'error', title: message })}
+                          onSend={sendPrivateMessage}
+                          placeholder="输入给学生的回复"
+                          disabled={sendingMsg}
+                          uploading={messageUploading}
+                          sending={sendingMsg}
+                        />
                       </div>
                     </>
                   ) : (
-                    <div className="flex h-full items-center justify-center p-8 text-sm text-surface-500 dark:text-surface-400">暂无可显示的私信对话</div>
+                    <div className="flex h-full items-center justify-center p-8 text-sm text-surface-500 dark:text-surface-400">
+                      {activeConvId ? '暂无可显示的私信对话' : '请选择联系人查看私信'}
+                    </div>
                   )}
                 </CardContent>
               </Card>
@@ -1264,40 +1536,39 @@ export const MessageCenterPage: React.FC = () => {
 
           {/* ============================================================ NOTICES */}
           <TabsContent value="notices" className="mt-0">
-            <div className="mb-4 flex flex-wrap items-center justify-between gap-2">
-              <div className="flex flex-wrap gap-2">
-                {noticeStatuses.map((s) => (
-                  <Button key={s} variant={noticeStatus === s ? 'primary' : 'outline'} size="sm" onClick={() => setNoticeStatus(s)}>{s}</Button>
-                ))}
-              </div>
-              <Button onClick={() => setNoticeModalOpen(true)}>
-                <Megaphone className="mr-2 h-4 w-4" />发布通知
-              </Button>
-            </div>
-            <div className="grid min-h-[620px] grid-cols-1 gap-4 lg:grid-cols-[360px_1fr]">
-              <Card className="overflow-hidden rounded-2xl border-surface-200/80 shadow-sm dark:border-surface-700">
-                <CardContent className="p-0">
-                  {notices.map((n) => (
-                    <button key={n.id} type="button" onClick={() => {
-                      clearItemDeepLink('notices');
-                      if (!activateNotice(n.id)) {
-                        setActiveNotice(null);
-                        void loadNoticeDetail(n.id);
-                      }
-                    }}
-                      className={cn(
-                        'w-full border-b border-surface-100 px-3 py-2 text-left last:border-b-0 hover:bg-surface-50 dark:border-surface-800 dark:hover:bg-surface-800',
-                        activeNoticeId === n.id && 'bg-primary-50 dark:bg-primary-950/30',
-                      )}>
-                      <div className="flex items-center gap-3"><span className="grid h-10 w-10 shrink-0 place-items-center rounded-full border border-surface-300 bg-white text-surface-800 dark:border-surface-600 dark:bg-surface-900 dark:text-surface-100"><Bell className="h-5 w-5" /></span><div className="min-w-0 flex-1"><div className="truncate text-sm font-medium text-surface-900 dark:text-surface-100">{n.title}</div><div className="mt-0.5 truncate text-xs text-surface-500 dark:text-surface-400">通知 · {n.class_name}</div></div><div className="flex shrink-0 flex-col items-end gap-1 text-xs"><span className="text-surface-400">{formatRelativeTime(n.published_at)}</span><span className={n.confirmed_count >= n.total_count ? 'text-emerald-600 dark:text-emerald-400' : 'text-amber-600 dark:text-amber-400'}>{n.confirmed_count}/{n.total_count} 已确认</span></div></div>
-                    </button>
-                  ))}
-                  {notices.length < noticeTotal && <Button variant="outline" size="sm" className="m-3 w-[calc(100%-1.5rem)]" onClick={loadMoreNotices} disabled={loadingMoreList !== ''}>{loadingMoreList === 'notices' ? '加载中…' : '加载更多通知'}</Button>}
+            <div className="grid grid-cols-1 lg:h-[620px] lg:min-h-0 lg:grid-cols-[360px_1fr]">
+              <Card className="flex max-h-[620px] min-h-0 flex-col overflow-hidden rounded-2xl border-surface-200/80 shadow-sm dark:border-surface-700">
+                <CardContent className="flex min-h-0 flex-1 flex-col p-0">
+                  <div className="flex h-16 shrink-0 items-center gap-2 border-b border-surface-100 px-3 dark:border-surface-800">
+                    <h2 className="min-w-0 flex-1 truncate text-lg font-semibold text-surface-900 dark:text-surface-100">历史通知</h2>
+                    <MessageCenterFilterMenu options={noticeStatuses} value={noticeStatus} onValueChange={setNoticeStatus} />
+                    <Button size="sm" className="shrink-0 px-3" onClick={() => setNoticeModalOpen(true)}>
+                      <Megaphone className="mr-1 h-4 w-4" />发布
+                    </Button>
+                  </div>
+                  <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain">
+                    {notices.map((n) => (
+                      <button key={n.id} type="button" onClick={() => {
+                        clearItemDeepLink('notices');
+                        if (!activateNotice(n.id)) {
+                          setActiveNotice(null);
+                          void loadNoticeDetail(n.id);
+                        }
+                      }}
+                        className={cn(
+                          'w-full border-b border-surface-100 px-3 py-2 text-left last:border-b-0 hover:bg-surface-50 dark:border-surface-800 dark:hover:bg-surface-800',
+                          activeNoticeId === n.id && 'bg-primary-50 dark:bg-primary-950/30',
+                        )}>
+                        <div className="flex items-center gap-3"><span className="grid h-10 w-10 shrink-0 place-items-center rounded-full border border-surface-300 bg-white text-surface-800 dark:border-surface-600 dark:bg-surface-900 dark:text-surface-100"><Bell className="h-5 w-5" /></span><div className="min-w-0 flex-1"><div className="truncate text-sm font-medium text-surface-900 dark:text-surface-100">{n.title}</div><div className="mt-0.5 truncate text-xs text-surface-500 dark:text-surface-400">通知 · {n.class_name}</div></div><div className="flex shrink-0 flex-col items-end gap-1 text-xs"><span className="text-surface-400">{formatRelativeTime(n.published_at)}</span><span className={n.confirmed_count >= n.total_count ? 'text-emerald-600 dark:text-emerald-400' : 'text-amber-600 dark:text-amber-400'}>{n.confirmed_count}/{n.total_count} 已确认</span></div></div>
+                      </button>
+                    ))}
+                    {notices.length < noticeTotal && <Button variant="outline" size="sm" className="m-3 w-[calc(100%-1.5rem)]" onClick={loadMoreNotices} disabled={loadingMoreList !== ''}>{loadingMoreList === 'notices' ? '加载中…' : '加载更多通知'}</Button>}
+                  </div>
                 </CardContent>
               </Card>
 
-              <Card className="rounded-2xl border-surface-200/80 shadow-sm dark:border-surface-700">
-                <CardContent className="p-6">
+              <Card className="flex max-h-[620px] min-h-0 flex-col overflow-hidden rounded-2xl border-surface-200/80 shadow-sm dark:border-surface-700">
+                <CardContent className="min-h-0 flex-1 overflow-y-auto overscroll-contain p-6">
                   {noticeDetailLoading ? (
                     <div className="flex min-h-48 items-center justify-center">
                       <Loader2 className="h-6 w-6 animate-spin text-primary-500" />
@@ -1319,9 +1590,16 @@ export const MessageCenterPage: React.FC = () => {
                         </Badge>
                       </div>
                       <p className="leading-7 text-surface-700 dark:text-surface-300">{activeNotice.body}</p>
+                      <MessageAttachments attachments={activeNotice.attachments} />
                       {activeNotice.unconfirmed_students.length > 0 && (
                         <div className="space-y-2">
-                          <div className="text-sm font-medium text-surface-700 dark:text-surface-300">未确认学生</div>
+                          <div className="flex items-center justify-between gap-3">
+                            <div className="text-sm font-medium text-surface-700 dark:text-surface-300">未确认学生</div>
+                            <Button variant="outline" size="sm" onClick={() => void remindUnconfirmedStudents(activeNotice.id)} disabled={Boolean(remindingNoticeID)}>
+                              {remindingNoticeID === activeNotice.id ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Bell className="mr-2 h-4 w-4" />}
+                              提醒未确认学生
+                            </Button>
+                          </div>
                           <div className="flex flex-wrap gap-2">
                             {activeNotice.unconfirmed_students.map((name) => (
                               <span key={name} className="inline-flex items-center gap-1 rounded-full bg-amber-100 px-2.5 py-1 text-xs text-amber-800 dark:bg-amber-950/30 dark:text-amber-200">
@@ -1333,7 +1611,9 @@ export const MessageCenterPage: React.FC = () => {
                       )}
                     </div>
                   ) : (
-                    <div className="flex min-h-48 items-center justify-center text-sm text-surface-500 dark:text-surface-400">暂无通知详情</div>
+                    <div className="flex h-full items-center justify-center p-8 text-sm text-surface-500 dark:text-surface-400">
+                      {activeNoticeId ? '暂无可显示的通知内容' : '请选择通知查看通知内容'}
+                    </div>
                   )}
                 </CardContent>
               </Card>
@@ -1342,29 +1622,30 @@ export const MessageCenterPage: React.FC = () => {
 
           {/* ============================================================ ANSWERS */}
           <TabsContent value="answers" className="mt-0">
-            <div className="mb-4 flex flex-wrap gap-2">
-              {answerStatuses.map((s) => (
-                <Button key={s} variant={answerStatus === s ? 'primary' : 'outline'} size="sm" onClick={() => setAnswerStatus(s)}>{s}</Button>
-              ))}
-            </div>
-            <div className="grid min-h-[620px] grid-cols-1 gap-4 lg:grid-cols-[360px_1fr]">
-              <Card className="overflow-hidden rounded-2xl border-surface-200/80 shadow-sm dark:border-surface-700">
-                <CardContent className="p-0">
-                  {threads.map((t) => (
-                    <button key={t.id} type="button" onClick={() => selectThread(t.id)}
-                      className={cn(
-                        'w-full border-b border-surface-100 px-3 py-2 text-left last:border-b-0 hover:bg-surface-50 dark:border-surface-800 dark:hover:bg-surface-800',
-                        activeThreadId === t.id && 'bg-primary-50 dark:bg-primary-950/30',
-                      )}>
-                      <div className="flex items-center gap-3"><span className="grid h-10 w-10 shrink-0 place-items-center rounded-full border border-surface-300 bg-white text-surface-800 dark:border-surface-600 dark:bg-surface-900 dark:text-surface-100"><HelpCircle className="h-5 w-5" /></span><div className="min-w-0 flex-1"><div className="truncate text-sm font-medium text-surface-900 dark:text-surface-100">{t.title}</div><div className="mt-0.5 truncate text-xs text-surface-500 dark:text-surface-400">{t.student_name} · {t.source}</div></div><div className="flex shrink-0 flex-col items-end gap-1 text-xs"><span className="text-surface-400">{formatRelativeTime(t.last_update)}</span><span className={t.status === '待回复' ? 'text-red-500' : t.status === '已回复' || t.status === '已解决' ? 'text-emerald-600 dark:text-emerald-400' : 'text-amber-600 dark:text-amber-400'}>{t.status}</span></div></div>
-                    </button>
-                  ))}
-                  {threads.length < threadTotal && <Button variant="outline" size="sm" className="m-3 w-[calc(100%-1.5rem)]" onClick={loadMoreThreads} disabled={loadingMoreList !== ''}>{loadingMoreList === 'threads' ? '加载中…' : '加载更多答疑'}</Button>}
+            <div className="grid grid-cols-1 lg:h-[620px] lg:min-h-0 lg:grid-cols-[360px_1fr]">
+              <Card className="flex max-h-[620px] min-h-0 flex-col overflow-hidden rounded-2xl border-surface-200/80 shadow-sm dark:border-surface-700">
+                <CardContent className="flex min-h-0 flex-1 flex-col p-0">
+                  <div className="flex h-16 shrink-0 items-center gap-2 border-b border-surface-100 px-3 dark:border-surface-800">
+                    <h2 className="min-w-0 flex-1 truncate text-lg font-semibold text-surface-900 dark:text-surface-100">历史答疑</h2>
+                    <MessageCenterFilterMenu options={answerStatuses} value={answerStatus} onValueChange={setAnswerStatus} subject="答疑" />
+                  </div>
+                  <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain">
+                    {threads.map((t) => (
+                      <button key={t.id} type="button" onClick={() => selectThread(t.id)}
+                        className={cn(
+                          'w-full border-b border-surface-100 px-3 py-2 text-left last:border-b-0 hover:bg-surface-50 dark:border-surface-800 dark:hover:bg-surface-800',
+                          activeThreadId === t.id && 'bg-primary-50 dark:bg-primary-950/30',
+                        )}>
+                        <div className="flex items-center gap-3"><span className="grid h-10 w-10 shrink-0 place-items-center rounded-full border border-surface-300 bg-white text-surface-800 dark:border-surface-600 dark:bg-surface-900 dark:text-surface-100"><HelpCircle className="h-5 w-5" /></span><div className="min-w-0 flex-1"><div className="truncate text-sm font-medium text-surface-900 dark:text-surface-100">{t.title}</div><div className="mt-0.5 truncate text-xs text-surface-500 dark:text-surface-400">{t.student_name} · {t.source}</div></div><div className="flex shrink-0 flex-col items-end gap-1 text-xs"><span className="text-surface-400">{formatRelativeTime(t.last_update)}</span><span className={t.status === '待回复' ? 'text-red-500' : t.status === '已回复' || t.status === '已解决' ? 'text-emerald-600 dark:text-emerald-400' : 'text-amber-600 dark:text-amber-400'}>{t.status}</span></div></div>
+                      </button>
+                    ))}
+                    {threads.length < threadTotal && <Button variant="outline" size="sm" className="m-3 w-[calc(100%-1.5rem)]" onClick={loadMoreThreads} disabled={loadingMoreList !== ''}>{loadingMoreList === 'threads' ? '加载中…' : '加载更多答疑'}</Button>}
+                  </div>
                 </CardContent>
               </Card>
 
-              <Card className="rounded-2xl border-surface-200/80 shadow-sm dark:border-surface-700">
-                <CardContent className="p-6">
+              <Card className="flex max-h-[620px] min-h-0 flex-col overflow-hidden rounded-2xl border-surface-200/80 shadow-sm dark:border-surface-700">
+                <CardContent className="min-h-0 flex-1 overflow-y-auto overscroll-contain p-6">
                   {threadDetailLoading ? (
                     <div className="flex min-h-48 items-center justify-center">
                       <Loader2 className="h-6 w-6 animate-spin text-primary-500" />
@@ -1414,37 +1695,46 @@ export const MessageCenterPage: React.FC = () => {
                               </span>
                             </div>
                             <div className="text-sm text-surface-700 dark:text-surface-300">{msg.text}</div>
+                            <MessageAttachments attachments={msg.attachments} />
                             <div className="mt-2 text-xs text-surface-400">{formatRelativeTime(msg.time)}</div>
                           </div>
                         ))}
                       </div>
-                      <div className="space-y-2 border-t border-surface-100 pt-4 dark:border-surface-800">
-                        <textarea
+                      <div className="border-t border-surface-100 pt-4 dark:border-surface-800">
+                        <MessageComposer
+                          key={activeThreadId}
                           value={answerDraft}
-                          onChange={(e) => {
-                            const threadID = activeThreadIDRef.current;
-                            if (!threadID) return;
-                            const value = e.target.value;
-                            setAnswerDrafts((current) => ({ ...current, [threadID]: value }));
+                          onChange={(value) => {
+                            const threadID = activeThreadId;
+                            if (threadID) setAnswerDrafts((current) => ({ ...current, [threadID]: value }));
                           }}
+                          attachments={answerAttachments}
+                          onAttachmentsChange={(attachments) => {
+                            const threadID = activeThreadId;
+                            if (threadID) setAnswerAttachmentDrafts((current) => ({ ...current, [threadID]: attachments }));
+                          }}
+                          onUploadingChange={setAnswerUploading}
+                          onError={(message) => toast({ type: 'error', title: message })}
+                          onSend={replyThread}
                           placeholder="回复这位同学"
-                          className="min-h-24 w-full rounded-md border border-surface-200 bg-white px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary-500 dark:border-surface-700 dark:bg-surface-800 dark:text-surface-100"
+                          sendLabel="回复"
+                          disabled={sendingAnswer}
+                          uploading={answerUploading}
+                          sending={sendingAnswer}
                         />
-                        <div className="flex justify-end">
-                          <Button onClick={replyThread} disabled={sendingAnswer}>
-                            {sendingAnswer ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <CheckCircle2 className="mr-2 h-4 w-4" />}
-                            回复
-                          </Button>
-                        </div>
                       </div>
                     </div>
                   ) : (
-                    <div className="flex h-full items-center justify-center p-8 text-sm text-surface-500 dark:text-surface-400">暂无提问详情</div>
+                    <div className="flex h-full items-center justify-center p-8 text-sm text-surface-500 dark:text-surface-400">
+                      {activeThreadId ? '暂无可显示的答疑内容' : '请选择答疑查看内容'}
+                    </div>
                   )}
                 </CardContent>
               </Card>
             </div>
           </TabsContent>
+            </div>
+          </div>
         </Tabs>
 
         {/* New conversation modal */}
@@ -1490,9 +1780,16 @@ export const MessageCenterPage: React.FC = () => {
               placeholder="可以先写一句要发给学生的消息"
               className="min-h-28 w-full rounded-md border border-surface-200 bg-white px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary-500 dark:border-surface-700 dark:bg-surface-800 dark:text-surface-100"
             />
+            <MessageAttachmentPicker
+              value={newConvAttachments}
+              onChange={setNewConvAttachments}
+              onUploadingChange={setNewConvUploading}
+              onError={(message) => toast({ type: 'error', title: message })}
+              disabled={creatingConv}
+            />
             <div className="flex justify-end gap-2">
               <Button variant="outline" onClick={closeNewConversationModal}>取消</Button>
-              <Button onClick={createConversation} disabled={!selectedStudentId || creatingConv}>
+              <Button onClick={createConversation} disabled={!selectedStudentId || creatingConv || newConvUploading}>
                 {creatingConv ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}创建对话
               </Button>
             </div>
@@ -1515,9 +1812,16 @@ export const MessageCenterPage: React.FC = () => {
               placeholder="通知正文"
               className="min-h-32 w-full rounded-md border border-surface-200 bg-white px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary-500 dark:border-surface-700 dark:bg-surface-800 dark:text-surface-100"
             />
+            <MessageAttachmentPicker
+              value={noticeAttachments}
+              onChange={setNoticeAttachments}
+              onUploadingChange={setNoticeUploading}
+              onError={(message) => toast({ type: 'error', title: message })}
+              disabled={publishing}
+            />
             <div className="flex justify-end gap-2">
               <Button variant="outline" onClick={() => setNoticeModalOpen(false)}>取消</Button>
-              <Button onClick={publishNotice} disabled={publishing || !noticeClassID}>
+              <Button onClick={publishNotice} disabled={publishing || noticeUploading || !noticeClassID}>
                 {publishing ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}发布
               </Button>
             </div>

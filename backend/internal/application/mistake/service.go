@@ -37,6 +37,11 @@ type Repository interface {
 	DeleteAttempt(context.Context, string, string) (bool, error)
 }
 
+// ReviewEligibility checks whether an owned mistake's exercise remains submittable.
+type ReviewEligibility interface {
+	CanSubmitExercise(context.Context, string, string) (bool, error)
+}
+
 // ListFilter stores database-level mistake filters.
 type ListFilter struct {
 	ErrorType     string
@@ -289,22 +294,28 @@ type ReviewExerciseResponse struct {
 
 // ReviewExercise stores recommended exercise data.
 type ReviewExercise struct {
-	ID              string   `json:"id"`
-	Title           string   `json:"title"`
-	Content         string   `json:"content"`
-	Difficulty      float64  `json:"difficulty"`
-	Type            string   `json:"type"`
-	KnowledgePoints []string `json:"knowledge_points"`
-	HintsAvailable  bool     `json:"hints_available"`
+	ID                   string   `json:"id"`
+	Title                string   `json:"title"`
+	Content              string   `json:"content"`
+	Difficulty           float64  `json:"difficulty"`
+	Type                 string   `json:"type"`
+	KnowledgePoints      []string `json:"knowledge_points"`
+	KnowledgePointNames  []string `json:"knowledge_point_names"`
+	HintsAvailable       bool     `json:"hints_available"`
+	EstimatedTimeSeconds int      `json:"estimated_time_seconds"`
+	Options              []string `json:"options"`
 }
 
 // ReviewContext stores context for the recommended review item.
 type ReviewContext struct {
-	IsReview          bool    `json:"is_review"`
-	OriginalAttemptID string  `json:"original_attempt_id"`
-	PreviousErrorType *string `json:"previous_error_type"`
-	MasteryBefore     float64 `json:"mastery_before"`
-	ErrorCount        int     `json:"error_count"`
+	IsReview            bool    `json:"is_review"`
+	OriginalAttemptID   string  `json:"original_attempt_id"`
+	PreviousAnswer      string  `json:"previous_answer"`
+	PreviousErrorType   *string `json:"previous_error_type"`
+	PreviousExplanation string  `json:"previous_explanation"`
+	PreviousSuggestion  string  `json:"previous_suggestion"`
+	MasteryBefore       float64 `json:"mastery_before"`
+	ErrorCount          int     `json:"error_count"`
 }
 
 // DeleteResponse is the Python-compatible DELETE /mistakes/{attempt_id} response.
@@ -315,16 +326,20 @@ type DeleteResponse struct {
 
 // Service implements mistake book use cases.
 type Service struct {
-	repo Repository
-	now  func() time.Time
+	repo              Repository
+	reviewEligibility ReviewEligibility
+	now               func() time.Time
 }
 
 // NewService creates a mistake book service.
-func NewService(repo Repository) (*Service, error) {
+func NewService(repo Repository, reviewEligibility ReviewEligibility) (*Service, error) {
 	if repo == nil {
 		return nil, errors.New("mistake repository is nil")
 	}
-	return &Service{repo: repo, now: time.Now}, nil
+	if reviewEligibility == nil {
+		return nil, errors.New("mistake review eligibility is nil")
+	}
+	return &Service{repo: repo, reviewEligibility: reviewEligibility, now: time.Now}, nil
 }
 
 // GetMistakes returns paginated mistakes with filtering and sorting.
@@ -527,6 +542,41 @@ func (s *Service) GetReviewExercise(ctx context.Context, userID string, focusCon
 	return toReviewResponse(best), nil
 }
 
+// GetReviewExerciseByAttempt returns the exact incorrect attempt selected by the student.
+func (s *Service) GetReviewExerciseByAttempt(ctx context.Context, userID string, attemptID string) (ReviewExerciseResponse, error) {
+	row, ok, err := s.repo.GetMistakeByAttempt(ctx, userID, strings.TrimSpace(attemptID))
+	if err != nil {
+		return ReviewExerciseResponse{}, err
+	}
+	if !ok || row.Attempt.IsCorrect || row.Attempt.SubmittedAt == nil {
+		return ReviewExerciseResponse{}, ErrNotFound
+	}
+	canSubmit, err := s.reviewEligibility.CanSubmitExercise(ctx, userID, row.Content.ID)
+	if err != nil {
+		return ReviewExerciseResponse{}, err
+	}
+	if !canSubmit {
+		return ReviewExerciseResponse{}, ErrNotFound
+	}
+	profile, _, err := s.repo.GetProfile(ctx, userID)
+	if err != nil {
+		return ReviewExerciseResponse{}, err
+	}
+	errorCounts, err := s.repo.ErrorCountsByContent(ctx, userID)
+	if err != nil {
+		return ReviewExerciseResponse{}, err
+	}
+	errorCount := errorCounts[row.Content.ID]
+	if errorCount == 0 {
+		errorCount = 1
+	}
+	return toReviewResponse(reviewCandidate{
+		row:        row,
+		avgMastery: averageMastery(row.Content.ConceptIDs, profile.MasteryVector),
+		errorCount: errorCount,
+	}), nil
+}
+
 func normalizeListQuery(query ListQuery) ListQuery {
 	if query.Page < 1 {
 		query.Page = 1
@@ -659,20 +709,26 @@ func toReviewResponse(candidate reviewCandidate) ReviewExerciseResponse {
 	row := candidate.row
 	return ReviewExerciseResponse{
 		Exercise: ReviewExercise{
-			ID:              row.Content.ID,
-			Title:           nonEmpty(row.Content.Title, "无标题"),
-			Content:         row.Content.Body,
-			Difficulty:      row.Content.Difficulty,
-			Type:            contentTypeValue(row.Content.Type),
-			KnowledgePoints: sliceutil.CloneStrings(row.Content.ConceptIDs),
-			HintsAvailable:  len(metautil.StringSlice(row.Content.Meta, "hints")) > 0,
+			ID:                   row.Content.ID,
+			Title:                nonEmpty(row.Content.Title, "无标题"),
+			Content:              row.Content.Body,
+			Difficulty:           row.Content.Difficulty,
+			Type:                 reviewQuestionType(row.Content),
+			KnowledgePoints:      sliceutil.CloneStrings(row.Content.ConceptIDs),
+			KnowledgePointNames:  metautil.StringSlice(row.Content.Meta, "knowledge_point_names"),
+			HintsAvailable:       len(metautil.StringSlice(row.Content.Meta, "hints")) > 0,
+			EstimatedTimeSeconds: metautil.IntDefault(row.Content.Meta, "estimated_time_seconds", 300),
+			Options:              metautil.OptionalStringSlice(row.Content.Meta, "options"),
 		},
 		Context: ReviewContext{
-			IsReview:          true,
-			OriginalAttemptID: row.Attempt.ID,
-			PreviousErrorType: ptrutil.Clone(row.Diagnosis.ErrorType),
-			MasteryBefore:     candidate.avgMastery,
-			ErrorCount:        candidate.errorCount,
+			IsReview:            true,
+			OriginalAttemptID:   row.Attempt.ID,
+			PreviousAnswer:      row.Attempt.StudentAnswer,
+			PreviousErrorType:   ptrutil.Clone(row.Diagnosis.ErrorType),
+			PreviousExplanation: row.Diagnosis.Explanation,
+			PreviousSuggestion:  row.Diagnosis.Suggestion,
+			MasteryBefore:       candidate.avgMastery,
+			ErrorCount:          candidate.errorCount,
 		},
 	}
 }
@@ -849,21 +905,13 @@ func compareFloat(left float64, right float64) int {
 	}
 }
 
-func contentTypeValue(value string) string {
-	switch strings.ToUpper(strings.TrimSpace(value)) {
-	case "PROBLEM":
-		return "problem"
-	case "NOTE":
-		return "note"
-	case "VIDEO":
-		return "video"
-	case "ARTICLE":
-		return "article"
+func reviewQuestionType(content Content) string {
+	questionType := strings.ToLower(strings.TrimSpace(metautil.String(content.Meta, "type")))
+	switch questionType {
+	case "multiple_choice", "short_answer", "proof":
+		return questionType
 	default:
-		if strings.TrimSpace(value) == "" {
-			return "short_answer"
-		}
-		return strings.ToLower(value)
+		return "short_answer"
 	}
 }
 

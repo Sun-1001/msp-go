@@ -2,12 +2,12 @@ package postgres
 
 import (
 	"context"
-	"encoding/json"
 	"strings"
 	"time"
 
 	"github.com/jackc/pgx/v5"
 
+	"mathstudy/backend/internal/application/messageattachment"
 	noticeapp "mathstudy/backend/internal/application/notice"
 	"mathstudy/backend/internal/domain/user"
 )
@@ -220,19 +220,18 @@ func (r NoticeRepository) getStudentNotice(ctx context.Context, noticeID string,
 		return nil, false, err
 	}
 	item.PublishedAt = messageCenterWallTime(item.PublishedAt)
-	if len(attachmentsJSON) > 0 {
-		_ = json.Unmarshal(attachmentsJSON, &item.Attachments)
-	}
-	if item.Attachments == nil {
-		item.Attachments = []string{}
+	item.Attachments, err = messageattachment.Decode(attachmentsJSON)
+	if err != nil {
+		return nil, false, err
 	}
 	return item, true, nil
 }
 
 func (r NoticeRepository) getTeacherNotice(ctx context.Context, noticeID string, teacherID string) (any, bool, error) {
 	var item noticeapp.TeacherNoticeItem
+	var attachmentsJSON []byte
 	err := r.DB().QueryRow(ctx, `
-			SELECT n.id, n.class_name, n.title, n.body, n.created_at,
+			SELECT n.id, n.class_name, n.title, n.body, n.created_at, n.attachments,
 				COALESCE(recipient_counts.confirmed_count, 0),
 				COALESCE(recipient_counts.total_count, 0),
 				COALESCE(recipient_counts.unconfirmed_students, ARRAY[]::character varying[])
@@ -249,7 +248,7 @@ func (r NoticeRepository) getTeacherNotice(ctx context.Context, noticeID string,
 		) recipient_counts ON true
 		WHERE n.id = $1 AND n.teacher_id = $2`,
 		noticeID, teacherID,
-	).Scan(&item.ID, &item.ClassName, &item.Title, &item.Body, &item.PublishedAt,
+	).Scan(&item.ID, &item.ClassName, &item.Title, &item.Body, &item.PublishedAt, &attachmentsJSON,
 		&item.ConfirmedCount, &item.TotalCount, &item.UnconfirmedStudents)
 	if err != nil {
 		if err == pgx.ErrNoRows {
@@ -258,17 +257,21 @@ func (r NoticeRepository) getTeacherNotice(ctx context.Context, noticeID string,
 		return nil, false, err
 	}
 	item.PublishedAt = messageCenterWallTime(item.PublishedAt)
+	item.Attachments, err = messageattachment.Decode(attachmentsJSON)
+	if err != nil {
+		return nil, false, err
+	}
 
 	return item, true, nil
 }
 
 // CreateNotice publishes a notice and snapshots its active recipients atomically.
-func (r NoticeRepository) CreateNotice(ctx context.Context, teacherID string, classID string, title string, body string, now time.Time) (noticeapp.TeacherNoticeItem, error) {
+func (r NoticeRepository) CreateNotice(ctx context.Context, teacherID string, classID string, title string, body string, attachments []messageattachment.Attachment, now time.Time) (noticeapp.TeacherNoticeItem, error) {
 	var created noticeapp.TeacherNoticeItem
 	err := withRepositoryTx(ctx, "notice publication", r.Repository, func(base Repository) NoticeRepository {
 		return NoticeRepository{Repository: base, wechatReminders: r.wechatReminders}
 	}, func(txRepo NoticeRepository) error {
-		item, err := txRepo.createNotice(ctx, teacherID, classID, title, body, now)
+		item, err := txRepo.createNotice(ctx, teacherID, classID, title, body, attachments, now)
 		if err != nil {
 			return err
 		}
@@ -278,8 +281,12 @@ func (r NoticeRepository) CreateNotice(ctx context.Context, teacherID string, cl
 	return created, err
 }
 
-func (r NoticeRepository) createNotice(ctx context.Context, teacherID string, classID string, title string, body string, now time.Time) (noticeapp.TeacherNoticeItem, error) {
+func (r NoticeRepository) createNotice(ctx context.Context, teacherID string, classID string, title string, body string, attachments []messageattachment.Attachment, now time.Time) (noticeapp.TeacherNoticeItem, error) {
 	now = messageCenterInstant(now)
+	attachmentsJSON, err := messageattachment.Encode(attachments)
+	if err != nil {
+		return noticeapp.TeacherNoticeItem{}, err
+	}
 	var teacherActive bool
 	if err := r.DB().QueryRow(ctx, `
 		SELECT true
@@ -311,9 +318,9 @@ func (r NoticeRepository) createNotice(ctx context.Context, teacherID string, cl
 		return noticeapp.TeacherNoticeItem{}, err
 	}
 	if _, err := r.DB().Exec(ctx, `
-		INSERT INTO public.notices (id, teacher_id, class_id, class_name, title, body, created_at)
-		VALUES ($1, $2, $3, $4, $5, $6, $7)`,
-		id, teacherID, classID, className, title, body, now,
+		INSERT INTO public.notices (id, teacher_id, class_id, class_name, title, body, attachments, created_at)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
+		id, teacherID, classID, className, title, body, string(attachmentsJSON), now,
 	); err != nil {
 		return noticeapp.TeacherNoticeItem{}, err
 	}
@@ -352,7 +359,71 @@ func (r NoticeRepository) createNotice(ctx context.Context, teacherID string, cl
 		ConfirmedCount:      0,
 		TotalCount:          len(names),
 		UnconfirmedStudents: names,
+		Attachments:         attachments,
 	}, nil
+}
+
+// RemindUnconfirmed requeues reminder jobs for a teacher-owned notice's current unconfirmed recipients.
+func (r NoticeRepository) RemindUnconfirmed(ctx context.Context, noticeID string, teacherID string) (noticeapp.ReminderResult, error) {
+	if !r.wechatReminders.Enabled() {
+		return noticeapp.ReminderResult{}, noticeapp.ErrReminderUnavailable
+	}
+	var result noticeapp.ReminderResult
+	err := withRepositoryTx(ctx, "notice reminder", r.Repository, func(base Repository) NoticeRepository {
+		return NoticeRepository{Repository: base, wechatReminders: r.wechatReminders}
+	}, func(txRepo NoticeRepository) error {
+		var owned bool
+		if err := txRepo.DB().QueryRow(ctx, `
+			SELECT true
+			FROM public.notices
+			WHERE id = $1 AND teacher_id = $2
+			FOR UPDATE`, noticeID, teacherID).Scan(&owned); err != nil {
+			if err == pgx.ErrNoRows {
+				return noticeapp.ErrNotFound
+			}
+			return err
+		}
+
+		rows, err := txRepo.DB().Query(ctx, `
+			SELECT nr.recipient_name
+			FROM public.notice_recipients nr
+			WHERE nr.notice_id = $1
+			  AND NOT EXISTS (
+				SELECT 1
+				FROM public.notice_confirmations nc
+				WHERE nc.notice_id = nr.notice_id AND nc.student_id = nr.student_id
+			  )
+			ORDER BY nr.recipient_name, nr.student_id`, noticeID)
+		if err != nil {
+			return err
+		}
+		names := make([]string, 0)
+		for rows.Next() {
+			var name string
+			if err := rows.Scan(&name); err != nil {
+				rows.Close()
+				return err
+			}
+			names = append(names, name)
+		}
+		if err := rows.Err(); err != nil {
+			rows.Close()
+			return err
+		}
+		rows.Close()
+
+		queued, err := txRepo.wechatReminders.RequeueUnconfirmedNoticeRecipients(ctx, txRepo.DB(), noticeID)
+		if err != nil {
+			return err
+		}
+		result = noticeapp.ReminderResult{
+			UnconfirmedStudents: names,
+			Count:               len(names),
+			QueuedCount:         queued,
+		}
+		return nil
+	})
+	return result, err
 }
 
 // ConfirmNotice marks a notice as confirmed by one of its snapshotted recipients.
