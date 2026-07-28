@@ -58,7 +58,7 @@ GitHub Actions 将两个应用服务作为独立镜像构建，避免混用 Dock
 | Backend | `backend/Dockerfile` | `backend/` | `ghcr.io/fraternity-z/mathstudyplatform-backend` |
 | Frontend | `frontend/Dockerfile` | `frontend/` | `ghcr.io/fraternity-z/mathstudyplatform-frontend` |
 
-`.github/workflows/docker-build-check.yml` 在 push、Pull Request 和手动触发时只验证镜像构建，不登录或推送仓库。`.github/workflows/docker-release.yml` 仅手动触发，从 Actions 页面选择的 Git ref 构建并发布版本号、`latest` 和短提交哈希标签；正式版本号必须使用 `v1.0.0` 格式，任一服务已存在同版本标签时发布会终止，避免覆盖。
+`.github/workflows/docker-build-check.yml` 在 push、Pull Request 和手动触发时只验证镜像构建，不登录或推送仓库。`.github/workflows/docker-release.yml` 仅手动触发，从 Actions 页面选择的 Git ref 构建并发布版本号、`latest` 和短提交哈希标签；正式版本号必须使用 `v1.0.0` 格式，任一服务已存在同版本标签或同名 GitHub Release 时发布会终止，避免覆盖。镜像推送成功后，工作流还会创建同版本的正式 GitHub Release，发布说明自动列出前后端全部镜像标签、镜像 digest 和构建提交；Docker Build 的详细构建记录仍保留在对应的 Actions 运行摘要中。
 
 ```powershell
 docker compose build

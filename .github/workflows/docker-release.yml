@@ -9,7 +9,7 @@ on:
         type: string
 
 permissions:
-  contents: read
+  contents: write
   packages: write
 
 concurrency:
@@ -36,8 +36,19 @@ jobs:
             exit 1
           fi
 
+      - name: Ensure GitHub Release does not already exist
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          VERSION: ${{ inputs.version }}
+        run: |
+          if gh release view "$VERSION" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "::error::GitHub Release '$VERSION' already exists. Choose a new version."
+            exit 1
+          fi
+
   release:
-    name: Publish Docker images
+    name: Publish Docker images and GitHub Release
     needs: validate
     runs-on: ubuntu-latest
     steps:
@@ -93,6 +104,7 @@ jobs:
             type=sha,prefix=sha-,format=short
 
       - name: Build and push backend image
+        id: backend-build
         uses: docker/build-push-action@v6
         with:
           context: ./backend
@@ -105,6 +117,7 @@ jobs:
           cache-to: type=gha,mode=max
 
       - name: Build and push frontend image
+        id: frontend-build
         uses: docker/build-push-action@v6
         with:
           context: ./frontend
@@ -116,12 +129,47 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
+      - name: Publish GitHub Release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          VERSION: ${{ inputs.version }}
+          BACKEND_TAGS: ${{ steps.backend-meta.outputs.tags }}
+          FRONTEND_TAGS: ${{ steps.frontend-meta.outputs.tags }}
+          BACKEND_DIGEST: ${{ steps.backend-build.outputs.digest }}
+          FRONTEND_DIGEST: ${{ steps.frontend-build.outputs.digest }}
+        run: |
+          {
+            echo "## Published Docker images"
+            echo
+            echo "Built from commit \`$GITHUB_SHA\`."
+            echo
+            echo "### Backend"
+            printf -- '- `%s`\n' $BACKEND_TAGS
+            echo
+            echo "Digest: \`$BACKEND_DIGEST\`"
+            echo
+            echo "### Frontend"
+            printf -- '- `%s`\n' $FRONTEND_TAGS
+            echo
+            echo "Digest: \`$FRONTEND_DIGEST\`"
+          } > release-notes.md
+
+          gh release create "$VERSION" \
+            --repo "$GITHUB_REPOSITORY" \
+            --target "$GITHUB_SHA" \
+            --title "$VERSION" \
+            --notes-file release-notes.md
+
       - name: Report published image tags
         shell: bash
         env:
           BACKEND_TAGS: ${{ steps.backend-meta.outputs.tags }}
           FRONTEND_TAGS: ${{ steps.frontend-meta.outputs.tags }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          VERSION: ${{ inputs.version }}
         run: |
+          release_url=$(gh release view "$VERSION" --repo "$GITHUB_REPOSITORY" --json url --jq .url)
           {
             echo "## Published Docker images"
             echo
@@ -130,4 +178,7 @@ jobs:
             echo
             echo "### Frontend"
             printf -- '- `%s`\n' $FRONTEND_TAGS
+            echo
+            echo "### GitHub Release"
+            echo "- $release_url"
           } | tee -a "$GITHUB_STEP_SUMMARY"
