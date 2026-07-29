@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { useNavigate, useParams } from 'react-router-dom';
+import { useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { MainLayout } from '../../components/layout/MainLayout';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '../../components/ui/Card';
 import { Button } from '../../components/ui/Button';
@@ -30,12 +30,21 @@ import { classService } from '@/modules/classroom/services/classService';
 import { teacherService } from '@/modules/teacher/services/teacherService';
 import type { ClassInfo, ClassStudent } from '@/modules/classroom/types/classroom';
 import type { ClassAnalyticsData } from '@/modules/teacher/types/teacher';
+import { TeacherDailyQuestionPanel } from '@/modules/daily-question/components/TeacherDailyQuestionPanel';
+
+const classDetailTabs = new Set(['students', 'mastery', 'errors', 'daily-question']);
+
+function normalizeClassDetailTab(value: string | null): string {
+  return value && classDetailTabs.has(value) ? value : 'students';
+}
 
 export const ClassDetailPage: React.FC = () => {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
+  const [searchParams, setSearchParams] = useSearchParams();
   const [searchTerm, setSearchTerm] = useState('');
-  const [activeTab, setActiveTab] = useState('students');
+  const requestedTab = searchParams.get('tab');
+  const [activeTab, setActiveTab] = useState(normalizeClassDetailTab(requestedTab));
   const [classInfo, setClassInfo] = useState<ClassInfo | null>(null);
   const [students, setStudents] = useState<ClassStudent[]>([]);
   const [isLoading, setIsLoading] = useState(true);
@@ -69,6 +78,22 @@ export const ClassDetailPage: React.FC = () => {
     };
     loadClassDetail();
   }, [id]);
+
+  useEffect(() => {
+    const nextTab = normalizeClassDetailTab(requestedTab);
+    setActiveTab((current) => current === nextTab ? current : nextTab);
+  }, [requestedTab]);
+
+  const handleTabChange = (value: string) => {
+    setActiveTab(value);
+    const nextParams = new URLSearchParams(searchParams);
+    if (value === 'students') {
+      nextParams.delete('tab');
+    } else {
+      nextParams.set('tab', value);
+    }
+    setSearchParams(nextParams, { replace: true });
+  };
 
   const filteredStudents = students.filter((student) =>
     (student.display_name || student.username)
@@ -224,16 +249,17 @@ export const ClassDetailPage: React.FC = () => {
           {/* 主内容区 */}
           <div className="lg:col-span-2 space-y-6">
             <Card>
-              <Tabs defaultValue="students" onValueChange={setActiveTab}>
+              <Tabs defaultValue="students" value={activeTab} onValueChange={handleTabChange}>
                 <CardHeader>
-                  <div className="flex items-center justify-between">
-                    <TabsList>
+                  <div className="flex flex-col gap-3 xl:flex-row xl:items-center xl:justify-between">
+                    <TabsList className="h-auto flex-wrap justify-start">
                       <TabsTrigger value="students">学生列表</TabsTrigger>
                       <TabsTrigger value="mastery">知识点掌握</TabsTrigger>
                       <TabsTrigger value="errors">高频错题</TabsTrigger>
+                      <TabsTrigger value="daily-question">每日一题</TabsTrigger>
                     </TabsList>
                     {activeTab === 'students' && (
-                      <div className="relative w-64">
+                      <div className="relative w-full sm:w-64">
                         <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-surface-400" />
                         <Input
                           placeholder="搜索学生..."
@@ -380,6 +406,10 @@ export const ClassDetailPage: React.FC = () => {
                     )}
                   </div>
                 </TabsContent>
+
+                  <TabsContent value="daily-question" className="mt-0">
+                    {id ? <TeacherDailyQuestionPanel classId={id} /> : null}
+                  </TabsContent>
                 </CardContent>
               </Tabs>
             </Card>

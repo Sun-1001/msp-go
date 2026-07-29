@@ -53,6 +53,7 @@ type Repository interface {
 	BatchDelete(context.Context, string, []string, time.Time) (int, error)
 	BatchDuplicate(context.Context, string, []string, time.Time) (BatchOperationResponse, error)
 	BatchImport(context.Context, string, []QuestionInput, time.Time) (BatchOperationResponse, error)
+	SetDailyCandidate(context.Context, string, string, bool, time.Time) (bool, error)
 }
 
 // ListFilter stores /questions filters and pagination.
@@ -104,19 +105,20 @@ type QuestionUpdate struct {
 
 // Question is the Python-compatible question response shape.
 type Question struct {
-	ID          string         `json:"id"`
-	Title       string         `json:"title"`
-	Body        string         `json:"body"`
-	Type        string         `json:"type"`
-	Difficulty  float64        `json:"difficulty"`
-	ConceptIDs  []string       `json:"concept_ids"`
-	Tags        []string       `json:"tags"`
-	Status      string         `json:"status"`
-	Meta        map[string]any `json:"meta"`
-	CreatedAt   time.Time      `json:"created_at"`
-	UpdatedAt   time.Time      `json:"updated_at"`
-	UsageCount  int            `json:"usage_count"`
-	CorrectRate float64        `json:"correct_rate"`
+	ID               string         `json:"id"`
+	Title            string         `json:"title"`
+	Body             string         `json:"body"`
+	Type             string         `json:"type"`
+	Difficulty       float64        `json:"difficulty"`
+	ConceptIDs       []string       `json:"concept_ids"`
+	Tags             []string       `json:"tags"`
+	Status           string         `json:"status"`
+	Meta             map[string]any `json:"meta"`
+	CreatedAt        time.Time      `json:"created_at"`
+	UpdatedAt        time.Time      `json:"updated_at"`
+	UsageCount       int            `json:"usage_count"`
+	CorrectRate      float64        `json:"correct_rate"`
+	IsDailyCandidate bool           `json:"is_daily_candidate"`
 }
 
 // ListResponse is the Python-compatible question list response.
@@ -321,6 +323,26 @@ func (s *Service) DeleteQuestion(ctx context.Context, ownerID string, questionID
 		return ErrNotFound
 	}
 	return nil
+}
+
+// SetDailyCandidate enables or disables a published teacher-owned question for daily selection.
+func (s *Service) SetDailyCandidate(ctx context.Context, ownerID string, questionID string, enabled bool) (Question, error) {
+	question, err := s.GetQuestion(ctx, ownerID, questionID)
+	if err != nil {
+		return Question{}, err
+	}
+	if enabled && question.Status != "published" {
+		return Question{}, ErrBadRequest
+	}
+	ok, err := s.repo.SetDailyCandidate(ctx, ownerID, questionID, enabled, s.now())
+	if err != nil {
+		return Question{}, err
+	}
+	if !ok {
+		return Question{}, ErrNotFound
+	}
+	question.IsDailyCandidate = enabled
+	return question, nil
 }
 
 // GetGroups returns distinct teacher-owned question group names.

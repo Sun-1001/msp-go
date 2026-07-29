@@ -7,7 +7,7 @@ import {
   Table, TableHeader, TableBody, TableHead, TableRow, TableCell,
 } from '../../../../components/ui/Table';
 import {
-  Edit, MoreHorizontal, Copy, Trash2, Send, FileEdit, Archive,
+  Edit, MoreHorizontal, Copy, Trash2, Send, FileEdit, Archive, Star,
 } from 'lucide-react';
 import { getDifficultyBadge, getTypeBadge, getStatusBadge } from '../constants';
 import type { Question } from '@/modules/question/types/question';
@@ -23,6 +23,8 @@ interface QuestionTableProps {
   menuRef: React.RefObject<HTMLDivElement | null>;
   onDuplicate: (id: string) => void;
   onStatusChange: (id: string, status: string) => void;
+  onDailyCandidateChange: (id: string, enabled: boolean) => void;
+  dailyCandidateUpdatingIds: string[];
   onDelete: (id: string) => void;
 }
 
@@ -30,7 +32,7 @@ export const QuestionTable: React.FC<QuestionTableProps> = ({
   questions, loading, selectedQuestions,
   onToggleSelect, onToggleSelectAll,
   openMenuId, onSetOpenMenuId, menuRef,
-  onDuplicate, onStatusChange, onDelete,
+  onDuplicate, onStatusChange, onDailyCandidateChange, dailyCandidateUpdatingIds, onDelete,
 }) => {
   const navigate = useNavigate();
 
@@ -72,6 +74,7 @@ export const QuestionTable: React.FC<QuestionTableProps> = ({
               <TableHead>题型</TableHead>
               <TableHead>难度</TableHead>
               <TableHead>状态</TableHead>
+              <TableHead className="text-center">每日题</TableHead>
               <TableHead>使用次数</TableHead>
               <TableHead>正确率</TableHead>
               <TableHead className="text-right">操作</TableHead>
@@ -90,6 +93,8 @@ export const QuestionTable: React.FC<QuestionTableProps> = ({
                 onEdit={() => navigate(`/teacher/question/${question.id}/edit`)}
                 onDuplicate={() => onDuplicate(question.id)}
                 onStatusChange={(status) => onStatusChange(question.id, status)}
+                onDailyCandidateChange={(enabled) => onDailyCandidateChange(question.id, enabled)}
+                isDailyCandidateUpdating={dailyCandidateUpdatingIds.includes(question.id)}
                 onDelete={() => onDelete(question.id)}
               />
             ))}
@@ -110,13 +115,15 @@ interface QuestionRowProps {
   onEdit: () => void;
   onDuplicate: () => void;
   onStatusChange: (status: string) => void;
+  onDailyCandidateChange: (enabled: boolean) => void;
+  isDailyCandidateUpdating: boolean;
   onDelete: () => void;
 }
 
 const QuestionRow: React.FC<QuestionRowProps> = ({
   question, isSelected, onToggleSelect,
   isMenuOpen, onToggleMenu, menuRef,
-  onEdit, onDuplicate, onStatusChange, onDelete,
+  onEdit, onDuplicate, onStatusChange, onDailyCandidateChange, isDailyCandidateUpdating, onDelete,
 }) => (
   <TableRow>
     <TableCell>
@@ -142,6 +149,26 @@ const QuestionRow: React.FC<QuestionRowProps> = ({
     <TableCell>{getTypeBadge(question.type)}</TableCell>
     <TableCell>{getDifficultyBadge(question.difficulty)}</TableCell>
     <TableCell>{getStatusBadge(question.status)}</TableCell>
+    <TableCell className="text-center">
+      <Button
+        variant="ghost"
+        size="icon"
+        aria-label={question.isDailyCandidate ? '取消每日题候选' : '设为每日题候选'}
+        aria-pressed={question.isDailyCandidate}
+        title={
+          question.isDailyCandidate
+            ? '取消每日题候选'
+            : question.status === 'published'
+              ? '设为每日题候选'
+              : '发布后可设为每日题候选'
+        }
+        disabled={isDailyCandidateUpdating || (!question.isDailyCandidate && question.status !== 'published')}
+        onClick={() => onDailyCandidateChange(!question.isDailyCandidate)}
+        className={question.isDailyCandidate ? 'text-amber-500 hover:text-amber-600' : 'text-surface-400'}
+      >
+        <Star className={`h-4 w-4 ${question.isDailyCandidate ? 'fill-current' : ''}`} />
+      </Button>
+    </TableCell>
     <TableCell>{question.usageCount}</TableCell>
     <TableCell>
       {question.usageCount > 0 ? `${(question.correctRate * 100).toFixed(1)}%` : '-'}

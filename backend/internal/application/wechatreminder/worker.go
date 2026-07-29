@@ -375,6 +375,8 @@ func (w *Worker) templateID(eventType EventType) (string, bool) {
 		return w.config.NoticeTemplateID, true
 	case EventQAMessage:
 		return w.config.QAMessageTemplateID, true
+	case EventDailyQuestion:
+		return w.config.NoticeTemplateID, true
 	default:
 		return "", false
 	}
@@ -386,7 +388,7 @@ func templateFields(eventType EventType, delivery Delivery) map[string]string {
 		content = truncateRunes(content, messagePreviewRunes)
 	}
 	if content == "" {
-		if eventType == EventNotice {
+		if eventType == EventNotice || eventType == EventDailyQuestion {
 			content = "新通知"
 		} else {
 			content = "新消息"

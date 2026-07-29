@@ -43,12 +43,33 @@ const typeOptions = [
   { value: 'proof', label: '证明题' },
 ];
 
+function getSafeTeacherReturnPath(value: string | null): string | null {
+  if (!value || !value.startsWith('/teacher/') || value.startsWith('//')) return null;
+  try {
+    const parsed = new URL(value, window.location.origin);
+    if (parsed.origin !== window.location.origin || !parsed.pathname.startsWith('/teacher/')) {
+      return null;
+    }
+    return `${parsed.pathname}${parsed.search}${parsed.hash}`;
+  } catch {
+    return null;
+  }
+}
+
+function appendCreatedQuestion(returnPath: string, questionId: string): string {
+  const parsed = new URL(returnPath, window.location.origin);
+  parsed.searchParams.set('daily_question_content_id', questionId);
+  return `${parsed.pathname}${parsed.search}${parsed.hash}`;
+}
+
 export const QuestionEditPage: React.FC = () => {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
   const isNew = !id || id === 'new';
   const isViewMode = searchParams.get('mode') === 'view';
+  const returnPath = getSafeTeacherReturnPath(searchParams.get('return_to'));
+  const exitPath = returnPath ?? '/teacher/question-bank';
   const { toast } = useToast();
 
   const [loading, setLoading] = useState(false);
@@ -112,11 +133,11 @@ export const QuestionEditPage: React.FC = () => {
         ? (error as { response?: { data?: { detail?: string } } }).response?.data?.detail || '加载题目失败'
         : '加载题目失败';
       toast({ type: 'error', title: errorMessage });
-      navigate('/teacher/question-bank');
+      navigate(exitPath);
     } finally {
       setLoading(false);
     }
-  }, [reset, toast, navigate]);
+  }, [reset, toast, navigate, exitPath]);
 
   useEffect(() => {
     if (!isNew && id) {
@@ -151,15 +172,21 @@ export const QuestionEditPage: React.FC = () => {
         estimatedTimeSeconds: data.estimatedTimeSeconds,
       };
 
+      let createdQuestionId: string | null = null;
       if (isNew) {
-        await questionService.createQuestion(payload as QuestionCreateData);
+        const created = await questionService.createQuestion(payload as QuestionCreateData);
+        createdQuestionId = created.id;
         toast({ type: 'success', title: '题目创建成功' });
       } else {
         await questionService.updateQuestion(id!, payload);
         toast({ type: 'success', title: '题目更新成功' });
       }
 
-      navigate('/teacher/question-bank');
+      navigate(
+        returnPath && createdQuestionId
+          ? appendCreatedQuestion(returnPath, createdQuestionId)
+          : exitPath,
+      );
     } catch (error: unknown) {
       const errorMessage = error instanceof Error && 'response' in error
         ? (error as { response?: { data?: { detail?: string } } }).response?.data?.detail || '保存失败'
@@ -239,10 +266,10 @@ export const QuestionEditPage: React.FC = () => {
           <Button
             variant="ghost"
             className="mb-4"
-            onClick={() => navigate('/teacher/question-bank')}
+            onClick={() => navigate(exitPath)}
           >
             <ArrowLeft className="h-4 w-4 mr-2" />
-            返回题库
+            {returnPath ? '返回每日一题' : '返回题库'}
           </Button>
           <div className="flex items-center justify-between">
             <div>

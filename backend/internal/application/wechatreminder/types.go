@@ -12,6 +12,7 @@ const (
 	EventPrivateMessage EventType = "private_message"
 	EventNotice         EventType = "notice"
 	EventQAMessage      EventType = "qa_message"
+	EventDailyQuestion  EventType = "daily_question"
 )
 
 // Job is a leased, content-free reminder task.

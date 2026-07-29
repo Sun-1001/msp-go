@@ -84,6 +84,8 @@ export const QuestionBankPage: React.FC = () => {
           menuRef={qb.menuRef}
           onDuplicate={qb.handleDuplicate}
           onStatusChange={qb.handleStatusChange}
+          onDailyCandidateChange={qb.handleDailyCandidateChange}
+          dailyCandidateUpdatingIds={qb.dailyCandidateUpdatingIds}
           onDelete={qb.handleDeleteSingle}
         />
 

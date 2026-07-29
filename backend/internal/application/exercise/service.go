@@ -18,6 +18,7 @@ import (
 	"mathstudy/backend/internal/platform/metautil"
 	"mathstudy/backend/internal/platform/numutil"
 	"mathstudy/backend/internal/platform/ptrutil"
+	"mathstudy/backend/internal/platform/questiondedupe"
 	"mathstudy/backend/internal/platform/sliceutil"
 	"mathstudy/backend/internal/platform/stringutil"
 )
@@ -39,6 +40,8 @@ var (
 	ErrAIGenerationUnavailable = errors.New("AI exercise generation is unavailable")
 	ErrAIGenerationTimeout     = errors.New("AI exercise generation timed out")
 	ErrGeneratedContentInvalid = errors.New("generated exercise content is invalid")
+	ErrDailyAssignmentInvalid  = errors.New("daily question assignment is invalid")
+	ErrDailyAssignmentClosed   = errors.New("daily question assignment no longer accepts linked attempts")
 )
 
 const (
@@ -72,6 +75,10 @@ type Repository interface {
 	InsertDiagnosis(context.Context, DiagnosisRecord) error
 	UpsertDKTStates(context.Context, []DKTState) error
 	UpdateProfileTracking(context.Context, string, ProfileTrackingUpdate) error
+	GetDailyAssignment(context.Context, string, string) (DailyAssignmentBinding, bool, error)
+	GetDailyAssignmentForUpdate(context.Context, string, string) (DailyAssignmentBinding, bool, error)
+	HasDailyAssignmentContent(context.Context, string, string) (bool, error)
+	ApplyDailyAttempt(context.Context, DailyAttemptUpdate) error
 }
 
 // AnswerChecker compares student and correct answers.
@@ -189,6 +196,29 @@ type AttemptRecord struct {
 	TimeSpentSeconds int
 }
 
+// DailyAssignmentBinding carries the immutable question snapshot bound to a daily task.
+type DailyAssignmentBinding struct {
+	ID                 string
+	StudentID          string
+	AssignmentDate     string
+	ContentID          string
+	Status             string
+	FirstResult        string
+	CorrectedAttemptID string
+	Question           *Exercise
+}
+
+// DailyAttemptUpdate atomically attaches one recorded attempt to its daily assignment.
+type DailyAttemptUpdate struct {
+	AssignmentID string
+	StudentID    string
+	ContentID    string
+	AttemptID    string
+	IsCorrect    bool
+	SubmittedAt  time.Time
+	OnTime       bool
+}
+
 // DiagnosisRecord stores data inserted into diagnosis_reports.
 type DiagnosisRecord struct {
 	ID             string
@@ -219,26 +249,29 @@ type NextQuery struct {
 
 // SubmitRequest stores /exercise/submit request data.
 type SubmitRequest struct {
-	ExerciseID       string
-	AnswerText       string
-	AnswerImageURL   string
-	AnswerSteps      []string
-	TimeSpentSeconds int
+	ExerciseID        string
+	DailyAssignmentID string
+	AnswerText        string
+	AnswerImageURL    string
+	AnswerSteps       []string
+	TimeSpentSeconds  int
 }
 
 // GenerateExerciseRequest stores a student's AI self-practice selection.
 type GenerateExerciseRequest struct {
-	ConceptID    string
-	Difficulty   float64
-	QuestionType string
+	ConceptID           string
+	Difficulty          float64
+	QuestionType        string
+	AvoidQuestionBodies []string // Trusted internal history only; HTTP callers cannot populate this field.
 }
 
 // GenerationInput carries trusted knowledge context into the question generator.
 type GenerationInput struct {
-	Concept      KnowledgeConcept
-	Difficulty   float64
-	QuestionType string
-	Feedback     string // 首次生成为空；重试时携带上次验证失败原因
+	Concept             KnowledgeConcept
+	Difficulty          float64
+	QuestionType        string
+	AvoidQuestionBodies []string // Trusted internal daily-question history; adapters must bound prompt use.
+	Feedback            string   // 首次生成为空；重试时携带上次验证失败原因
 }
 
 // GeneratedQuestion stores a validated, persistable AI exercise candidate.
@@ -349,6 +382,7 @@ type SolutionResponse struct {
 
 // SubmitResponse is the Python-compatible answer submission response.
 type SubmitResponse struct {
+	AttemptID          string             `json:"attempt_id,omitempty"`
 	IsCorrect          bool               `json:"is_correct"`
 	GradingStatus      string             `json:"grading_status"`
 	Recorded           bool               `json:"recorded"`
@@ -726,7 +760,10 @@ func (s *Service) GenerateExercise(ctx context.Context, userID string, request G
 	if !ok {
 		return nil, ErrNotFound
 	}
-	const maxAttempts = 2
+	maxAttempts := 2
+	if len(request.AvoidQuestionBodies) > 0 {
+		maxAttempts = 3
+	}
 	var verified verifiedGenerated
 	var lastVerifyErr error
 	var generated GeneratedQuestion
@@ -738,10 +775,11 @@ func (s *Service) GenerateExercise(ctx context.Context, userID string, request G
 		}
 
 		generated, err = s.questionGenerator.GenerateQuestion(ctx, GenerationInput{
-			Concept:      concept,
-			Difficulty:   request.Difficulty,
-			QuestionType: request.QuestionType,
-			Feedback:     feedback,
+			Concept:             concept,
+			Difficulty:          request.Difficulty,
+			QuestionType:        request.QuestionType,
+			AvoidQuestionBodies: request.AvoidQuestionBodies,
+			Feedback:            feedback,
 		})
 		if err != nil {
 			if errors.Is(err, ErrGeneratedContentInvalid) {
@@ -760,6 +798,13 @@ func (s *Service) GenerateExercise(ctx context.Context, userID string, request G
 		generated = normalizeGeneratedQuestion(generated)
 		if generated.Type != request.QuestionType || !validGeneratedQuestion(generated) {
 			lastVerifyErr = generatedContentInvalid("生成题目格式或内容不符合要求")
+			if attempt == maxAttempts {
+				return nil, ErrAIGenerationUnavailable
+			}
+			continue
+		}
+		if questiondedupe.IsDuplicate(generated.Body, request.AvoidQuestionBodies) {
+			lastVerifyErr = generatedContentInvalid("生成题目与学生历史每日题重复，请更换题目条件、数值或问法")
 			if attempt == maxAttempts {
 				return nil, ErrAIGenerationUnavailable
 			}
@@ -796,13 +841,28 @@ func (s *Service) GenerateExercise(ctx context.Context, userID string, request G
 
 // SubmitAnswer records an answer, performs lightweight grading, and updates tracking state.
 func (s *Service) SubmitAnswer(ctx context.Context, userID string, request SubmitRequest) (SubmitResponse, error) {
+	request.DailyAssignmentID = strings.TrimSpace(request.DailyAssignmentID)
 	request.AnswerText = strings.TrimSpace(request.AnswerText)
 	request.AnswerImageURL = strings.TrimSpace(request.AnswerImageURL)
 	if request.ExerciseID == "" || (request.AnswerText == "" && request.AnswerImageURL == "") {
 		return SubmitResponse{}, ErrBadRequest
 	}
 
-	exercise, correctAnswer, err := submissionExercise(ctx, s.repo, userID, request.ExerciseID)
+	var exercise Exercise
+	var correctAnswer string
+	var err error
+	if request.DailyAssignmentID == "" {
+		exercise, correctAnswer, err = submissionExercise(ctx, s.repo, userID, request.ExerciseID)
+	} else {
+		exercise, correctAnswer, _, err = dailySubmissionExercise(
+			ctx,
+			s.repo,
+			userID,
+			request.DailyAssignmentID,
+			request.ExerciseID,
+			false,
+		)
+	}
 	if err != nil {
 		return SubmitResponse{}, err
 	}
@@ -867,9 +927,29 @@ func (s *Service) SubmitAnswer(ctx context.Context, userID string, request Submi
 
 	var response SubmitResponse
 	err = s.repo.WithTx(ctx, func(txCtx context.Context, repo Repository) error {
-		currentExercise, currentCorrectAnswer, err := submissionExerciseForUpdate(txCtx, repo, userID, request.ExerciseID)
-		if err != nil {
-			return err
+		var currentExercise Exercise
+		var currentCorrectAnswer string
+		var dailyBinding DailyAssignmentBinding
+		var readErr error
+		if request.DailyAssignmentID == "" {
+			currentExercise, currentCorrectAnswer, readErr = submissionExerciseForUpdate(
+				txCtx,
+				repo,
+				userID,
+				request.ExerciseID,
+			)
+		} else {
+			currentExercise, currentCorrectAnswer, dailyBinding, readErr = dailySubmissionExercise(
+				txCtx,
+				repo,
+				userID,
+				request.DailyAssignmentID,
+				request.ExerciseID,
+				true,
+			)
+		}
+		if readErr != nil {
+			return readErr
 		}
 		if currentCorrectAnswer != correctAnswer || !sameSubmissionExercise(exercise, currentExercise) {
 			return ErrExerciseChanged
@@ -888,6 +968,19 @@ func (s *Service) SubmitAnswer(ctx context.Context, userID string, request Submi
 		}
 		if err := repo.InsertAttempt(txCtx, attempt); err != nil {
 			return err
+		}
+		if request.DailyAssignmentID != "" {
+			if err := repo.ApplyDailyAttempt(txCtx, DailyAttemptUpdate{
+				AssignmentID: dailyBinding.ID,
+				StudentID:    userID,
+				ContentID:    currentExercise.ID,
+				AttemptID:    attempt.ID,
+				IsCorrect:    attempt.IsCorrect,
+				SubmittedAt:  now,
+				OnTime:       dailyBinding.AssignmentDate == shanghaiDate(now),
+			}); err != nil {
+				return err
+			}
 		}
 
 		if diagnosis != nil {
@@ -927,6 +1020,7 @@ func (s *Service) SubmitAnswer(ctx context.Context, userID string, request Submi
 			correctAnswerLatex = correctAnswer
 		}
 		response = SubmitResponse{
+			AttemptID:          attempt.ID,
 			IsCorrect:          isCorrect,
 			GradingStatus:      string(check.Decision),
 			Recorded:           true,
@@ -946,6 +1040,80 @@ func (s *Service) SubmitAnswer(ctx context.Context, userID string, request Submi
 		return SubmitResponse{}, err
 	}
 	return response, nil
+}
+
+func validateDailyAssignmentBinding(binding DailyAssignmentBinding, ok bool, exerciseID string) error {
+	if !ok || binding.ID == "" || binding.ContentID != exerciseID || binding.Question == nil || binding.Question.ID != exerciseID {
+		return ErrDailyAssignmentInvalid
+	}
+	switch binding.Status {
+	case "ready":
+		return nil
+	case "completed":
+		if binding.FirstResult == "incorrect" && binding.CorrectedAttemptID == "" {
+			return nil
+		}
+		return ErrDailyAssignmentClosed
+	default:
+		return ErrDailyAssignmentInvalid
+	}
+}
+
+func shanghaiDate(value time.Time) string {
+	return value.In(time.FixedZone("Asia/Shanghai", 8*60*60)).Format("2006-01-02")
+}
+
+func dailySubmissionExercise(
+	ctx context.Context,
+	repo Repository,
+	userID string,
+	assignmentID string,
+	exerciseID string,
+	forUpdate bool,
+) (Exercise, string, DailyAssignmentBinding, error) {
+	var (
+		binding DailyAssignmentBinding
+		ok      bool
+		err     error
+	)
+	if forUpdate {
+		binding, ok, err = repo.GetDailyAssignmentForUpdate(ctx, assignmentID, userID)
+	} else {
+		binding, ok, err = repo.GetDailyAssignment(ctx, assignmentID, userID)
+	}
+	if err != nil {
+		return Exercise{}, "", DailyAssignmentBinding{}, err
+	}
+	if err := validateDailyAssignmentBinding(binding, ok, exerciseID); err != nil {
+		return Exercise{}, "", DailyAssignmentBinding{}, err
+	}
+	correctAnswer := strings.TrimSpace(metautil.String(binding.Question.Meta, "answer"))
+	if correctAnswer == "" {
+		return Exercise{}, "", DailyAssignmentBinding{}, ErrDailyAssignmentInvalid
+	}
+	return *binding.Question, correctAnswer, binding, nil
+}
+
+func dailySolutionExercise(
+	ctx context.Context,
+	repo Repository,
+	userID string,
+	assignmentID string,
+	exerciseID string,
+) (Exercise, error) {
+	binding, ok, err := repo.GetDailyAssignment(ctx, assignmentID, userID)
+	if err != nil {
+		return Exercise{}, err
+	}
+	if !ok || binding.ID == "" || binding.ContentID != exerciseID || binding.Question == nil || binding.Question.ID != exerciseID {
+		return Exercise{}, ErrDailyAssignmentInvalid
+	}
+	switch binding.Status {
+	case "ready", "completed":
+		return *binding.Question, nil
+	default:
+		return Exercise{}, ErrDailyAssignmentInvalid
+	}
 }
 
 func submissionExercise(ctx context.Context, repo Repository, userID string, exerciseID string) (Exercise, string, error) {
@@ -1170,8 +1338,15 @@ func (s *Service) GetExercise(ctx context.Context, userID string, exerciseID str
 }
 
 // GetSolution returns cached steps or a solver candidate verified against the trusted answer.
-func (s *Service) GetSolution(ctx context.Context, userID string, exerciseID string) (SolutionResponse, error) {
-	exercise, err := s.authorizedExercise(ctx, userID, exerciseID)
+func (s *Service) GetSolution(ctx context.Context, userID string, exerciseID string, dailyAssignmentID string) (SolutionResponse, error) {
+	dailyAssignmentID = strings.TrimSpace(dailyAssignmentID)
+	var exercise Exercise
+	var err error
+	if dailyAssignmentID == "" {
+		exercise, err = s.authorizedExercise(ctx, userID, exerciseID)
+	} else {
+		exercise, err = dailySolutionExercise(ctx, s.repo, userID, dailyAssignmentID, exerciseID)
+	}
 	if err != nil {
 		return SolutionResponse{}, err
 	}
@@ -1304,7 +1479,12 @@ func (s *Service) GetSolution(ctx context.Context, userID string, exerciseID str
 			Retryable: retryable,
 		}), nil
 	}
-	currentExercise, err := s.authorizedExercise(ctx, userID, exerciseID)
+	var currentExercise Exercise
+	if dailyAssignmentID == "" {
+		currentExercise, err = s.authorizedExercise(ctx, userID, exerciseID)
+	} else {
+		currentExercise, err = dailySolutionExercise(ctx, s.repo, userID, dailyAssignmentID, exerciseID)
+	}
 	if err != nil {
 		return SolutionResponse{}, err
 	}
@@ -1433,6 +1613,13 @@ func (s *Service) authorizedExercise(ctx context.Context, userID string, exercis
 }
 
 func canAccessExercise(ctx context.Context, repo Repository, userID string, exercise Exercise) (bool, error) {
+	assigned, err := repo.HasDailyAssignmentContent(ctx, userID, exercise.ID)
+	if err != nil {
+		return false, err
+	}
+	if assigned {
+		return true, nil
+	}
 	if exercise.GeneratedByStudentID != "" {
 		return exercise.GeneratedByStudentID == userID, nil
 	}

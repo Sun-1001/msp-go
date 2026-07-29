@@ -184,6 +184,43 @@ func (r QuestionRepository) GetQuestion(ctx context.Context, ownerID string, que
 	return question, true, nil
 }
 
+// SetDailyCandidate maintains the independent daily-question candidate marker.
+func (r QuestionRepository) SetDailyCandidate(ctx context.Context, ownerID string, questionID string, enabled bool, now time.Time) (bool, error) {
+	if !enabled {
+		_, err := r.DB().Exec(ctx, `
+			DELETE FROM public.daily_question_candidates
+			WHERE content_id = $1 AND teacher_id = $2`,
+			questionID,
+			ownerID,
+		)
+		return true, err
+	}
+	result, err := r.DB().Exec(ctx, `
+		INSERT INTO public.daily_question_candidates (
+			content_id, teacher_id, priority, is_active, valid_from, valid_until, created_at, updated_at
+		)
+		SELECT id, owner_teacher_id, 0, true, NULL, NULL, $3, $3
+		FROM public.contents
+		WHERE
+			id = $1 AND
+			owner_teacher_id = $2 AND
+			type = 'PROBLEM'::public.contenttype AND
+			status = 'PUBLISHED'::public.contentstatus AND
+			deleted_at IS NULL
+		ON CONFLICT (content_id) DO UPDATE SET
+			teacher_id = EXCLUDED.teacher_id,
+			is_active = true,
+			updated_at = EXCLUDED.updated_at`,
+		questionID,
+		ownerID,
+		now,
+	)
+	if err != nil {
+		return false, err
+	}
+	return result.RowsAffected() == 1, nil
+}
+
 // CreateQuestion inserts a draft teacher-owned problem.
 func (r QuestionRepository) CreateQuestion(ctx context.Context, ownerID string, input questionapp.QuestionInput, now time.Time) (questionapp.Question, error) {
 	var questionID string
@@ -717,7 +754,15 @@ const questionSelectColumns = `
 	coalesce(
 		sum(CASE WHEN ca.is_correct THEN 1 ELSE 0 END)::double precision / nullif(count(ca.id), 0),
 		0.0
-	)::double precision AS correct_rate`
+	)::double precision AS correct_rate,
+	(
+		c.status = 'PUBLISHED'::public.contentstatus
+		AND exists (
+			SELECT 1
+			FROM public.daily_question_candidates dqc
+			WHERE dqc.content_id = c.id AND dqc.is_active
+		)
+	) AS is_daily_candidate`
 
 func scanQuestion(scanner rowScanner) (questionapp.Question, error) {
 	var question questionapp.Question
@@ -738,6 +783,7 @@ func scanQuestion(scanner rowScanner) (questionapp.Question, error) {
 		&question.UpdatedAt,
 		&question.UsageCount,
 		&question.CorrectRate,
+		&question.IsDailyCandidate,
 	); err != nil {
 		return questionapp.Question{}, err
 	}

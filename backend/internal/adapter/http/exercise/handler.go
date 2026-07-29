@@ -27,7 +27,7 @@ type Service interface {
 	GenerateExercise(context.Context, string, exerciseapp.GenerateExerciseRequest) (*exerciseapp.ExerciseResponse, error)
 	SubmitAnswer(context.Context, string, exerciseapp.SubmitRequest) (exerciseapp.SubmitResponse, error)
 	GetExercise(context.Context, string, string) (exerciseapp.ExerciseDetailResponse, error)
-	GetSolution(context.Context, string, string) (exerciseapp.SolutionResponse, error)
+	GetSolution(context.Context, string, string, string) (exerciseapp.SolutionResponse, error)
 }
 
 // Authenticator decodes Go/Python-compatible access tokens.
@@ -139,11 +139,12 @@ func (h *Handler) Register(mux *http.ServeMux, prefix string) {
 }
 
 type submitRequest struct {
-	ExerciseID       string   `json:"exercise_id"`
-	AnswerText       *string  `json:"answer_text"`
-	AnswerImageURL   *string  `json:"answer_image_url"`
-	AnswerSteps      []string `json:"answer_steps"`
-	TimeSpentSeconds int      `json:"time_spent_seconds"`
+	ExerciseID        string   `json:"exercise_id"`
+	DailyAssignmentID string   `json:"daily_assignment_id"`
+	AnswerText        *string  `json:"answer_text"`
+	AnswerImageURL    *string  `json:"answer_image_url"`
+	AnswerSteps       []string `json:"answer_steps"`
+	TimeSpentSeconds  int      `json:"time_spent_seconds"`
 }
 
 type generateRequest struct {
@@ -249,11 +250,12 @@ func (h *Handler) submit(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	response, err := h.service.SubmitAnswer(r.Context(), principal.UserID, exerciseapp.SubmitRequest{
-		ExerciseID:       request.ExerciseID,
-		AnswerText:       answerText,
-		AnswerImageURL:   answerImageURL,
-		AnswerSteps:      request.AnswerSteps,
-		TimeSpentSeconds: request.TimeSpentSeconds,
+		ExerciseID:        request.ExerciseID,
+		DailyAssignmentID: strings.TrimSpace(request.DailyAssignmentID),
+		AnswerText:        answerText,
+		AnswerImageURL:    answerImageURL,
+		AnswerSteps:       request.AnswerSteps,
+		TimeSpentSeconds:  request.TimeSpentSeconds,
 	})
 	if err != nil {
 		if errors.Is(err, exerciseapp.ErrBadRequest) {
@@ -293,7 +295,12 @@ func (h *Handler) solution(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer releaseAILease(lease)
-	response, err := h.service.GetSolution(r.Context(), principal.UserID, r.PathValue("exercise_id"))
+	response, err := h.service.GetSolution(
+		r.Context(),
+		principal.UserID,
+		r.PathValue("exercise_id"),
+		strings.TrimSpace(r.URL.Query().Get("daily_assignment_id")),
+	)
 	if err != nil {
 		if errors.Is(err, exerciseapp.ErrNotFound) {
 			writeExerciseError(w, http.StatusNotFound, "NOT_FOUND", "题目不存在或无权访问")
@@ -382,6 +389,14 @@ func (h *Handler) writeExerciseError(w http.ResponseWriter, err error, fallback 
 	}
 	if errors.Is(err, exerciseapp.ErrExerciseChanged) {
 		writeExerciseError(w, http.StatusConflict, "EXERCISE_CHANGED", "题目已更新，请重新加载后提交")
+		return
+	}
+	if errors.Is(err, exerciseapp.ErrDailyAssignmentInvalid) {
+		writeExerciseError(w, http.StatusConflict, "DAILY_ASSIGNMENT_INVALID", "每日一题任务已失效，请重新加载")
+		return
+	}
+	if errors.Is(err, exerciseapp.ErrDailyAssignmentClosed) {
+		writeExerciseError(w, http.StatusConflict, "DAILY_ASSIGNMENT_COMPLETED", "该每日一题已完成，无需重复提交")
 		return
 	}
 	if errors.Is(err, exerciseapp.ErrForbidden) {

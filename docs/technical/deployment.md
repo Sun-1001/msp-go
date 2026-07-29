@@ -30,6 +30,10 @@ Copy-Item .env.example .env
 - 探测固定覆盖 `documents/.mathstudy-storage-connectivity-check.txt`，内容不含凭据，不会随测试次数累积对象。
 - 保存成功后新上传和 OCR 图片回读立即使用新后端；不会自动回退到旧后端，切换前应自行迁移仍需访问的历史对象。
 
+每日一题默认由 Go API 进程在 `Asia/Shanghai` 零点预分配；进程启动或重启后也会立即补齐当天尚未处理的学生。`DAILY_QUESTION_PREGENERATION_ENABLED` 控制总开关，批大小、进程内并发、批间隔和单学生超时分别由 `DAILY_QUESTION_PREGENERATION_BATCH_SIZE`、`DAILY_QUESTION_PREGENERATION_CONCURRENCY`、`DAILY_QUESTION_PREGENERATION_BATCH_INTERVAL_MS`、`DAILY_QUESTION_PREGENERATION_STUDENT_TIMEOUT_SECONDS` 控制；单学生超时必须小于 120 秒，避免超过准备行的失效接管窗口。单个学生失败或最终未分配时，学生进入每日题页面的幂等 prepare 仍会继续兜底。多实例部署必须只在一个调度实例设置 `DAILY_QUESTION_PREGENERATION_ENABLED=true`，其余实例设为 `false`；当前并发控制是进程内上限，assignment 唯一约束和 generation token 只负责防止同一学生重复落题，不能替代全局 worker 租约。
+
+开启 `WECHAT_MESSAGE_REMINDERS_ENABLED=true` 后，教师可以按班级开启每日一题自动提醒。API 进程会在上海时间每天 08:00 扫描已开启的班级；进程在 08:00 后启动时也会补做当日幂等扫描，单次数据库故障会在当天每 5 分钟重试。仅有可作答且未完成的每日题时，才向已绑定且已关注的学生创建公众号模板消息任务；不会创建 `notices` 或站内通知。教师当天开启自动提醒时，若当天尚无手动或自动学生提醒，会立即尝试入队；关闭后不会继续发送自动提醒，重新开启会复用仍在处理的任务或为已跳过的任务创建新的当日来源。班级统一题日程剩余恰好一题时，系统只向该教师创建公众号低库存提醒；补题后旧提醒会失效，之后再次降至一题可以重新提醒。自动学生提醒和低库存事件均在发送前重新校验当前状态，多实例重复扫描不会重复发送；手动“提醒未完成学生”同样只进入公众号队列。每日题提醒复用 `WECHAT_NOTICE_TEMPLATE_ID`，不增加新的公众号模板或环境变量。
+
 公众号配置项如下：
 
 | 配置 | 用途 |
@@ -42,7 +46,7 @@ Copy-Item .env.example .env
 | `WECHAT_OFFICIAL_ACCOUNT_MESSAGE_MODE` | `plain`、`compatible` 或 `safe` |
 | `WECHAT_OFFICIAL_ACCOUNT_NAME` | 前端展示的公众号名称 |
 | `WECHAT_OFFICIAL_ACCOUNT_HTTP_TIMEOUT_SECONDS` | 后端调用微信 API 的单次 HTTP 请求超时，范围 1 至 60 秒，默认 10 秒 |
-| `WECHAT_MESSAGE_REMINDERS_ENABLED` | 是否为私信、班级通知和答疑启用微信公众号模板提醒；默认 `false`，启用时要求公众号总开关已开启 |
+| `WECHAT_MESSAGE_REMINDERS_ENABLED` | 是否为私信、班级通知、答疑和每日一题启用微信公众号模板提醒；默认 `false`，启用时要求公众号总开关已开启 |
 | `WECHAT_PRIVATE_MESSAGE_TEMPLATE_ID` | 私信提醒模板 ID；提醒总开关开启时必填 |
 | `WECHAT_NOTICE_TEMPLATE_ID` | 班级通知提醒模板 ID；提醒总开关开启时必填 |
 | `WECHAT_QA_MESSAGE_TEMPLATE_ID` | 答疑提醒模板 ID；提醒总开关开启时必填 |
@@ -100,7 +104,7 @@ FROM public.go_schema_migrations
 ORDER BY version;
 ```
 
-首次生产基线由四个分组迁移组成：`0001_initial_schema`、`0002_student_ai_safety`、`0003_communication` 和 `0004_delivery_integrations`。全新空库第一次 migration runner 应记录 `applied_count=4` 和版本 `1` 至 `4`，紧接着重复执行应为 `applied_count=0`。消息中心北京时间默认值位于 `0003`，微信公众号绑定和提醒任务位于 `0004`。
+首次生产基线由五个迁移组成：`0001_initial_schema`、`0002_student_ai_safety`、`0003_communication`、`0004_delivery_integrations` 和 `0005_daily_question`。每日一题及其班级自动提醒、公众号专用事件位于 `0005_daily_question`。全新空库第一次 migration runner 应记录版本 `1` 至 `5`，紧接着重复执行应为 `applied_count=0`。消息中心北京时间默认值位于 `0003`，微信公众号绑定和基础提醒任务位于 `0004`。
 
 重整前执行过旧开发迁移 `0001` 至 `0015` 的数据库不属于可原地升级目标。migration runner 会校验迁移版本、名称和未知记录，并在账本与当前代码不一致时拒绝继续。可丢弃的开发库应删除并重建；任何不可丢弃的库必须先停止发布，完成实际 schema、业务数据和 `go_schema_migrations` 核对，再设计专门的数据保留迁移，禁止删除版本记录后重放基线。
 
@@ -181,7 +185,7 @@ docker compose logs --tail 200 backend
 4. 数据库迁移首次执行有新增版本，重复执行无待应用版本。
 5. 启用公众号时，在微信后台将回调 URL 配置为 `https://<public-host>/api/v1/integrations/wechat/official-account/callback`，确认 GET 验证、关注/取关事件和文本绑定回调均成功。
 6. 分别使用测试学生和测试教师生成绑定口令并完成绑定，确认两端个人中心均显示已绑定/已关注；随后由管理员调用 `POST /api/v1/admin/wechat/test-message` 向两类账号发送服务端固定测试内容。
-7. 为私信、通知和答疑配置字段均为 `keyword1`、`keyword2`、`keyword3` 的模板及对应 ID，开启 `WECHAT_MESSAGE_REMINDERS_ENABLED=true` 后依次验证学生发教师、教师发学生的私信，教师班级通知，以及学生发起、师生回复的答疑。私信和答疑只展示空白规范化后的前 40 个 Unicode 字符并在截断时追加 `…`；通知只展示主题。再验证已读、通知已确认、解绑、取关和账号停用时任务转为 `skipped`。
+7. 为私信、通知和答疑配置字段均为 `keyword1`、`keyword2`、`keyword3` 的模板及对应 ID，开启 `WECHAT_MESSAGE_REMINDERS_ENABLED=true` 后依次验证学生发教师、教师发学生的私信，教师班级通知，以及学生发起、师生回复的答疑。私信和答疑只展示空白规范化后的前 40 个 Unicode 字符并在截断时追加 `…`；通知只展示主题。再验证已读、通知已确认、解绑、取关和账号停用时任务转为 `skipped`。随后为测试班级开启每日一题自动提醒，验证 08:00 扫描、当天即时补发、无题跳过、手动提醒和统一题仅剩一题的教师预警均只生成公众号任务，不写入站内通知。
 8. 在管理员“存储设置”中分别执行目标后端的连接测试和保存，确认无需重启即可完成一次上传；外部 AI provider 和西电账户绑定也按部署配置进行连通性验证，`ocr` Agent 必须选择支持图片输入的模型。
 9. 分别提交真实 PNG、JPEG 图片和空白/低对比图片，确认成功路径只产生一次 attempt，并各执行一次 session、DKT 和 profile 更新；OCR/数学不确定或失败路径的这些写入均为零。图片 OCR 当前只接受 PNG、JPEG 和 GIF。
 10. 验证通用数学判定的 `correct`、`incorrect`、`indeterminate` 响应，以及解析生成不可用、超时、取消、无效输出和验证失败的 `failure.stage`、`failure.code`、`retryable` 契约。

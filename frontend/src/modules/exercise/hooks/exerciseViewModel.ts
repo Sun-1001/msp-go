@@ -42,6 +42,10 @@ export interface ExerciseAnswerSubmission {
   answerImage?: File | null;
 }
 
+export interface ExerciseViewModelOptions {
+  dailyAssignmentId?: string;
+}
+
 type SubmissionStage = 'upload' | 'grading';
 
 const getErrorCode = (err: unknown): string => {
@@ -221,7 +225,8 @@ const getSubmissionError = (
  *
  * 管理题目加载、文本或图片答案提交和反馈展示
  */
-export function useExerciseViewModel() {
+export function useExerciseViewModel(options: ExerciseViewModelOptions = {}) {
+  const dailyAssignmentId = options.dailyAssignmentId?.trim() || undefined;
   const [currentQuestion, setCurrentQuestion] = useState<Question | null>(null);
   const [isLoading, setIsLoading] = useState(false);
   const [isGenerating, setIsGenerating] = useState(false);
@@ -409,6 +414,7 @@ export function useExerciseViewModel() {
         const timeSpent = Math.round((Date.now() - startTimeRef.current) / 1000);
         const result = await exerciseService.submitAnswer({
           exerciseId: submittedQuestion.id,
+          ...(dailyAssignmentId ? { dailyAssignmentId } : {}),
           ...(normalizedAnswer ? { answerText: normalizedAnswer } : {}),
           ...(answerImageUrl ? { answerImageUrl } : {}),
           timeSpentSeconds: timeSpent,
@@ -446,7 +452,7 @@ export function useExerciseViewModel() {
         setSubmitPhase('idle');
       }
     },
-    [currentQuestion]
+    [currentQuestion, dailyAssignmentId]
   );
 
   const loadSolution = useCallback(async () => {
@@ -458,7 +464,10 @@ export function useExerciseViewModel() {
     setIsLoadingSolution(true);
     setSolutionError(null);
     try {
-      const nextSolution = await exerciseService.getSolution(requestedQuestion.id);
+      const nextSolution = await exerciseService.getSolution(
+        requestedQuestion.id,
+        dailyAssignmentId,
+      );
       if (questionVersionRef.current !== requestedQuestionVersion) return;
       setSolution(nextSolution);
     } catch (err) {
@@ -472,7 +481,7 @@ export function useExerciseViewModel() {
       solutionInFlightRef.current = false;
       setIsLoadingSolution(false);
     }
-  }, [currentQuestion]);
+  }, [currentQuestion, dailyAssignmentId]);
 
   return {
     currentQuestion,

@@ -12,6 +12,7 @@ export interface Question {
   conceptIds: string[];
   tags: string[];
   status: 'draft' | 'published' | 'archived';
+  isDailyCandidate: boolean;
   meta: {
     answer: string;
     answerType: string;

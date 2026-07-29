@@ -22,6 +22,10 @@ import {
   WandSparkles,
 } from 'lucide-react';
 import { buildExerciseTutorLaunch } from './exerciseTutorLaunch';
+import { DailyQuestionStatusEntry } from '@/modules/daily-question/components/DailyQuestionStatusEntry';
+import { dailyQuestionService } from '@/modules/daily-question/services/dailyQuestionService';
+import type { DailyQuestionAssignment } from '@/modules/daily-question/types/dailyQuestion';
+import { getApiErrorMessage } from '@/libs/http/apiClient';
 
 type ExerciseMode = 'class' | 'ai';
 
@@ -93,12 +97,40 @@ export const ExercisePage: React.FC = () => {
   const [selectedConceptId, setSelectedConceptId] = useState('');
   const [difficulty, setDifficulty] = useState(0.5);
   const [questionType, setQuestionType] = useState<GenerateQuestionType>('multiple_choice');
+  const [dailyAssignment, setDailyAssignment] = useState<DailyQuestionAssignment | null>(null);
+  const [isDailyStatusLoading, setIsDailyStatusLoading] = useState(true);
+  const [dailyStatusError, setDailyStatusError] = useState<string | null>(null);
 
   useEffect(() => {
     if (classLoadStarted.current) return;
     classLoadStarted.current = true;
     void loadNextClassQuestion();
   }, [loadNextClassQuestion]);
+
+  useEffect(() => {
+    const controller = new AbortController();
+    const loadDailyStatus = async () => {
+      setIsDailyStatusLoading(true);
+      setDailyStatusError(null);
+      try {
+        const nextAssignment = await dailyQuestionService.getToday(controller.signal);
+        if (!controller.signal.aborted) {
+          setDailyAssignment(nextAssignment);
+        }
+      } catch (statusError) {
+        if (!controller.signal.aborted) {
+          setDailyStatusError(getApiErrorMessage(statusError, '每日一题状态暂时无法加载'));
+        }
+      } finally {
+        if (!controller.signal.aborted) {
+          setIsDailyStatusLoading(false);
+        }
+      }
+    };
+
+    void loadDailyStatus();
+    return () => controller.abort();
+  }, []);
 
   useEffect(() => {
     return () => {
@@ -338,6 +370,11 @@ export const ExercisePage: React.FC = () => {
                 </p>
               </CardContent>
             </Card>
+            <DailyQuestionStatusEntry
+              assignment={dailyAssignment}
+              loading={isDailyStatusLoading}
+              error={dailyStatusError}
+            />
           </aside>
         </div>
       </div>

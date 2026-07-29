@@ -123,6 +123,12 @@ type Config struct {
 	WechatNoticeTemplateID           string
 	WechatQAMessageTemplateID        string
 
+	DailyQuestionPreGenerationEnabled        bool
+	DailyQuestionPreGenerationBatchSize      int
+	DailyQuestionPreGenerationConcurrency    int
+	DailyQuestionPreGenerationBatchInterval  time.Duration
+	DailyQuestionPreGenerationStudentTimeout time.Duration
+
 	EinoEnabled       bool
 	EinoBaseURL       string
 	EinoAPIKey        string
@@ -204,34 +210,39 @@ func Load() (Config, error) {
 		XidianEhallBase:           envString("XIDIAN_EHALL_BASE", "https://ehall.xidian.edu.cn"),
 		XidianUserAgent: envString("XIDIAN_USER_AGENT",
 			"Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36"),
-		XidianHTTPConnectTimeout:         envSeconds("XIDIAN_HTTP_CONNECT_TIMEOUT", 10*time.Second),
-		XidianHTTPReadTimeout:            envSeconds("XIDIAN_HTTP_READ_TIMEOUT", 30*time.Second),
-		XidianChallengeTTL:               time.Duration(envInt("XIDIAN_CHALLENGE_TTL", 600)) * time.Second,
-		XidianHTTPRetryCount:             envInt("XIDIAN_HTTP_RETRY_COUNT", 2),
-		XidianCaptchaWidth:               envInt("XIDIAN_CAPTCHA_WIDTH", 280),
-		XidianCaptchaHeight:              envInt("XIDIAN_CAPTCHA_HEIGHT", 155),
-		XidianPieceWidth:                 envInt("XIDIAN_PIECE_WIDTH", 44),
-		XidianPieceHeight:                envInt("XIDIAN_PIECE_HEIGHT", 155),
-		WechatOfficialAccountEnabled:     envBool("WECHAT_OFFICIAL_ACCOUNT_ENABLED", false),
-		WechatOfficialAccountAppID:       envString("WECHAT_OFFICIAL_ACCOUNT_APP_ID", ""),
-		WechatOfficialAccountAppSecret:   envString("WECHAT_OFFICIAL_ACCOUNT_APP_SECRET", ""),
-		WechatOfficialAccountToken:       envString("WECHAT_OFFICIAL_ACCOUNT_TOKEN", ""),
-		WechatOfficialAccountAESKey:      envString("WECHAT_OFFICIAL_ACCOUNT_AES_KEY", ""),
-		WechatOfficialAccountMessageMode: strings.ToLower(envString("WECHAT_OFFICIAL_ACCOUNT_MESSAGE_MODE", "plain")),
-		WechatOfficialAccountName:        envString("WECHAT_OFFICIAL_ACCOUNT_NAME", "微信公众号"),
-		WechatOfficialAccountHTTPTimeout: envSeconds("WECHAT_OFFICIAL_ACCOUNT_HTTP_TIMEOUT_SECONDS", 10*time.Second),
-		WechatMessageRemindersEnabled:    envBool("WECHAT_MESSAGE_REMINDERS_ENABLED", false),
-		WechatPrivateMessageTemplateID:   envString("WECHAT_PRIVATE_MESSAGE_TEMPLATE_ID", ""),
-		WechatNoticeTemplateID:           envString("WECHAT_NOTICE_TEMPLATE_ID", ""),
-		WechatQAMessageTemplateID:        envString("WECHAT_QA_MESSAGE_TEMPLATE_ID", ""),
-		EinoEnabled:                      envBool("EINO_ENABLED", false),
-		EinoBaseURL:                      envString("EINO_BASE_URL", ""),
-		EinoAPIKey:                       envString("EINO_API_KEY", ""),
-		EinoModel:                        envString("EINO_MODEL", ""),
-		EinoTimeout:                      envSeconds("EINO_TIMEOUT_SECONDS", 45*time.Second),
-		EinoTemperature:                  envFloat("EINO_TEMPERATURE", 0.3),
-		EinoMaxTokens:                    envInt("EINO_MAX_TOKENS", 1200),
-		EinoMaxIterations:                envInt("EINO_MAX_ITERATIONS", 8),
+		XidianHTTPConnectTimeout:                 envSeconds("XIDIAN_HTTP_CONNECT_TIMEOUT", 10*time.Second),
+		XidianHTTPReadTimeout:                    envSeconds("XIDIAN_HTTP_READ_TIMEOUT", 30*time.Second),
+		XidianChallengeTTL:                       time.Duration(envInt("XIDIAN_CHALLENGE_TTL", 600)) * time.Second,
+		XidianHTTPRetryCount:                     envInt("XIDIAN_HTTP_RETRY_COUNT", 2),
+		XidianCaptchaWidth:                       envInt("XIDIAN_CAPTCHA_WIDTH", 280),
+		XidianCaptchaHeight:                      envInt("XIDIAN_CAPTCHA_HEIGHT", 155),
+		XidianPieceWidth:                         envInt("XIDIAN_PIECE_WIDTH", 44),
+		XidianPieceHeight:                        envInt("XIDIAN_PIECE_HEIGHT", 155),
+		WechatOfficialAccountEnabled:             envBool("WECHAT_OFFICIAL_ACCOUNT_ENABLED", false),
+		WechatOfficialAccountAppID:               envString("WECHAT_OFFICIAL_ACCOUNT_APP_ID", ""),
+		WechatOfficialAccountAppSecret:           envString("WECHAT_OFFICIAL_ACCOUNT_APP_SECRET", ""),
+		WechatOfficialAccountToken:               envString("WECHAT_OFFICIAL_ACCOUNT_TOKEN", ""),
+		WechatOfficialAccountAESKey:              envString("WECHAT_OFFICIAL_ACCOUNT_AES_KEY", ""),
+		WechatOfficialAccountMessageMode:         strings.ToLower(envString("WECHAT_OFFICIAL_ACCOUNT_MESSAGE_MODE", "plain")),
+		WechatOfficialAccountName:                envString("WECHAT_OFFICIAL_ACCOUNT_NAME", "微信公众号"),
+		WechatOfficialAccountHTTPTimeout:         envSeconds("WECHAT_OFFICIAL_ACCOUNT_HTTP_TIMEOUT_SECONDS", 10*time.Second),
+		WechatMessageRemindersEnabled:            envBool("WECHAT_MESSAGE_REMINDERS_ENABLED", false),
+		WechatPrivateMessageTemplateID:           envString("WECHAT_PRIVATE_MESSAGE_TEMPLATE_ID", ""),
+		WechatNoticeTemplateID:                   envString("WECHAT_NOTICE_TEMPLATE_ID", ""),
+		WechatQAMessageTemplateID:                envString("WECHAT_QA_MESSAGE_TEMPLATE_ID", ""),
+		DailyQuestionPreGenerationEnabled:        envBool("DAILY_QUESTION_PREGENERATION_ENABLED", true),
+		DailyQuestionPreGenerationBatchSize:      envInt("DAILY_QUESTION_PREGENERATION_BATCH_SIZE", 100),
+		DailyQuestionPreGenerationConcurrency:    envInt("DAILY_QUESTION_PREGENERATION_CONCURRENCY", 4),
+		DailyQuestionPreGenerationBatchInterval:  envMilliseconds("DAILY_QUESTION_PREGENERATION_BATCH_INTERVAL_MS", time.Second),
+		DailyQuestionPreGenerationStudentTimeout: envSeconds("DAILY_QUESTION_PREGENERATION_STUDENT_TIMEOUT_SECONDS", 60*time.Second),
+		EinoEnabled:                              envBool("EINO_ENABLED", false),
+		EinoBaseURL:                              envString("EINO_BASE_URL", ""),
+		EinoAPIKey:                               envString("EINO_API_KEY", ""),
+		EinoModel:                                envString("EINO_MODEL", ""),
+		EinoTimeout:                              envSeconds("EINO_TIMEOUT_SECONDS", 45*time.Second),
+		EinoTemperature:                          envFloat("EINO_TEMPERATURE", 0.3),
+		EinoMaxTokens:                            envInt("EINO_MAX_TOKENS", 1200),
+		EinoMaxIterations:                        envInt("EINO_MAX_ITERATIONS", 8),
 	}
 
 	if cfg.Port <= 0 || cfg.Port > 65535 {
@@ -322,6 +333,9 @@ func Load() (Config, error) {
 		return Config{}, err
 	}
 	if err := validateWechatOfficialAccountConfig(cfg); err != nil {
+		return Config{}, err
+	}
+	if err := validateDailyQuestionPreGenerationConfig(cfg); err != nil {
 		return Config{}, err
 	}
 	if err := validateEinoConfig(cfg); err != nil {
@@ -740,6 +754,28 @@ func asciiAlphaNumeric(value string) bool {
 		}
 	}
 	return true
+}
+
+func validateDailyQuestionPreGenerationConfig(cfg Config) error {
+	if cfg.DailyQuestionPreGenerationBatchSize <= 0 {
+		return errors.New("DAILY_QUESTION_PREGENERATION_BATCH_SIZE must be greater than 0")
+	}
+	if cfg.DailyQuestionPreGenerationConcurrency <= 0 {
+		return errors.New("DAILY_QUESTION_PREGENERATION_CONCURRENCY must be greater than 0")
+	}
+	if cfg.DailyQuestionPreGenerationConcurrency > cfg.DailyQuestionPreGenerationBatchSize {
+		return errors.New("DAILY_QUESTION_PREGENERATION_CONCURRENCY must not exceed DAILY_QUESTION_PREGENERATION_BATCH_SIZE")
+	}
+	if cfg.DailyQuestionPreGenerationBatchInterval < 0 {
+		return errors.New("DAILY_QUESTION_PREGENERATION_BATCH_INTERVAL_MS must be zero or greater")
+	}
+	if cfg.DailyQuestionPreGenerationStudentTimeout <= 0 {
+		return errors.New("DAILY_QUESTION_PREGENERATION_STUDENT_TIMEOUT_SECONDS must be greater than 0")
+	}
+	if cfg.DailyQuestionPreGenerationStudentTimeout >= 2*time.Minute {
+		return errors.New("DAILY_QUESTION_PREGENERATION_STUDENT_TIMEOUT_SECONDS must be less than 120 seconds")
+	}
+	return nil
 }
 
 func validateEinoConfig(cfg Config) error {
