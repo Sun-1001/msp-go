@@ -47,21 +47,22 @@ CREATE TABLE IF NOT EXISTS %s (
 	return err
 }
 
-// AppliedVersions returns the set of applied migration versions.
-func (s PostgresStore) AppliedVersions(ctx context.Context) (map[int64]struct{}, error) {
-	rows, err := s.pool.Query(ctx, fmt.Sprintf(`SELECT version FROM %s`, s.qualifiedTableName()))
+// AppliedMigrations returns the applied migration names keyed by version.
+func (s PostgresStore) AppliedMigrations(ctx context.Context) (map[int64]string, error) {
+	rows, err := s.pool.Query(ctx, fmt.Sprintf(`SELECT version, name FROM %s`, s.qualifiedTableName()))
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
 
-	applied := make(map[int64]struct{})
+	applied := make(map[int64]string)
 	for rows.Next() {
 		var version int64
-		if err := rows.Scan(&version); err != nil {
+		var name string
+		if err := rows.Scan(&version, &name); err != nil {
 			return nil, err
 		}
-		applied[version] = struct{}{}
+		applied[version] = name
 	}
 	if err := rows.Err(); err != nil {
 		return nil, err
