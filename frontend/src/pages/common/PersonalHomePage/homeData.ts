@@ -5,6 +5,11 @@ import { sessionService } from '@/modules/session/services/sessionService';
 import { teacherService } from '@/modules/teacher/services/teacherService';
 import type { ClassInfo } from '@/modules/classroom/types/classroom';
 import type { PersonalHomeData, HomeActionItem, HomeRecentItem, HomeStat } from './types';
+import { dailyQuestionService } from '@/modules/daily-question/services/dailyQuestionService';
+import {
+  getDailyQuestionPresentation,
+  type DailyQuestionAssignment,
+} from '@/modules/daily-question/types/dailyQuestion';
 
 interface StudentOverviewResponse {
   total_exercises: number;
@@ -162,6 +167,26 @@ function buildStudentActions(mastery: StudentMasteryResponse | null): HomeAction
     });
 }
 
+function buildDailyQuestionAction(assignment: DailyQuestionAssignment | null): HomeActionItem {
+  const presentation = getDailyQuestionPresentation(assignment);
+  const tone: HomeActionItem['tone'] = presentation.tone === 'success'
+    ? 'emerald'
+    : presentation.tone === 'warning' || presentation.tone === 'danger'
+      ? 'coral'
+      : presentation.tone === 'info'
+        ? 'violet'
+        : 'blue';
+
+  return {
+    id: 'daily-question',
+    title: '每日一题',
+    description: presentation.description,
+    href: '/daily-question',
+    meta: presentation.label,
+    tone,
+  };
+}
+
 function buildStudentRecentItems(
   sessions: Awaited<ReturnType<typeof sessionService.getSessions>> | null
 ): HomeRecentItem[] {
@@ -210,17 +235,19 @@ function buildStudentAffiliation(currentClass: ClassInfo | null, unavailable: bo
 }
 
 export async function loadStudentHomeData(): Promise<PersonalHomeData> {
-  const [overviewResult, masteryResult, sessionsResult, classResult] = await Promise.allSettled([
+  const [overviewResult, masteryResult, sessionsResult, classResult, dailyQuestionResult] = await Promise.allSettled([
     apiClient.get<StudentOverviewResponse>('/progress/overview').then((response) => response.data),
     apiClient.get<StudentMasteryResponse>('/progress/mastery').then((response) => response.data),
     sessionService.getSessions(4, 0),
     classService.getMyClass(),
+    dailyQuestionService.getToday(),
   ]);
 
   const overview = resultValue(overviewResult);
   const mastery = resultValue(masteryResult);
   const sessions = resultValue(sessionsResult);
   const currentClass = resultValue(classResult)?.class_info ?? null;
+  const dailyQuestion = resultValue(dailyQuestionResult);
   const recentItems = buildStudentRecentItems(sessions);
 
   return {
@@ -231,7 +258,7 @@ export async function loadStudentHomeData(): Promise<PersonalHomeData> {
       ? `上次学到：${recentItems[0].title}`
       : '从智能练习或 AI 辅导开始今天的学习',
     stats: buildStudentStats(overview),
-    actions: buildStudentActions(mastery),
+    actions: [buildDailyQuestionAction(dailyQuestion), ...buildStudentActions(mastery)],
     recentItems,
     affiliation: buildStudentAffiliation(currentClass, classResult.status === 'rejected'),
     failedSections: collectFailures([
@@ -239,6 +266,7 @@ export async function loadStudentHomeData(): Promise<PersonalHomeData> {
       ['掌握度', masteryResult],
       ['学习记录', sessionsResult],
       ['班级信息', classResult],
+      ['每日一题', dailyQuestionResult],
     ]),
   };
 }

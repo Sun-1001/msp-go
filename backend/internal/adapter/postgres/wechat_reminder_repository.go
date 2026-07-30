@@ -104,6 +104,58 @@ func (e WechatReminderEnqueuer) EnqueueNoticeRecipients(ctx context.Context, db 
 	return nil
 }
 
+// EnqueueDailyQuestionRecipients creates one WeChat job for each current class
+// member whose daily question is ready and still unfinished. The caller owns the
+// transaction that creates the source event, so the event and all jobs commit together.
+func (e WechatReminderEnqueuer) EnqueueDailyQuestionRecipients(
+	ctx context.Context,
+	db Querier,
+	eventID string,
+	classID string,
+	assignmentDate time.Time,
+) (int, error) {
+	if !e.enabled {
+		return 0, nil
+	}
+	if db == nil || !validWechatReminderText(eventID, maxWechatReminderIDBytes) ||
+		!validWechatReminderText(classID, maxWechatReminderIDBytes) || assignmentDate.IsZero() {
+		return 0, errors.New("invalid daily question wechat reminder enqueue input")
+	}
+	tag, err := db.Exec(ctx, `
+		WITH recipients AS (
+			SELECT DISTINCT assignment.student_id
+			FROM public.daily_question_assignments assignment
+			JOIN public.class_enrollments enrollment
+			  ON enrollment.class_id = assignment.class_id
+			 AND enrollment.student_id = assignment.student_id
+			JOIN public.users student
+			  ON student.id = assignment.student_id
+			WHERE assignment.class_id = $4
+			  AND assignment.assignment_date = $5::date
+			  AND assignment.status = 'ready'
+			  AND assignment.content_id IS NOT NULL
+			  AND student.role = 'STUDENT'::public.userrole
+			  AND student.is_active = true
+			  AND student.status = 'ACTIVE'::public.userstatus
+		)
+		INSERT INTO public.wechat_message_reminder_jobs (
+			app_id, event_type, source_id, recipient_user_id
+		)
+		SELECT $1, $2, $3, recipients.student_id
+		FROM recipients
+		ON CONFLICT (app_id, event_type, source_id, recipient_user_id) DO NOTHING`,
+		e.appID,
+		string(wechatreminder.EventDailyQuestion),
+		eventID,
+		classID,
+		assignmentDate,
+	)
+	if err != nil {
+		return 0, fmt.Errorf("enqueue daily question wechat reminders: %w", err)
+	}
+	return int(tag.RowsAffected()), nil
+}
+
 // RequeueUnconfirmedNoticeRecipients schedules another notice reminder without duplicating active jobs.
 func (e WechatReminderEnqueuer) RequeueUnconfirmedNoticeRecipients(ctx context.Context, db Querier, noticeID string) (int, error) {
 	if !e.enabled {
@@ -361,6 +413,95 @@ func (r WechatReminderRepository) resolveSourceDelivery(
 				  AND message.sender_id = thread.teacher_id
 				  AND thread.student_id = $2)
 			  )`
+	case wechatreminder.EventDailyQuestion:
+		query = `
+			SELECT CASE
+			           WHEN event.kind = 'uniform_low_stock' THEN '每日一题'
+			           ELSE COALESCE(
+			               NULLIF(BTRIM(teacher.display_name), ''),
+			               NULLIF(BTRIM(teacher.username), ''),
+			               '老师'
+			           )
+			       END,
+			       CASE
+			           WHEN event.kind = 'uniform_low_stock'
+			           THEN '班级统一题日程只剩 1 道题，请及时补充。'
+			           ELSE '今日每日一题尚未完成，请及时作答。'
+			       END,
+			       event.created_at AT TIME ZONE 'Asia/Shanghai'
+			FROM public.daily_question_wechat_events event
+			JOIN public.classes class
+			  ON class.id = event.class_id
+			LEFT JOIN public.users teacher
+			  ON teacher.id = event.teacher_id
+			LEFT JOIN public.daily_question_class_settings settings
+			  ON settings.class_id = event.class_id
+			WHERE event.id = $1
+			  AND class.teacher_id = event.teacher_id
+			  AND (
+			      (
+			          event.kind IN ('manual_student_reminder', 'automatic_student_reminder')
+			          AND (event.kind <> 'automatic_student_reminder'
+			               OR coalesce(settings.auto_reminder_enabled, false))
+			          AND EXISTS (
+			              SELECT 1
+			              FROM public.daily_question_assignments assignment
+			              JOIN public.class_enrollments enrollment
+			                ON enrollment.class_id = assignment.class_id
+			               AND enrollment.student_id = assignment.student_id
+			              WHERE assignment.class_id = event.class_id
+			                AND assignment.assignment_date = event.assignment_date
+			                AND event.assignment_date = (CURRENT_TIMESTAMP AT TIME ZONE 'Asia/Shanghai')::date
+			                AND assignment.student_id = $2
+			                AND assignment.status = 'ready'
+			                AND assignment.content_id IS NOT NULL
+			          )
+			      )
+			      OR (
+			          event.kind = 'uniform_low_stock'
+			          AND event.teacher_id = $2
+			          AND settings.strategy = 'uniform'
+			          AND EXISTS (
+			              SELECT 1
+			              FROM public.daily_question_class_selections selection
+			              JOIN public.contents content ON content.id = selection.content_id
+			              WHERE selection.class_id = event.class_id
+			                AND selection.content_id = event.remaining_content_id
+			                AND selection.assignment_date >= event.assignment_date
+			                AND selection.source = 'teacher_bank'
+			                AND selection.selection_reason = 'teacher_uniform'
+			                AND content.type = 'PROBLEM'::public.contenttype
+			                AND content.status = 'PUBLISHED'::public.contentstatus
+			                AND content.deleted_at IS NULL
+			                AND NOT EXISTS (
+			                    SELECT 1
+			                    FROM public.daily_question_assignments assignment
+			                    WHERE assignment.class_id = selection.class_id
+			                      AND assignment.assignment_date = selection.assignment_date
+			                      AND (assignment.status <> 'unavailable' OR assignment.content_id IS NOT NULL)
+			                )
+			          )
+			          AND 1 = (
+			              SELECT count(*)
+			              FROM public.daily_question_class_selections selection
+			              JOIN public.contents content ON content.id = selection.content_id
+			              WHERE selection.class_id = event.class_id
+			                AND selection.assignment_date >= event.assignment_date
+			                AND selection.source = 'teacher_bank'
+			                AND selection.selection_reason = 'teacher_uniform'
+			                AND content.type = 'PROBLEM'::public.contenttype
+			                AND content.status = 'PUBLISHED'::public.contentstatus
+			                AND content.deleted_at IS NULL
+			                AND NOT EXISTS (
+			                    SELECT 1
+			                    FROM public.daily_question_assignments assignment
+			                    WHERE assignment.class_id = selection.class_id
+			                      AND assignment.assignment_date = selection.assignment_date
+			                      AND (assignment.status <> 'unavailable' OR assignment.content_id IS NOT NULL)
+			                )
+			          )
+			      )
+			  )`
 	default:
 		return wechatreminder.Delivery{}, false, nil
 	}
@@ -557,7 +698,7 @@ func (r WechatReminderRepository) DeleteFinishedBefore(
 
 func validWechatReminderEvent(eventType wechatreminder.EventType) bool {
 	switch eventType {
-	case wechatreminder.EventPrivateMessage, wechatreminder.EventNotice, wechatreminder.EventQAMessage:
+	case wechatreminder.EventPrivateMessage, wechatreminder.EventNotice, wechatreminder.EventQAMessage, wechatreminder.EventDailyQuestion:
 		return true
 	default:
 		return false

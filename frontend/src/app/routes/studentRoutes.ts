@@ -3,6 +3,7 @@ import type { RouteConfig } from './index';
 
 // 学生页面懒加载
 const ExercisePage = lazy(() => import('@/pages/student/ExercisePage').then(m => ({ default: m.ExercisePage })));
+const DailyQuestionPage = lazy(() => import('@/pages/student/DailyQuestionPage').then(m => ({ default: m.DailyQuestionPage })));
 const SessionChatPage = lazy(() => import('@/pages/student/SessionChatPage').then(m => ({ default: m.default })));
 const MistakeBookPage = lazy(() => import('@/pages/student/MistakeBookPage').then(m => ({ default: m.MistakeBookPage })));
 const MistakeRedoPage = lazy(() => import('@/pages/student/MistakeRedoPage').then(m => ({ default: m.MistakeRedoPage })));
@@ -20,6 +21,7 @@ const MessageCenterPage = lazy(() => import('@/pages/student/MessageCenterPage')
 export const studentRoutes: RouteConfig[] = [
   { path: '/my-class', component: MyClassPage, title: '我的班级', protected: true, requiredRole: 'student' },
   { path: '/exercise', component: ExercisePage, title: '智能刷题', protected: true, requiredRole: 'student' },
+  { path: '/daily-question', component: DailyQuestionPage, title: '每日一题', protected: true, requiredRole: 'student' },
   { path: '/session/new', component: SessionChatPage, title: '新建学习会话', protected: true, requiredRole: 'student' },
   { path: '/session/:sessionId', component: SessionChatPage, title: '学习会话', protected: true, requiredRole: 'student' },
   { path: '/messages', component: MessageCenterPage, title: '消息中心', protected: true, requiredRole: 'student' },

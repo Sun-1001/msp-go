@@ -17,7 +17,7 @@ export interface Question {
   content: string; // LaTeX
   difficulty: number;
   type: 'multiple_choice' | 'short_answer' | 'proof';
-  source: 'class' | 'ai_generated' | 'review';
+  source: 'class' | 'ai_generated' | 'review' | 'daily';
   knowledgePoints: string[];
   knowledgePointNames: string[];
   hintsAvailable: boolean;
@@ -27,7 +27,7 @@ export interface Question {
 
 export type GenerateQuestionType = 'multiple_choice' | 'short_answer';
 
-interface QuestionResponse {
+export interface ExerciseQuestionResponse {
   id: string;
   title: string;
   content: string;
@@ -89,6 +89,7 @@ export interface ExerciseSolution {
 }
 
 export interface SubmitResult {
+  attemptId?: string;
   isCorrect: boolean;
   recorded?: boolean;
   gradingStatus?: 'correct' | 'incorrect' | 'indeterminate';
@@ -105,6 +106,7 @@ export interface SubmitResult {
 
 export interface SubmitPayload {
   exerciseId: string;
+  dailyAssignmentId?: string;
   answerText?: string;
   answerImageUrl?: string;
   answerSteps?: string[];
@@ -142,13 +144,16 @@ const mapEvaluation = (data?: EvaluationResponse | null): EvaluationDetail | nul
       }
     : null;
 
-const mapQuestion = (data: QuestionResponse): Question => ({
+export const mapExerciseQuestion = (
+  data: ExerciseQuestionResponse,
+  sourceOverride?: Question['source'],
+): Question => ({
   id: data.id,
   title: data.title,
   content: data.content,
   difficulty: data.difficulty,
   type: data.type as Question['type'],
-  source: data.source ?? 'class',
+  source: sourceOverride ?? data.source ?? 'class',
   knowledgePoints: data.knowledge_points ?? [],
   knowledgePointNames: data.knowledge_point_names ?? [],
   hintsAvailable: data.hints_available,
@@ -169,7 +174,7 @@ export const exerciseService = {
     if (conceptId) params.concept_id = conceptId;
     if (difficulty !== undefined) params.difficulty = String(difficulty);
 
-    const res = await apiClient.get<QuestionResponse | null>('/exercise/next', {
+    const res = await apiClient.get<ExerciseQuestionResponse | null>('/exercise/next', {
       params,
     });
 
@@ -177,7 +182,7 @@ export const exerciseService = {
     if (!data) {
       return null;
     }
-    return mapQuestion(data);
+    return mapExerciseQuestion(data);
   },
 
   /**
@@ -190,7 +195,7 @@ export const exerciseService = {
       questionType: payload.questionType,
     });
 
-    const res = await apiClient.post<QuestionResponse>('/exercise/generate', {
+    const res = await apiClient.post<ExerciseQuestionResponse>('/exercise/generate', {
       concept_id: payload.conceptId,
       difficulty: payload.difficulty,
       question_type: payload.questionType,
@@ -198,7 +203,7 @@ export const exerciseService = {
       timeout: 60000,
     });
 
-    return mapQuestion(res.data);
+    return mapExerciseQuestion(res.data);
   },
 
   /**
@@ -210,6 +215,7 @@ export const exerciseService = {
     });
 
     const res = await apiClient.post<{
+      attempt_id?: string;
       is_correct: boolean;
       recorded?: boolean;
       grading_status?: SubmitResult['gradingStatus'];
@@ -233,6 +239,7 @@ export const exerciseService = {
       next_recommendation: string;
     }>('/exercise/submit', {
       exercise_id: payload.exerciseId,
+      ...(payload.dailyAssignmentId ? { daily_assignment_id: payload.dailyAssignmentId } : {}),
       ...(payload.answerText ? { answer_text: payload.answerText } : {}),
       ...(payload.answerImageUrl ? { answer_image_url: payload.answerImageUrl } : {}),
       answer_steps: payload.answerSteps,
@@ -244,6 +251,7 @@ export const exerciseService = {
     const data = res.data;
     const recorded = data.recorded !== false;
     return {
+      attemptId: data.attempt_id,
       isCorrect: data.is_correct,
       recorded,
       gradingStatus:
@@ -274,7 +282,11 @@ export const exerciseService = {
   /**
    * 获取题目解析
    */
-  async getSolution(exerciseId: string): Promise<ExerciseSolution> {
+  async getSolution(
+    exerciseId: string,
+    dailyAssignmentId?: string,
+  ): Promise<ExerciseSolution> {
+    const normalizedDailyAssignmentId = dailyAssignmentId?.trim();
     const res = await apiClient.get<{
       exercise_id: string;
       answer: string;
@@ -287,7 +299,11 @@ export const exerciseService = {
         message: string;
         retryable: boolean;
       } | null;
-    }>(`/exercise/${exerciseId}/solution`);
+    }>(`/exercise/${exerciseId}/solution`, {
+      ...(normalizedDailyAssignmentId
+        ? { params: { daily_assignment_id: normalizedDailyAssignmentId } }
+        : {}),
+    });
 
     return {
       answer: res.data.answer,

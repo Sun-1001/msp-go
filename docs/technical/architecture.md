@@ -89,6 +89,7 @@ backend/
 | Session/Exercise | 学习会话、题目生成、判题、诊断、错题和 DKT 更新 |
 | Progress/Portrait | 掌握度、学习路径、统计、知识图谱和学生画像 |
 | Classroom/Teacher | 班级、成员、题库、教学资源和教师分析 |
+| Daily Question | 上海自然日固定题、班级统一/个性化分配、教师计划与公众号提醒 |
 | Resource/Upload | 资源元数据、收藏、上传、对象存储和管理员运行时配置 |
 | AI Config | provider、model、凭据和 Agent 运行配置 |
 | Xidian/Security | 西电账户绑定、安全日志、告警、健康检查和指标 |
@@ -108,6 +109,7 @@ backend/
 - AI/Agent 通过 Eino 和 OpenAI-compatible provider 接入，运行配置持久化到数据库。
 - 对象存储仅使用管理员保存的加密数据库配置；未配置时运行时保持停用，保存前完成真实写入探测，成功后通过原子运行时快照即时切换，进行中的请求继续使用原快照，读取不会跨后端回退。
 - 数据库只追加经过评审的 Go forward migration，不自动执行 down migration。
+- 每日一题的教师提醒通过独立的、无正文的公众号任务事件持久化；手动提醒、每天 08:00 的自动提醒和统一题低库存预警均不创建站内通知。自动开关当天开启会即时尝试入队，08:00 失败在当天重试；发送前会重新确认学生仍有未完成可作答题目，或教师统一题日程仍只剩对应的一道题。
 - Go API 是唯一后端进程入口，不保留 Python 运行时兼容层。
 - JWT HMAC 契约保持前后端兼容；邮件发送使用受配置和安全边界约束的 SMTP adapter。
 

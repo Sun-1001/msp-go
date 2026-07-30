@@ -18,6 +18,7 @@ export function useQuestionBank() {
   const [currentPage, setCurrentPage] = useState(1);
   const [pageSize] = useState(20);
   const [selectedQuestions, setSelectedQuestions] = useState<string[]>([]);
+  const [dailyCandidateUpdatingIds, setDailyCandidateUpdatingIds] = useState<string[]>([]);
 
   // 数据状态
   const [questions, setQuestions] = useState<Question[]>([]);
@@ -238,6 +239,28 @@ export function useQuestionBank() {
     }
   };
 
+  const handleDailyCandidateChange = async (questionId: string, enabled: boolean) => {
+    const question = questions.find((item) => item.id === questionId);
+    if (enabled && question?.status !== 'published') {
+      toast({ type: 'error', title: '只有已发布题目可以设为每日题候选' });
+      return;
+    }
+
+    setDailyCandidateUpdatingIds((ids) => ids.includes(questionId) ? ids : [...ids, questionId]);
+    try {
+      await questionService.setDailyCandidate(questionId, enabled);
+      toast({
+        type: 'success',
+        title: enabled ? '已设为每日题候选' : '已取消每日题候选',
+      });
+      await loadQuestions();
+    } catch {
+      toast({ type: 'error', title: '每日题候选状态更新失败，请稍后重试' });
+    } finally {
+      setDailyCandidateUpdatingIds((ids) => ids.filter((id) => id !== questionId));
+    }
+  };
+
   // 单题删除
   const handleDeleteSingle = async (questionId: string) => {
     setOpenMenuId(null);
@@ -264,13 +287,13 @@ export function useQuestionBank() {
     hasActiveFilters,
     resetFilters,
     // 数据
-    questions, total, stats, groups, loading, error,
+    questions, total, stats, groups, loading, error, dailyCandidateUpdatingIds,
     // 选择
     selectedQuestions, toggleSelectQuestion, toggleSelectAll,
     // 批量操作
     handleBatchPublish, handleBatchDelete, handleBatchDuplicate,
     // 单题操作
-    handleDuplicate, handleStatusChange, handleDeleteSingle,
+    handleDuplicate, handleStatusChange, handleDailyCandidateChange, handleDeleteSingle,
     // 菜单
     openMenuId, setOpenMenuId, menuRef,
     // 模态框

@@ -34,6 +34,7 @@ type Service interface {
 	BatchImport(context.Context, string, []questionapp.QuestionInput) (questionapp.BatchOperationResponse, error)
 	ParseQuestions(context.Context, []string) (questionapp.AIParseResponse, error)
 	GenerateIsomorphicProblem(context.Context, questionapp.GenerateRequest) (questionapp.GeneratedQuestion, error)
+	SetDailyCandidate(context.Context, string, string, bool) (questionapp.Question, error)
 }
 
 // Authenticator decodes Go/Python-compatible access tokens.
@@ -74,6 +75,7 @@ func (h *Handler) Register(mux *http.ServeMux, prefix string) {
 	mux.HandleFunc("POST "+prefix+"/batch/import", h.batchImport)
 	mux.HandleFunc("POST "+prefix+"/ai-parse", h.aiParse)
 	mux.HandleFunc("POST "+prefix+"/generate-isomorphic", h.generateIsomorphic)
+	mux.HandleFunc("PUT "+prefix+"/{question_id}/daily-candidate", h.setDailyCandidate)
 	mux.HandleFunc("GET "+prefix+"/{question_id}", h.detail)
 	mux.HandleFunc("PUT "+prefix+"/{question_id}", h.update)
 	mux.HandleFunc("DELETE "+prefix+"/{question_id}", h.delete)
@@ -108,6 +110,10 @@ type updateRequest struct {
 	Options              *[]string `json:"options"`
 	EstimatedTimeSeconds *int      `json:"estimated_time_seconds"`
 	Status               *string   `json:"status"`
+}
+
+type dailyCandidateRequest struct {
+	Enabled *bool `json:"enabled"`
 }
 
 type batchRequest struct {
@@ -257,6 +263,42 @@ func (h *Handler) update(w http.ResponseWriter, r *http.Request) {
 		}
 		h.logQuestionError("update question failed", err)
 		writeQuestionError(w, http.StatusInternalServerError, "INTERNAL_ERROR", "更新失败")
+		return
+	}
+	httpjson.Write(w, http.StatusOK, response)
+}
+
+func (h *Handler) setDailyCandidate(w http.ResponseWriter, r *http.Request) {
+	principal, ok := h.requireTeacher(w, r)
+	if !ok {
+		return
+	}
+	var request dailyCandidateRequest
+	if !decodeRequest(w, r, &request) {
+		return
+	}
+	if request.Enabled == nil {
+		writeQuestionError(w, http.StatusUnprocessableEntity, "VALIDATION_ERROR", "enabled 必须是布尔值")
+		return
+	}
+	response, err := h.service.SetDailyCandidate(
+		r.Context(),
+		principal.UserID,
+		r.PathValue("question_id"),
+		*request.Enabled,
+	)
+	if err != nil {
+		switch {
+		case errors.Is(err, questionapp.ErrBadRequest):
+			writeQuestionError(w, http.StatusConflict, "QUESTION_NOT_PUBLISHED", "只有已发布题目可以设为每日候选")
+		case errors.Is(err, questionapp.ErrForbidden):
+			writeQuestionError(w, http.StatusForbidden, "FORBIDDEN", "无权修改此题目")
+		case errors.Is(err, questionapp.ErrNotFound):
+			writeQuestionError(w, http.StatusNotFound, "NOT_FOUND", "题目不存在或无权访问")
+		default:
+			h.logQuestionError("set daily question candidate failed", err)
+			writeQuestionError(w, http.StatusInternalServerError, "INTERNAL_ERROR", "更新每日候选状态失败")
+		}
 		return
 	}
 	httpjson.Write(w, http.StatusOK, response)

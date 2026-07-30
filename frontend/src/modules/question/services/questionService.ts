@@ -29,6 +29,7 @@ interface QuestionResponse {
   concept_ids?: string[];
   tags?: string[];
   status: string;
+  is_daily_candidate?: boolean;
   meta: {
     answer: string;
     answer_type: string;
@@ -56,6 +57,7 @@ function transformQuestion(data: QuestionResponse): Question {
     conceptIds: data.concept_ids || [],
     tags: data.tags || [],
     status: data.status as 'draft' | 'published' | 'archived',
+    isDailyCandidate: data.is_daily_candidate ?? false,
     meta: {
       answer: data.meta.answer || '',
       answerType: data.meta.answer_type || 'expression',
@@ -238,6 +240,19 @@ export const questionService = {
       return transformQuestion(response.data);
     } catch (error) {
       log.error('更新题目失败', error);
+      throw error;
+    }
+  },
+
+  /**
+   * 设置教师题库中的每日题候选标记
+   */
+  async setDailyCandidate(id: string, enabled: boolean): Promise<void> {
+    log.info('更新每日题候选标记', { id, enabled });
+    try {
+      await apiClient.put(`/questions/${id}/daily-candidate`, { enabled });
+    } catch (error) {
+      log.error('更新每日题候选标记失败', error);
       throw error;
     }
   },

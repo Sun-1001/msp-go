@@ -41,14 +41,25 @@ interface QuestionImportModalProps {
   isOpen: boolean;
   onClose: () => void;
   onImportComplete: () => void;
+  maxSelected?: number;
+  importActionLabel?: string;
+  completionActionLabel?: string;
+  onImportQuestions?: (questions: QuestionCreateData[]) => Promise<ImportResult>;
 }
 
 export const QuestionImportModal: React.FC<QuestionImportModalProps> = ({
   isOpen,
   onClose,
   onImportComplete,
+  maxSelected,
+  importActionLabel = '导入选中题目',
+  completionActionLabel = '查看题库',
+  onImportQuestions,
 }) => {
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const selectionLimit = maxSelected == null
+    ? Number.POSITIVE_INFINITY
+    : Math.max(1, Math.floor(maxSelected));
 
   // 状态
   const [step, setStep] = useState<ImportStep>('upload');
@@ -130,7 +141,7 @@ export const QuestionImportModal: React.FC<QuestionImportModalProps> = ({
 
       log.info('题目解析完成', { count: questions.length });
       setParsedQuestions(questions);
-      setSelectedIds(new Set(questions.map((q) => q.tempId)));
+      setSelectedIds(new Set(questions.slice(0, selectionLimit).map((q) => q.tempId)));
       setStep('preview');
     } catch (err) {
       const message = err instanceof Error ? err.message : '文件解析失败';
@@ -138,7 +149,7 @@ export const QuestionImportModal: React.FC<QuestionImportModalProps> = ({
       setError(message);
       setStep('upload');
     }
-  }, []);
+  }, [selectionLimit]);
 
   const handleDrop = useCallback(
     (e: React.DragEvent) => {
@@ -156,20 +167,32 @@ export const QuestionImportModal: React.FC<QuestionImportModalProps> = ({
   // ==================== 预览操作 ====================
 
   const handleToggleSelect = (id: string) => {
+    if (!selectedIds.has(id) && selectionLimit === 1) {
+      setSelectedIds(new Set([id]));
+      setError(null);
+      return;
+    }
+    if (!selectedIds.has(id) && selectedIds.size >= selectionLimit) {
+      setError(`本次最多选择 ${selectionLimit} 道题目`);
+      return;
+    }
     setSelectedIds((prev) => {
       const next = new Set(prev);
       if (next.has(id)) next.delete(id);
       else next.add(id);
       return next;
     });
+    setError(null);
   };
 
   const handleToggleSelectAll = () => {
-    if (selectedIds.size === parsedQuestions.length) {
+    const selectableCount = Math.min(parsedQuestions.length, selectionLimit);
+    if (selectedIds.size === selectableCount) {
       setSelectedIds(new Set());
     } else {
-      setSelectedIds(new Set(parsedQuestions.map((q) => q.tempId)));
+      setSelectedIds(new Set(parsedQuestions.slice(0, selectableCount).map((q) => q.tempId)));
     }
+    setError(null);
   };
 
   const handleUpdateQuestion = (id: string, updates: Partial<ParsedQuestion>) => {
@@ -261,17 +284,24 @@ export const QuestionImportModal: React.FC<QuestionImportModalProps> = ({
         estimatedTimeSeconds: 300,
       }));
 
-      // 分批导入（每批最多 MAX_BATCH_IMPORT_SIZE）
       let totalSuccess = 0;
       let totalFailed = 0;
       const allErrors: string[] = [];
 
-      for (let i = 0; i < createDataList.length; i += MAX_BATCH_IMPORT_SIZE) {
-        const batch = createDataList.slice(i, i + MAX_BATCH_IMPORT_SIZE);
-        const result = await questionService.batchImport(batch);
-        totalSuccess += result.success;
-        totalFailed += result.failed;
+      if (onImportQuestions) {
+        const result = await onImportQuestions(createDataList);
+        totalSuccess = result.success;
+        totalFailed = result.failed;
         allErrors.push(...result.errors);
+      } else {
+        // 分批导入（每批最多 MAX_BATCH_IMPORT_SIZE）
+        for (let i = 0; i < createDataList.length; i += MAX_BATCH_IMPORT_SIZE) {
+          const batch = createDataList.slice(i, i + MAX_BATCH_IMPORT_SIZE);
+          const result = await questionService.batchImport(batch);
+          totalSuccess += result.success;
+          totalFailed += result.failed;
+          allErrors.push(...result.errors);
+        }
       }
 
       setImportResult({
@@ -380,6 +410,7 @@ export const QuestionImportModal: React.FC<QuestionImportModalProps> = ({
         questions={parsedQuestions}
         selectedIds={selectedIds}
         aiParsingIds={aiParsingIds}
+        allowSelectAll={selectionLimit > 1}
         onToggleSelect={handleToggleSelect}
         onToggleSelectAll={handleToggleSelectAll}
         onUpdateQuestion={handleUpdateQuestion}
@@ -396,13 +427,14 @@ export const QuestionImportModal: React.FC<QuestionImportModalProps> = ({
         <div className="flex items-center gap-2">
           <span className="text-sm text-surface-500">
             已选择 {selectedIds.size} / {parsedQuestions.length} 道题目
+            {Number.isFinite(selectionLimit) ? `，本次最多 ${selectionLimit} 道` : ''}
           </span>
           <Button
             onClick={handleImport}
             disabled={selectedIds.size === 0 || aiParsingIds.size > 0}
           >
             <ArrowRight className="h-4 w-4 mr-1" />
-            导入选中题目
+            {importActionLabel}
           </Button>
         </div>
       </div>
@@ -450,7 +482,7 @@ export const QuestionImportModal: React.FC<QuestionImportModalProps> = ({
           onImportComplete();
         }}
       >
-        查看题库
+        {completionActionLabel}
       </Button>
     </div>
   );

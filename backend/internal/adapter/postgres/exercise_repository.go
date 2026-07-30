@@ -159,6 +159,158 @@ func (r ExerciseRepository) GetExerciseForUpdate(ctx context.Context, exerciseID
 	return scanOptionalExercise(row)
 }
 
+// GetDailyAssignment returns the submission binding without locking it.
+func (r ExerciseRepository) GetDailyAssignment(ctx context.Context, assignmentID string, studentID string) (exerciseapp.DailyAssignmentBinding, bool, error) {
+	return r.getDailyAssignment(ctx, assignmentID, studentID, false)
+}
+
+// GetDailyAssignmentForUpdate serializes first-result and correction attachment.
+func (r ExerciseRepository) GetDailyAssignmentForUpdate(ctx context.Context, assignmentID string, studentID string) (exerciseapp.DailyAssignmentBinding, bool, error) {
+	return r.getDailyAssignment(ctx, assignmentID, studentID, true)
+}
+
+func (r ExerciseRepository) getDailyAssignment(
+	ctx context.Context,
+	assignmentID string,
+	studentID string,
+	forUpdate bool,
+) (exerciseapp.DailyAssignmentBinding, bool, error) {
+	query := dailyAssignmentBindingSelect + `
+		WHERE assignment.id = $1 AND assignment.student_id = $2`
+	if forUpdate {
+		query += ` FOR UPDATE OF assignment`
+	}
+	row := r.DB().QueryRow(ctx, query, assignmentID, studentID)
+	return scanOptionalDailyAssignmentBinding(row)
+}
+
+// HasDailyAssignmentContent keeps a fixed task accessible after class membership changes.
+func (r ExerciseRepository) HasDailyAssignmentContent(ctx context.Context, studentID string, contentID string) (bool, error) {
+	var assigned bool
+	err := r.DB().QueryRow(ctx, `
+		SELECT EXISTS (
+			SELECT 1
+			FROM public.daily_question_assignments assignment
+			WHERE assignment.student_id = $1
+			  AND assignment.content_id = $2
+			  AND assignment.status IN ('ready', 'completed')
+		)`, studentID, contentID).Scan(&assigned)
+	return assigned, err
+}
+
+// ApplyDailyAttempt records the immutable first result or the first successful correction.
+func (r ExerciseRepository) ApplyDailyAttempt(ctx context.Context, update exerciseapp.DailyAttemptUpdate) error {
+	result, err := r.DB().Exec(ctx, `
+		UPDATE public.daily_question_assignments
+		SET
+			first_attempt_id = CASE WHEN status = 'ready' THEN $4 ELSE first_attempt_id END,
+			first_result = CASE
+				WHEN status = 'ready' AND $5 THEN 'correct'
+				WHEN status = 'ready' THEN 'incorrect'
+				ELSE first_result
+			END,
+			corrected_attempt_id = CASE
+				WHEN status = 'completed' AND first_result = 'incorrect' AND $5 THEN $4
+				ELSE corrected_attempt_id
+			END,
+			status = 'completed',
+			completed_at = CASE WHEN status = 'ready' THEN $6 ELSE completed_at END,
+			counts_toward_streak = CASE WHEN status = 'ready' THEN $7 ELSE counts_toward_streak END,
+			opened_at = coalesce(opened_at, $6),
+			updated_at = $6
+		WHERE
+			id = $1 AND
+			student_id = $2 AND
+			content_id = $3 AND
+			(
+				status = 'ready' OR
+				(status = 'completed' AND first_result = 'incorrect' AND corrected_attempt_id IS NULL)
+			)`,
+		update.AssignmentID,
+		update.StudentID,
+		update.ContentID,
+		update.AttemptID,
+		update.IsCorrect,
+		update.SubmittedAt,
+		update.OnTime,
+	)
+	if err != nil {
+		return err
+	}
+	if result.RowsAffected() != 1 {
+		return exerciseapp.ErrDailyAssignmentClosed
+	}
+	return nil
+}
+
+func scanOptionalDailyAssignmentBinding(scanner rowScanner) (exerciseapp.DailyAssignmentBinding, bool, error) {
+	var binding exerciseapp.DailyAssignmentBinding
+	var assignmentDate time.Time
+	var contentID pgtype.Text
+	var firstResult pgtype.Text
+	var correctedAttemptID pgtype.Text
+	var questionID pgtype.Text
+	var title pgtype.Text
+	var body pgtype.Text
+	var difficulty pgtype.Float8
+	var conceptIDsRaw []byte
+	var metaRaw []byte
+	var generatedBy pgtype.Text
+	if err := scanner.Scan(
+		&binding.ID,
+		&binding.StudentID,
+		&assignmentDate,
+		&contentID,
+		&binding.Status,
+		&firstResult,
+		&correctedAttemptID,
+		&questionID,
+		&title,
+		&body,
+		&difficulty,
+		&conceptIDsRaw,
+		&metaRaw,
+		&generatedBy,
+	); err != nil {
+		if err == pgx.ErrNoRows {
+			return exerciseapp.DailyAssignmentBinding{}, false, nil
+		}
+		return exerciseapp.DailyAssignmentBinding{}, false, err
+	}
+	binding.AssignmentDate = assignmentDate.Format("2006-01-02")
+	if contentID.Valid {
+		binding.ContentID = contentID.String
+	}
+	if firstResult.Valid {
+		binding.FirstResult = firstResult.String
+	}
+	if correctedAttemptID.Valid {
+		binding.CorrectedAttemptID = correctedAttemptID.String
+	}
+	if !questionID.Valid || !title.Valid || !body.Valid || !difficulty.Valid || conceptIDsRaw == nil || metaRaw == nil {
+		return binding, true, nil
+	}
+	conceptIDs, err := decodeStringSlice(conceptIDsRaw)
+	if err != nil {
+		return exerciseapp.DailyAssignmentBinding{}, false, fmt.Errorf("decode daily assignment snapshot concept ids: %w", err)
+	}
+	meta, err := decodeObjectMap(metaRaw)
+	if err != nil {
+		return exerciseapp.DailyAssignmentBinding{}, false, fmt.Errorf("decode daily assignment snapshot meta: %w", err)
+	}
+	binding.Question = &exerciseapp.Exercise{
+		ID:                   questionID.String,
+		Status:               "PUBLISHED",
+		Title:                title.String,
+		Body:                 body.String,
+		Difficulty:           difficulty.Float64,
+		ConceptIDs:           conceptIDs,
+		Meta:                 meta,
+		GeneratedByStudentID: generatedBy.String,
+	}
+	return binding, true, nil
+}
+
 // GetKnowledgeConcept returns trusted knowledge context for AI exercise generation.
 func (r ExerciseRepository) GetKnowledgeConcept(ctx context.Context, conceptID string) (exerciseapp.KnowledgeConcept, bool, error) {
 	var concept exerciseapp.KnowledgeConcept
@@ -646,6 +798,26 @@ const exerciseSelectColumns = `
 	difficulty,
 	concept_ids,
 	meta`
+
+const dailyAssignmentBindingSelect = `
+	SELECT assignment.id,
+	       assignment.student_id,
+	       assignment.assignment_date,
+	       assignment.content_id,
+	       assignment.status,
+	       assignment.first_result,
+	       assignment.corrected_attempt_id,
+	       CASE WHEN assignment.question_body IS NOT NULL THEN assignment.content_id ELSE content.id END,
+	       coalesce(assignment.question_title, content.title),
+	       coalesce(assignment.question_body, content.body),
+	       coalesce(assignment.question_difficulty, content.difficulty),
+	       coalesce(assignment.question_concept_ids, content.concept_ids),
+	       coalesce(assignment.question_meta, content.meta),
+	       coalesce(assignment.question_generated_by_student_id, content.generated_by_student_id)
+	FROM public.daily_question_assignments assignment
+	LEFT JOIN public.contents content
+	  ON content.id = assignment.content_id
+	 AND content.type = 'PROBLEM'::public.contenttype`
 
 const exerciseProfileColumns = `
 	mastery_vector,

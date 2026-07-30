@@ -107,7 +107,8 @@ func NewHandler(cfg config.Config, logger *slog.Logger, checker health.Checker, 
 }
 
 func requestTimeout(cfg config.Config, r *http.Request) time.Duration {
-	if r.Method == http.MethodPost && r.URL.Path == cfg.APIV1Prefix+"/exercise/generate" {
+	if r.Method == http.MethodPost && (r.URL.Path == cfg.APIV1Prefix+"/exercise/generate" ||
+		r.URL.Path == cfg.APIV1Prefix+"/daily-question/today/prepare") {
 		return cfg.ExerciseGenTimeout
 	}
 	return cfg.RequestTimeout

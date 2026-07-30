@@ -25,6 +25,7 @@ import (
 	authhttp "mathstudy/backend/internal/adapter/http/auth"
 	classroomhttp "mathstudy/backend/internal/adapter/http/classroom"
 	conversationhttp "mathstudy/backend/internal/adapter/http/conversation"
+	dailyquestionhttp "mathstudy/backend/internal/adapter/http/dailyquestion"
 	exercisehttp "mathstudy/backend/internal/adapter/http/exercise"
 	knowledgehttp "mathstudy/backend/internal/adapter/http/knowledge"
 	messagecenterhttp "mathstudy/backend/internal/adapter/http/messagecenter"
@@ -59,6 +60,7 @@ import (
 	authapp "mathstudy/backend/internal/application/auth"
 	classroomapp "mathstudy/backend/internal/application/classroom"
 	conversationapp "mathstudy/backend/internal/application/conversation"
+	dailyquestionapp "mathstudy/backend/internal/application/dailyquestion"
 	emailapp "mathstudy/backend/internal/application/email"
 	exerciseapp "mathstudy/backend/internal/application/exercise"
 	knowledgeapp "mathstudy/backend/internal/application/knowledge"
@@ -94,6 +96,8 @@ const (
 	messageCenterWriteRateLimitMax  = 60
 	messageCenterSearchRateLimitMax = 30
 	messageCenterRateLimitWindow    = time.Minute
+	dailyQuestionGenerationLimitMax = 10
+	dailyQuestionGenerationWindow   = time.Minute
 )
 
 func main() {
@@ -398,6 +402,71 @@ func main() {
 		logger.Error("configure exercise handler", "error", err)
 		os.Exit(1)
 	}
+	wechatReminderEnqueuer, err := adapterpostgres.NewWechatReminderEnqueuer(
+		cfg.WechatMessageRemindersEnabled,
+		cfg.WechatOfficialAccountAppID,
+	)
+	if err != nil {
+		logger.Error("configure wechat reminder enqueuer", "error", err)
+		os.Exit(1)
+	}
+	dailyQuestionRepo, err := adapterpostgres.NewDailyQuestionRepository(dbPool, wechatReminderEnqueuer)
+	if err != nil {
+		logger.Error("configure daily question repository", "error", err)
+		os.Exit(1)
+	}
+	dailyQuestionGenerationLimiter, err := ratelimit.New(
+		redisClient,
+		"msp:exercise_generation",
+		dailyQuestionGenerationLimitMax,
+		dailyQuestionGenerationWindow,
+		cfg.RedisFallbackCacheMaxSize,
+		logger,
+	)
+	if err != nil {
+		logger.Error("configure daily question generation rate limit", "error", err)
+		os.Exit(1)
+	}
+	dailyQuestionService, err := dailyquestionapp.NewService(
+		dailyQuestionRepo,
+		exerciseService,
+		dailyquestionapp.WithAIRequestGuard(aiRiskService),
+		dailyquestionapp.WithGenerationLimiter(dailyQuestionGenerationLimiter),
+		dailyquestionapp.WithWechatRemindersEnabled(cfg.WechatMessageRemindersEnabled),
+	)
+	if err != nil {
+		logger.Error("configure daily question service", "error", err)
+		os.Exit(1)
+	}
+	dailyQuestionWorker, err := dailyquestionapp.NewWorker(
+		dailyQuestionRepo,
+		dailyQuestionService,
+		logger,
+		dailyquestionapp.WorkerConfig{
+			BatchSize:      cfg.DailyQuestionPreGenerationBatchSize,
+			Concurrency:    cfg.DailyQuestionPreGenerationConcurrency,
+			BatchInterval:  cfg.DailyQuestionPreGenerationBatchInterval,
+			StudentTimeout: cfg.DailyQuestionPreGenerationStudentTimeout,
+		},
+	)
+	if err != nil {
+		logger.Error("configure daily question worker", "error", err)
+		os.Exit(1)
+	}
+	dailyQuestionReminderWorker, err := dailyquestionapp.NewReminderWorker(dailyQuestionService, logger)
+	if err != nil {
+		logger.Error("configure daily question reminder worker", "error", err)
+		os.Exit(1)
+	}
+	dailyQuestionHandler, err := dailyquestionhttp.NewHandler(
+		logger,
+		dailyQuestionService,
+		authService,
+	)
+	if err != nil {
+		logger.Error("configure daily question handler", "error", err)
+		os.Exit(1)
+	}
 	sessionRepo, err := adapterpostgres.NewSessionRepository(dbPool)
 	if err != nil {
 		logger.Error("configure session repository", "error", err)
@@ -519,14 +588,6 @@ func main() {
 	)
 	if err != nil {
 		logger.Error("configure message center search rate limit", "error", err)
-		os.Exit(1)
-	}
-	wechatReminderEnqueuer, err := adapterpostgres.NewWechatReminderEnqueuer(
-		cfg.WechatMessageRemindersEnabled,
-		cfg.WechatOfficialAccountAppID,
-	)
-	if err != nil {
-		logger.Error("configure wechat reminder enqueuer", "error", err)
 		os.Exit(1)
 	}
 	// Message center: conversations
@@ -897,6 +958,7 @@ func main() {
 			portraitHandler.Register(mux, cfg.APIV1Prefix+"/portrait")
 			mistakeHandler.Register(mux, cfg.APIV1Prefix+"/mistakes")
 			exerciseHandler.Register(mux, cfg.APIV1Prefix+"/exercise")
+			dailyQuestionHandler.Register(mux, cfg.APIV1Prefix+"/daily-question")
 			sessionHandler.Register(mux, cfg.APIV1Prefix+"/session")
 			resourceHandler.Register(mux, cfg.APIV1Prefix+"/resources")
 			uploadHandler.Register(mux, cfg.APIV1Prefix+"/upload")
@@ -946,8 +1008,22 @@ func main() {
 		cfg.ShutdownTimeout,
 		logger,
 	)
+	stopDailyQuestionWorker := startDailyQuestionWorker(
+		dailyQuestionWorker,
+		cfg.DailyQuestionPreGenerationEnabled,
+		cfg.ShutdownTimeout,
+		logger,
+	)
+	stopDailyQuestionReminderWorker := startDailyQuestionReminderWorker(
+		dailyQuestionReminderWorker,
+		cfg.WechatMessageRemindersEnabled,
+		cfg.ShutdownTimeout,
+		logger,
+	)
 	logger.Info("Go API listening", "addr", cfg.HTTPAddr(), "environment", cfg.Environment)
 	serveErr := serveHTTP(server, stopCh, cfg.ShutdownTimeout, logger)
+	stopDailyQuestionReminderWorker()
+	stopDailyQuestionWorker()
 	stopWechatReminderWorker()
 	if serveErr != nil {
 		os.Exit(1)

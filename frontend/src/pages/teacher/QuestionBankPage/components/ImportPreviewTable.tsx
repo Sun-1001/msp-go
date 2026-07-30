@@ -17,6 +17,7 @@ interface ImportPreviewTableProps {
   questions: ParsedQuestion[];
   selectedIds: Set<string>;
   aiParsingIds: Set<string>;
+  allowSelectAll?: boolean;
   onToggleSelect: (id: string) => void;
   onToggleSelectAll: () => void;
   onUpdateQuestion: (id: string, updates: Partial<ParsedQuestion>) => void;
@@ -50,6 +51,7 @@ export const ImportPreviewTable: React.FC<ImportPreviewTableProps> = ({
   questions,
   selectedIds,
   aiParsingIds,
+  allowSelectAll = true,
   onToggleSelect,
   onToggleSelectAll,
   onUpdateQuestion,
@@ -117,12 +119,16 @@ export const ImportPreviewTable: React.FC<ImportPreviewTableProps> = ({
       <div className="border rounded-lg dark:border-surface-700 max-h-[500px] overflow-y-auto">
         {/* 表头 */}
         <div className="flex items-center gap-3 px-4 py-2 bg-surface-50 dark:bg-surface-800 border-b dark:border-surface-700 sticky top-0 z-10">
-          <input
-            type="checkbox"
-            checked={allSelected}
-            onChange={onToggleSelectAll}
-            className="rounded border-surface-300 dark:border-surface-600"
-          />
+          {allowSelectAll ? (
+            <input
+              type="checkbox"
+              checked={allSelected}
+              onChange={onToggleSelectAll}
+              className="rounded border-surface-300 dark:border-surface-600"
+            />
+          ) : (
+            <span className="h-4 w-4" aria-hidden="true" />
+          )}
           <span className="w-8 text-xs text-surface-500">#</span>
           <span className="flex-1 text-xs text-surface-500">题目内容</span>
           <span className="w-16 text-xs text-surface-500">题型</span>
