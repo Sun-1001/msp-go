@@ -10,7 +10,9 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
 
+	"mathstudy/backend/internal/application/learningrange"
 	teacherapp "mathstudy/backend/internal/application/teacher"
+	"mathstudy/backend/internal/platform/timefmt"
 )
 
 // TeacherRepository persists teacher analytics read models in PostgreSQL.
@@ -924,7 +926,7 @@ func (r TeacherRepository) RecentMistakes(ctx context.Context, teacherID string,
 			ID:        id,
 			Content:   title,
 			ErrorType: "",
-			Date:      startedAt.Format("2006-01-02T15:04:05.999999"),
+			Date:      timefmt.DateTimeRFC3339(learningrange.InPlatformZone(startedAt)),
 		}
 		if errorType.Valid {
 			item.ErrorType = errorType.String

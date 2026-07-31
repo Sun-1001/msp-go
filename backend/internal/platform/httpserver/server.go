@@ -107,11 +107,24 @@ func NewHandler(cfg config.Config, logger *slog.Logger, checker health.Checker, 
 }
 
 func requestTimeout(cfg config.Config, r *http.Request) time.Duration {
-	if r.Method == http.MethodPost && (r.URL.Path == cfg.APIV1Prefix+"/exercise/generate" ||
-		r.URL.Path == cfg.APIV1Prefix+"/daily-question/today/prepare") {
+	if isLongRunningAIRequest(r, cfg.APIV1Prefix) {
 		return cfg.ExerciseGenTimeout
 	}
 	return cfg.RequestTimeout
+}
+
+func isLongRunningAIRequest(r *http.Request, apiPrefix string) bool {
+	if r.Method != http.MethodPost {
+		return false
+	}
+	switch r.URL.Path {
+	case apiPrefix + "/exercise/generate",
+		apiPrefix + "/daily-question/today/prepare",
+		apiPrefix + "/portrait/generate":
+		return true
+	default:
+		return false
+	}
 }
 
 func muxWithFallbacks(mux *http.ServeMux) http.Handler {

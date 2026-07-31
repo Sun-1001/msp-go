@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"mathstudy/backend/internal/application/learningrange"
 	"mathstudy/backend/internal/platform/identifier"
 	"mathstudy/backend/internal/platform/maputil"
 	"mathstudy/backend/internal/platform/numutil"
@@ -1071,7 +1072,7 @@ func (s *Service) recentActivity(ctx context.Context, teacherID string, studentI
 				ID:      attempt.ID,
 				Type:    "exercise",
 				Content: content,
-				Time:    timefmt.DateTimeMicros(attempt.StartedAt),
+				Time:    timefmt.DateTimeRFC3339(learningrange.InPlatformZone(attempt.StartedAt)),
 				Status:  status,
 			},
 			at: attempt.StartedAt,

@@ -168,7 +168,7 @@ func (r MistakeRepository) GetAttemptContent(ctx context.Context, userID string,
 }
 
 // ListAttemptHistory returns submitted attempts for the same content, excluding the current attempt.
-func (r MistakeRepository) ListAttemptHistory(ctx context.Context, userID string, contentID string, excludeAttemptID string) ([]mistakeapp.MistakeHistory, error) {
+func (r MistakeRepository) ListAttemptHistory(ctx context.Context, userID string, contentID string, excludeAttemptID string) ([]mistakeapp.AttemptHistoryRow, error) {
 	rows, err := r.DB().Query(ctx, `
 		SELECT id, submitted_at, is_correct, score
 		FROM public.content_attempts
@@ -187,17 +187,14 @@ func (r MistakeRepository) ListAttemptHistory(ctx context.Context, userID string
 	}
 	defer rows.Close()
 
-	history := []mistakeapp.MistakeHistory{}
+	history := []mistakeapp.AttemptHistoryRow{}
 	for rows.Next() {
-		var item mistakeapp.MistakeHistory
+		var item mistakeapp.AttemptHistoryRow
 		var submittedAt pgtype.Timestamp
 		if err := rows.Scan(&item.AttemptID, &submittedAt, &item.IsCorrect, &item.Score); err != nil {
 			return nil, err
 		}
-		if submittedAt.Valid {
-			value := submittedAt.Time.Format("2006-01-02T15:04:05.999999")
-			item.SubmittedAt = &value
-		}
+		item.SubmittedAt = timestampPtr(submittedAt)
 		history = append(history, item)
 	}
 	return history, rows.Err()

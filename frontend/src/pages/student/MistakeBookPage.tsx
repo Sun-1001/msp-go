@@ -1,7 +1,7 @@
 import React from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { MainLayout } from '../../components/layout/MainLayout';
-import { Card, CardContent, CardHeader, CardTitle } from '../../components/ui/Card';
+import { Card, CardContent } from '../../components/ui/Card';
 import { Button } from '../../components/ui/Button';
 import { Badge } from '../../components/ui/Badge';
 import { Progress } from '../../components/ui/Progress';
@@ -11,13 +11,11 @@ import {
   CheckCircle,
   ArrowRight,
   Trash2,
-  Sparkles,
   Clock,
   Loader2,
   User,
   RefreshCw,
 } from 'lucide-react';
-import { MarkdownContent } from '../../components/chat/MarkdownContent';
 import {
   useMistakeBook,
   getDifficultyBadge,
@@ -33,16 +31,10 @@ export const MistakeBookPage: React.FC = () => {
     pagination,
     mistakesLoading,
     mistakesError,
-    portrait,
-    portraitLoading,
-    generating,
-    clearing,
     handleTabChange,
     handleDeleteMistake,
     handleMarkAsMastered,
     handleFetchMistakes,
-    handleGeneratePortrait,
-    handleClearPortrait,
   } = useMistakeBook(conceptId);
 
   return (
@@ -209,74 +201,19 @@ export const MistakeBookPage: React.FC = () => {
           </TabsContent>
 
           <TabsContent value="portrait">
-            <div className="space-y-6">
-              {generating ? (
-                <Card>
-                  <CardContent className="p-12 text-center">
-                    <Loader2 className="mx-auto mb-4 h-12 w-12 animate-spin text-primary-500" />
-                    <p className="text-lg font-medium text-surface-700 dark:text-surface-300">AI 正在生成学生画像...</p>
-                  </CardContent>
-                </Card>
-              ) : portraitLoading === 'loading' ? (
-                <Card>
-                  <CardContent className="p-12 text-center">
-                    <Loader2 className="mx-auto mb-3 h-8 w-8 animate-spin text-surface-400" />
-                    <p className="text-surface-500 dark:text-surface-400">加载中...</p>
-                  </CardContent>
-                </Card>
-              ) : portrait?.has_content ? (
-                <Card>
-                  <CardHeader>
-                    <div className="flex flex-wrap items-center justify-between gap-3">
-                      <CardTitle className="flex items-center gap-2">
-                        <User className="h-5 w-5 text-primary-500" />
-                        学生画像
-                      </CardTitle>
-                      <div className="flex flex-wrap items-center gap-2">
-                        {portrait.portrait_generated_at && (
-                          <span className="flex items-center gap-1 text-xs text-surface-400 dark:text-surface-500">
-                            <Clock className="h-3.5 w-3.5" />
-                            {new Date(portrait.portrait_generated_at).toLocaleString('zh-CN')}
-                          </span>
-                        )}
-                        <Button size="sm" variant="outline" onClick={handleGeneratePortrait} disabled={generating}>
-                          <RefreshCw className="mr-1 h-4 w-4" />
-                          重新生成
-                        </Button>
-                        <Button
-                          size="sm"
-                          variant="outline"
-                          className="text-red-600 hover:bg-red-50 dark:text-red-400 dark:hover:bg-red-900/30"
-                          onClick={handleClearPortrait}
-                          disabled={clearing}
-                        >
-                          <Trash2 className="mr-1 h-4 w-4" />
-                          清除
-                        </Button>
-                      </div>
-                    </div>
-                  </CardHeader>
-                  <CardContent>
-                    <div className="prose prose-sm max-w-none dark:prose-invert">
-                      <MarkdownContent content={portrait.portrait_content!} unwrapOuterFence />
-                    </div>
-                  </CardContent>
-                </Card>
-              ) : (
-                <Card>
-                  <CardContent className="p-12 text-center">
-                    <User className="mx-auto mb-4 h-16 w-16 text-surface-300 dark:text-surface-600" />
-                    <h2 className="mb-6 text-lg font-semibold text-surface-700 dark:text-surface-300">
-                      尚未生成学生画像
-                    </h2>
-                    <Button onClick={handleGeneratePortrait} disabled={generating}>
-                      <Sparkles className="mr-2 h-4 w-4" />
-                      生成画像
-                    </Button>
-                  </CardContent>
-                </Card>
-              )}
-            </div>
+            <Card>
+              <CardContent className="p-12 text-center">
+                <User className="mx-auto mb-4 h-16 w-16 text-primary-300 dark:text-primary-700" />
+                <h2 className="text-lg font-semibold text-surface-800 dark:text-surface-200">学生画像已迁移到学习统计</h2>
+                <p className="mx-auto mt-2 max-w-lg text-sm leading-6 text-surface-500 dark:text-surface-400">
+                  在同一页面查看学习趋势、班级对比、优势与薄弱知识点，并直接开始针对性练习。
+                </p>
+                <Button className="mt-6" onClick={() => navigate('/analytics#portrait')}>
+                  查看我的学习画像
+                  <ArrowRight className="ml-2 h-4 w-4" />
+                </Button>
+              </CardContent>
+            </Card>
           </TabsContent>
         </Tabs>
       </div>

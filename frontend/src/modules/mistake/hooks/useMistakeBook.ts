@@ -1,6 +1,5 @@
 import { useCallback, useEffect } from 'react';
 import { useAppDispatch, useAppSelector } from '@/store';
-import { fetchPortrait, generatePortrait, clearPortrait } from '@/modules/student/store/studentPortraitSlice';
 import {
   fetchMistakes,
   deleteMistake,
@@ -31,9 +30,6 @@ export function getErrorTypeLabel(errorType: string | null) {
 export function useMistakeBook(conceptId?: string) {
   const dispatch = useAppDispatch();
   const normalizedConceptId = conceptId?.trim() || undefined;
-  const { portrait, loadingState: portraitLoading, generating, clearing } = useAppSelector(
-    (state) => state.studentPortrait,
-  );
   const mistakes = useAppSelector(selectMistakes);
   const pagination = useAppSelector(selectPagination);
   const mistakesLoading = useAppSelector(selectLoadingState);
@@ -50,10 +46,8 @@ export function useMistakeBook(conceptId?: string) {
   const handleTabChange = useCallback((value: string) => {
     if (value === 'mistakes') {
       fetchMistakePage(1);
-    } else if (value === 'portrait') {
-      dispatch(fetchPortrait());
     }
-  }, [dispatch, fetchMistakePage]);
+  }, [fetchMistakePage]);
 
   const handleDeleteMistake = useCallback(async (attemptId: string) => {
     if (window.confirm('确定要删除这条错题记录吗？删除后无法恢复。')) {
@@ -65,30 +59,14 @@ export function useMistakeBook(conceptId?: string) {
     await dispatch(markAsMastered(attemptId));
   }, [dispatch]);
 
-  const handleGeneratePortrait = useCallback(() => {
-    dispatch(generatePortrait());
-  }, [dispatch]);
-
-  const handleClearPortrait = useCallback(() => {
-    if (window.confirm('确定要清除画像吗？清除后需要重新生成。')) {
-      dispatch(clearPortrait());
-    }
-  }, [dispatch]);
-
   return {
     mistakes,
     pagination,
     mistakesLoading,
     mistakesError,
-    portrait,
-    portraitLoading,
-    generating,
-    clearing,
     handleTabChange,
     handleDeleteMistake,
     handleMarkAsMastered,
     handleFetchMistakes: fetchMistakePage,
-    handleGeneratePortrait,
-    handleClearPortrait,
   };
 }
