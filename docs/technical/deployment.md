@@ -104,7 +104,7 @@ FROM public.go_schema_migrations
 ORDER BY version;
 ```
 
-首次生产基线由五个迁移组成：`0001_initial_schema`、`0002_student_ai_safety`、`0003_communication`、`0004_delivery_integrations` 和 `0005_daily_question`。每日一题及其班级自动提醒、公众号专用事件位于 `0005_daily_question`。全新空库第一次 migration runner 应记录版本 `1` 至 `5`，紧接着重复执行应为 `applied_count=0`。消息中心北京时间默认值位于 `0003`，微信公众号绑定和基础提醒任务位于 `0004`。
+当前 forward migration 链包含生产基线以及每日一题、画像报告和画像行动等后续增量。全新空库第一次 migration runner 应记录当前全部版本，紧接着重复执行应为 `applied_count=0`。精确版本清单与能力归属以 [迁移策略](../../backend/migrations/README.md) 为唯一来源。
 
 重整前执行过旧开发迁移 `0001` 至 `0015` 的数据库不属于可原地升级目标。migration runner 会校验迁移版本、名称和未知记录，并在账本与当前代码不一致时拒绝继续。可丢弃的开发库应删除并重建；任何不可丢弃的库必须先停止发布，完成实际 schema、业务数据和 `go_schema_migrations` 核对，再设计专门的数据保留迁移，禁止删除版本记录后重放基线。
 
@@ -119,12 +119,12 @@ ORDER BY version;
 | 层级 | 默认超时 |
 | --- | ---: |
 | 普通 Go API 总请求预算 | 30 秒 |
-| `POST /api/v1/exercise/generate` 总请求预算 | 55 秒 |
+| 同步 AI 生成接口总请求预算 | 55 秒 |
 | 前端生成请求 Axios 超时 | 60 秒 |
 | Nginx `/api/` 上游响应读取超时 | 300 秒 |
 | Go HTTP `WriteTimeout` | 310 秒 |
 
-`EXERCISE_GENERATION_REQUEST_TIMEOUT_SECONDS` 是生成、独立求解、验证及最多一次重试共享的总预算。生产环境通常应保持默认 55 秒；如需配置到 60 秒以上，必须同步调整前端请求超时，如需超过 300 秒还必须同步调整所有边缘代理。Nginx 的 300 秒仅是代理安全上限，不代表业务请求应持续运行 300 秒。
+`EXERCISE_GENERATION_REQUEST_TIMEOUT_SECONDS` 是 `/exercise/generate`、`/daily-question/today/prepare` 和 `/portrait/generate` 三个同步长时间生成接口共享的总请求预算。生产环境通常应保持默认 55 秒；画像模型默认 45 秒，后端会保留剩余预算用于模板降级和保存。前端练习与画像生成请求默认等待 60 秒；如需把后端预算配置到 60 秒以上，必须同步调整对应前端请求超时，如需超过 300 秒还必须同步调整所有边缘代理。Nginx 的 300 秒仅是代理安全上限，不代表业务请求应持续运行 300 秒。
 
 - `/api/` 指向 Go API；
 - 微信回调 `GET/POST /api/v1/integrations/wechat/official-account/callback` 必须通过公网 HTTPS 原样转发到 Go API，不能要求站内 JWT；该路由使用微信签名和时间戳校验请求；

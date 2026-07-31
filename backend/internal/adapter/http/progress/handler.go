@@ -24,6 +24,8 @@ type Service interface {
 	GetKnowledgeGraphView(context.Context, string, progressapp.KnowledgeNodeFilter) (progressapp.GraphResponse, error)
 	GetStatistics(context.Context, string, string) (progressapp.StatisticsResponse, error)
 	GetClassRanking(context.Context, string) (progressapp.ClassRankingResponse, error)
+	GetPortraitInsights(context.Context, string, string) (progressapp.PortraitInsightsResponse, error)
+	StartPortraitAction(context.Context, string, string) (progressapp.PortraitActionStartResponse, error)
 	GetChapters(context.Context) ([]string, error)
 }
 
@@ -63,6 +65,8 @@ func (h *Handler) Register(mux *http.ServeMux, prefix string) {
 	mux.HandleFunc("GET "+prefix+"/knowledge-graph", h.knowledgeGraph)
 	mux.HandleFunc("GET "+prefix+"/statistics", h.statistics)
 	mux.HandleFunc("GET "+prefix+"/class-ranking", h.classRanking)
+	mux.HandleFunc("GET "+prefix+"/portrait-insights", h.portraitInsights)
+	mux.HandleFunc("POST "+prefix+"/portrait-actions/{concept_id}/start", h.startPortraitAction)
 	mux.HandleFunc("GET "+prefix+"/chapters", h.chapters)
 }
 
@@ -89,7 +93,7 @@ func (h *Handler) overview(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) learningGoal(w http.ResponseWriter, r *http.Request) {
-	principal, ok := h.requireStudent(w, r)
+	principal, ok := h.requireStudent(w, r, "权限不足，仅学生可以访问学习目标")
 	if !ok {
 		return
 	}
@@ -103,7 +107,7 @@ func (h *Handler) learningGoal(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) setLearningGoal(w http.ResponseWriter, r *http.Request) {
-	principal, ok := h.requireStudent(w, r)
+	principal, ok := h.requireStudent(w, r, "权限不足，仅学生可以访问学习目标")
 	if !ok {
 		return
 	}
@@ -223,7 +227,7 @@ func (h *Handler) requirePrincipal(w http.ResponseWriter, r *http.Request) (auth
 	return httpauth.RequireBearerAccess(w, r, h.auth.DecodeAccessToken, nil, "", writeProgressError)
 }
 
-func (h *Handler) requireStudent(w http.ResponseWriter, r *http.Request) (authapp.Principal, bool) {
+func (h *Handler) requireStudent(w http.ResponseWriter, r *http.Request, forbiddenMessage string) (authapp.Principal, bool) {
 	return httpauth.RequireBearerAccess(
 		w,
 		r,
@@ -231,7 +235,7 @@ func (h *Handler) requireStudent(w http.ResponseWriter, r *http.Request) (authap
 		func(principal authapp.Principal) bool {
 			return authapp.HasAnyRole(principal, user.RoleStudent)
 		},
-		"权限不足，仅学生可以访问学习目标",
+		forbiddenMessage,
 		writeProgressError,
 	)
 }

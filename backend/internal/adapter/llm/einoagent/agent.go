@@ -851,7 +851,8 @@ func toMessages(input sessionapp.ChatAgentInput) []adk.Message {
 }
 
 func portraitPrompt(input portraitapp.GeneratorInput) string {
-	profile := input.Profile
+	activity := input.Activity
+	mastery := input.MasterySnapshot
 	var builder strings.Builder
 	builder.WriteString("请基于以下学习数据生成一份学生画像报告。\n\n")
 	builder.WriteString("硬性要求：\n")
@@ -859,24 +860,24 @@ func portraitPrompt(input portraitapp.GeneratorInput) string {
 	builder.WriteString("- 不要输出 JSON。\n")
 	builder.WriteString("- 不要编造输入中没有的身份、课程、考试或教师评价。\n")
 	builder.WriteString("- 保留关键数字，并在数据不足时说明置信度有限。\n\n")
-	builder.WriteString("学习统计：\n")
-	builder.WriteString(fmt.Sprintf("- 学生 ID: %s\n", strings.TrimSpace(profile.StudentID)))
-	builder.WriteString(fmt.Sprintf("- 总练习次数: %d\n", profile.TotalExercises))
-	builder.WriteString(fmt.Sprintf("- 正确次数: %d\n", profile.CorrectCount))
-	builder.WriteString(fmt.Sprintf("- 总学习时长: %d 分钟\n", profile.TotalStudyTimeMinutes))
-	builder.WriteString(fmt.Sprintf("- 偏好难度: %.2f\n", profile.PreferredDifficulty))
-	builder.WriteString(fmt.Sprintf("- 学习节奏系数: %.2f\n", profile.LearningPace))
-	appendFloatMap(&builder, "知识点掌握度", profile.MasteryVector)
-	appendFloatMap(&builder, "错误倾向", profile.ErrorTendency)
-	if len(profile.RecentConcepts) > 0 {
-		builder.WriteString("\n近期学习重点：\n")
-		for _, concept := range profile.RecentConcepts {
+	builder.WriteString("范围内行为数据：\n")
+	builder.WriteString(fmt.Sprintf("- 统计范围: %s（%s 至 %s）\n", activity.RangeType, activity.StartDate, activity.EndDate))
+	builder.WriteString(fmt.Sprintf("- 行为数据截至: %s\n", activity.SnapshotAt.Format(time.RFC3339)))
+	builder.WriteString(fmt.Sprintf("- 练习次数: %d\n", activity.TotalExercises))
+	builder.WriteString(fmt.Sprintf("- 正确次数: %d\n", activity.CorrectCount))
+	builder.WriteString(fmt.Sprintf("- 学习时长: %d 分钟\n", activity.TotalStudyTimeMinutes))
+	appendFloatMap(&builder, "范围内错误倾向", activity.ErrorTendency)
+	if len(activity.RecentConcepts) > 0 {
+		builder.WriteString("\n范围内近期学习重点：\n")
+		for _, concept := range activity.RecentConcepts {
 			concept = strings.TrimSpace(concept)
 			if concept != "" {
 				builder.WriteString("- " + concept + "\n")
 			}
 		}
 	}
+	builder.WriteString("\n当前掌握状态（这是生成报告时读取的当前累计 DKT 状态，不代表统计范围内的新增掌握度）：\n")
+	appendFloatMap(&builder, "当前知识点掌握度", mastery.MasteryVector)
 	builder.WriteString("\n模板基线报告（可作为事实依据和兜底结构）：\n")
 	builder.WriteString(strings.TrimSpace(input.FallbackContent))
 	builder.WriteString("\n\n请生成最终画像报告。")

@@ -115,7 +115,7 @@ go run ./cmd/migrate
 go run ./cmd/migrate  # 重复执行应无待应用版本
 ```
 
-当前空库基线是 `0001` 至 `0005` 五个领域分组，`0005_daily_question` 交付每日一题。runner 会校验数据库中的迁移版本、名称和未知记录。执行过旧开发迁移链的本地库必须重建，不能只改迁移账本；不可丢弃的数据库应先设计经过评审的数据保留迁移。生产回滚依赖备份恢复或经过评审的补偿性 forward migration，详见 [迁移策略](../../backend/migrations/README.md)。
+当前迁移链包含四个空库基线分组以及每日一题、画像报告和行动等后续增量。runner 会校验数据库中的迁移版本、名称和未知记录。执行过旧开发迁移链的本地库必须重建，不能只改迁移账本；不可丢弃的数据库应先设计经过评审的数据保留迁移。精确版本清单和回滚规则以 [迁移策略](../../backend/migrations/README.md) 为准。
 
 ## 环境配置
 
@@ -164,7 +164,7 @@ WECHAT_QA_MESSAGE_TEMPLATE_ID=
 
 若测试号页面没有消息加解密模式选项，使用 `plain`。不要自行编造 `AES_KEY`，兼容模式和安全模式必须使用微信后台对应的 `EncodingAESKey`。
 
-消息中心结构和北京时间默认值由 `backend/migrations/0003_communication.up.sql` 交付，微信公众号绑定和基础提醒任务由 `0004_delivery_integrations.up.sql` 交付；每日一题、其公众号专用自动提醒和统一题低库存预警由 `0005_daily_question.up.sql` 交付。全新数据库第一次运行应记录版本 `1` 至 `5`，第二次应无待应用版本。历史本地库必须重建或执行单独评审的数据保留迁移后再运行应用。
+消息中心、微信公众号提醒、每日一题、画像报告和画像行动所需结构均由当前 forward migration 链交付，精确归属见 [迁移策略](../../backend/migrations/README.md)。全新数据库第一次运行应记录当前全部版本，第二次应无待应用版本。历史本地库必须重建或执行单独评审的数据保留迁移后再运行应用。
 
 ```powershell
 Set-Location backend

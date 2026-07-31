@@ -31,3 +31,8 @@ func OptionalDateTimeMicros(value *time.Time) *string {
 	formatted := DateTimeMicros(*value)
 	return &formatted
 }
+
+// DateTimeRFC3339 formats a timestamp with its explicit timezone offset.
+func DateTimeRFC3339(value time.Time) string {
+	return value.Format(time.RFC3339Nano)
+}

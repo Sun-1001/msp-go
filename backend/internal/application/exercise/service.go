@@ -912,7 +912,7 @@ func (s *Service) SubmitAnswer(ctx context.Context, userID string, request Submi
 		errorType = diagnosis.ErrorType
 	}
 
-	now := s.now()
+	now := s.now().UTC()
 	attemptID, err := s.newID()
 	if err != nil {
 		return SubmitResponse{}, err
@@ -976,7 +976,7 @@ func (s *Service) SubmitAnswer(ctx context.Context, userID string, request Submi
 				ContentID:    currentExercise.ID,
 				AttemptID:    attempt.ID,
 				IsCorrect:    attempt.IsCorrect,
-				SubmittedAt:  now,
+				SubmittedAt:  shanghaiTime(now),
 				OnTime:       dailyBinding.AssignmentDate == shanghaiDate(now),
 			}); err != nil {
 				return err
@@ -1060,7 +1060,11 @@ func validateDailyAssignmentBinding(binding DailyAssignmentBinding, ok bool, exe
 }
 
 func shanghaiDate(value time.Time) string {
-	return value.In(time.FixedZone("Asia/Shanghai", 8*60*60)).Format("2006-01-02")
+	return shanghaiTime(value).Format("2006-01-02")
+}
+
+func shanghaiTime(value time.Time) time.Time {
+	return value.In(time.FixedZone("Asia/Shanghai", 8*60*60))
 }
 
 func dailySubmissionExercise(

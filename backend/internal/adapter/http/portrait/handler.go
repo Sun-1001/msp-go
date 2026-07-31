@@ -9,6 +9,7 @@ import (
 
 	airiskapp "mathstudy/backend/internal/application/airisk"
 	authapp "mathstudy/backend/internal/application/auth"
+	"mathstudy/backend/internal/application/learningrange"
 	portraitapp "mathstudy/backend/internal/application/portrait"
 	"mathstudy/backend/internal/platform/httpauth"
 	"mathstudy/backend/internal/platform/httpjson"
@@ -18,7 +19,7 @@ import (
 // Service is the portrait application surface used by HTTP handlers.
 type Service interface {
 	GetPortrait(context.Context, string) (portraitapp.PortraitResponse, error)
-	GeneratePortrait(context.Context, string) (portraitapp.GenerateResponse, error)
+	GeneratePortrait(context.Context, string, string) (portraitapp.GenerateResponse, error)
 	ClearPortrait(context.Context, string) (portraitapp.ClearResponse, error)
 }
 
@@ -94,6 +95,14 @@ func (h *Handler) generate(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	rangeType := r.URL.Query().Get("range")
+	if rangeType == "" {
+		rangeType = string(learningrange.All)
+	}
+	if _, err := learningrange.Parse(rangeType); err != nil {
+		writePortraitError(w, http.StatusUnprocessableEntity, "INVALID_RANGE", "画像时间范围无效")
+		return
+	}
 	if h.guard != nil {
 		lease, err := h.guard.Acquire(r.Context(), principal.UserID, "portrait_generate", "", false)
 		if err != nil {
@@ -102,8 +111,16 @@ func (h *Handler) generate(w http.ResponseWriter, r *http.Request) {
 		}
 		defer releasePortraitAILease(lease)
 	}
-	response, err := h.service.GeneratePortrait(r.Context(), principal.UserID)
+	response, err := h.service.GeneratePortrait(r.Context(), principal.UserID, rangeType)
 	if err != nil {
+		if errors.Is(err, portraitapp.ErrInvalidRange) {
+			writePortraitError(w, http.StatusUnprocessableEntity, "INVALID_RANGE", "画像时间范围无效")
+			return
+		}
+		if errors.Is(err, portraitapp.ErrPortraitChanged) {
+			writePortraitError(w, http.StatusConflict, "PORTRAIT_CHANGED", "画像状态已变化，请刷新后重试")
+			return
+		}
 		h.logPortraitError("generate portrait failed", err)
 		writePortraitError(w, http.StatusInternalServerError, "INTERNAL_ERROR", "画像生成失败，请稍后重试")
 		return
@@ -140,6 +157,10 @@ func (h *Handler) clear(w http.ResponseWriter, r *http.Request) {
 	}
 	response, err := h.service.ClearPortrait(r.Context(), principal.UserID)
 	if err != nil {
+		if errors.Is(err, portraitapp.ErrPortraitChanged) {
+			writePortraitError(w, http.StatusConflict, "PORTRAIT_CHANGED", "画像状态已变化，请刷新后重试")
+			return
+		}
 		h.logPortraitError("clear portrait failed", err)
 		writePortraitError(w, http.StatusInternalServerError, "INTERNAL_ERROR", "清除学生画像失败")
 		return

@@ -224,7 +224,7 @@ func (r ProgressRepository) LatestAttemptStartedAt(ctx context.Context, userID s
 // ListSubmittedAttemptDays returns active submitted days, newest first.
 func (r ProgressRepository) ListSubmittedAttemptDays(ctx context.Context, userID string, limit int) ([]time.Time, error) {
 	rows, err := r.DB().Query(ctx, `
-		SELECT date_trunc('day', submitted_at) AS day
+		SELECT date_trunc('day', submitted_at AT TIME ZONE 'UTC' AT TIME ZONE 'Asia/Shanghai') AS day
 		FROM public.content_attempts
 		WHERE student_id = $1 AND submitted_at IS NOT NULL
 		GROUP BY day
@@ -522,7 +522,7 @@ func (r ProgressRepository) listLearningStats(ctx context.Context, userID string
 	}
 	rows, err := r.DB().Query(ctx, `
 		SELECT
-			date_trunc('`+truncUnit+`', submitted_at) AS period,
+			date_trunc('`+truncUnit+`', submitted_at AT TIME ZONE 'UTC' AT TIME ZONE 'Asia/Shanghai') AS period,
 			count(id)::int AS total,
 			coalesce(sum(CASE WHEN is_correct THEN 1 ELSE 0 END), 0)::int AS correct,
 			coalesce(sum(time_spent_seconds), 0)::int AS time_spent

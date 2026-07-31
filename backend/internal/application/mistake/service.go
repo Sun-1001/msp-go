@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"mathstudy/backend/internal/application/learningrange"
 	"mathstudy/backend/internal/platform/maputil"
 	"mathstudy/backend/internal/platform/metautil"
 	"mathstudy/backend/internal/platform/numutil"
@@ -29,7 +30,7 @@ type Repository interface {
 	ListMistakePage(context.Context, string, ListQuery) ([]MistakeListRow, int, error)
 	GetMistakeByAttempt(context.Context, string, string) (MistakeRow, bool, error)
 	GetAttemptContent(context.Context, string, string) (AttemptContent, bool, error)
-	ListAttemptHistory(context.Context, string, string, string) ([]MistakeHistory, error)
+	ListAttemptHistory(context.Context, string, string, string) ([]AttemptHistoryRow, error)
 	GetProfile(context.Context, string) (StudentProfile, bool, error)
 	ErrorCountsByContent(context.Context, string) (map[string]int, error)
 	CountSubmittedAttempts(context.Context, string, *time.Time, *time.Time) (int, error)
@@ -85,6 +86,14 @@ type MistakeListRow struct {
 type AttemptContent struct {
 	Attempt Attempt
 	Content Content
+}
+
+// AttemptHistoryRow stores repository-level attempt history before API time formatting.
+type AttemptHistoryRow struct {
+	AttemptID   string
+	SubmittedAt *time.Time
+	IsCorrect   bool
+	Score       float64
 }
 
 // Attempt stores student answer data.
@@ -578,6 +587,8 @@ func (s *Service) GetReviewExerciseByAttempt(ctx context.Context, userID string,
 }
 
 func normalizeListQuery(query ListQuery) ListQuery {
+	query.DateFrom = utcTimePointer(query.DateFrom)
+	query.DateTo = utcTimePointer(query.DateTo)
 	if query.Page < 1 {
 		query.Page = 1
 	}
@@ -612,7 +623,7 @@ func normalizeListQuery(query ListQuery) ListQuery {
 }
 
 func (s *Service) timeRange(value string) (*time.Time, *time.Time) {
-	now := s.now()
+	now := s.now().UTC()
 	var start *time.Time
 	switch value {
 	case "week":
@@ -646,7 +657,7 @@ func toMistakeItem(item listItemData) MistakeItem {
 			CorrectAnswer:    metautil.String(row.Content.Meta, "answer"),
 			IsCorrect:        row.Attempt.IsCorrect,
 			Score:            row.Attempt.Score,
-			SubmittedAt:      timefmt.OptionalDateTimeMicros(row.Attempt.SubmittedAt),
+			SubmittedAt:      optionalAttemptTimestamp(row.Attempt.SubmittedAt),
 			TimeSpentSeconds: row.Attempt.TimeSpentSeconds,
 		},
 		Diagnosis: MistakeDiagnosis{
@@ -666,11 +677,20 @@ func toMistakeItem(item listItemData) MistakeItem {
 	}
 }
 
-func toDetailResponse(row MistakeRow, history []MistakeHistory) DetailResponse {
+func toDetailResponse(row MistakeRow, historyRows []AttemptHistoryRow) DetailResponse {
 	solutionSteps := metautil.StringSlice(row.Content.Meta, "solution_steps")
 	source := "unavailable"
 	if len(solutionSteps) > 0 {
 		source = "cached"
+	}
+	history := make([]MistakeHistory, 0, len(historyRows))
+	for _, item := range historyRows {
+		history = append(history, MistakeHistory{
+			AttemptID:   item.AttemptID,
+			SubmittedAt: optionalAttemptTimestamp(item.SubmittedAt),
+			IsCorrect:   item.IsCorrect,
+			Score:       item.Score,
+		})
 	}
 	return DetailResponse{
 		AttemptID: row.Attempt.ID,
@@ -686,7 +706,7 @@ func toDetailResponse(row MistakeRow, history []MistakeHistory) DetailResponse {
 			StudentAnswer:    row.Attempt.StudentAnswer,
 			StudentSteps:     sliceutil.CloneStrings(row.Attempt.StudentSteps),
 			CorrectAnswer:    metautil.String(row.Content.Meta, "answer"),
-			SubmittedAt:      timefmt.OptionalDateTimeMicros(row.Attempt.SubmittedAt),
+			SubmittedAt:      optionalAttemptTimestamp(row.Attempt.SubmittedAt),
 			TimeSpentSeconds: row.Attempt.TimeSpentSeconds,
 		},
 		Diagnosis: MistakeDetailDiagnosis{
@@ -703,6 +723,22 @@ func toDetailResponse(row MistakeRow, history []MistakeHistory) DetailResponse {
 		},
 		History: history,
 	}
+}
+
+func utcTimePointer(value *time.Time) *time.Time {
+	if value == nil {
+		return nil
+	}
+	converted := value.UTC()
+	return &converted
+}
+
+func optionalAttemptTimestamp(value *time.Time) *string {
+	if value == nil {
+		return nil
+	}
+	formatted := timefmt.DateTimeRFC3339(learningrange.InPlatformZone(*value))
+	return &formatted
 }
 
 func toReviewResponse(candidate reviewCandidate) ReviewExerciseResponse {

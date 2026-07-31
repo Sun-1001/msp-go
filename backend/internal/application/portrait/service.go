@@ -9,6 +9,9 @@ import (
 	"strings"
 	"time"
 
+	"mathstudy/backend/internal/application/learningrange"
+	"mathstudy/backend/internal/application/masteryprojection"
+	"mathstudy/backend/internal/platform/maputil"
 	"mathstudy/backend/internal/platform/numutil"
 	"mathstudy/backend/internal/platform/ptrutil"
 	"mathstudy/backend/internal/platform/timefmt"
@@ -18,8 +21,26 @@ import (
 type Repository interface {
 	GetProfile(context.Context, string) (Profile, bool, error)
 	CreateProfile(context.Context, string, time.Time) (Profile, error)
-	SavePortrait(context.Context, string, string, time.Time) (Profile, bool, error)
-	ClearPortrait(context.Context, string, time.Time) (bool, error)
+	GetRangeStats(context.Context, string, time.Time, time.Time) (RangeStats, error)
+	ListMasteryStates(context.Context, string) ([]MasteryState, error)
+	SavePortrait(context.Context, string, string, string, time.Time, time.Time, int64) (Profile, bool, error)
+	ClearPortrait(context.Context, string, time.Time, int64) (bool, error)
+}
+
+// RangeStats contains activity-derived fields for one report snapshot window.
+type RangeStats struct {
+	TotalExercises        int
+	CorrectCount          int
+	TotalStudyTimeMinutes int
+	ErrorTendency         map[string]float64
+	RecentConcepts        []string
+}
+
+// MasteryState contains the persisted inputs needed to project current DKT mastery.
+type MasteryState struct {
+	ConceptID     string
+	Mastery       float64
+	LastAttemptAt *time.Time
 }
 
 // Profile stores the learning counters and generated portrait fields.
@@ -35,7 +56,10 @@ type Profile struct {
 	RecentConcepts        []string
 	PortraitContent       *string
 	PortraitGeneratedAt   *time.Time
+	PortraitRange         *string
+	PortraitSnapshotAt    *time.Time
 	PortraitVersion       int
+	PortraitRevision      int64
 }
 
 // PortraitResponse is the Python-compatible GET /portrait response.
@@ -43,6 +67,8 @@ type PortraitResponse struct {
 	StudentID             string  `json:"student_id"`
 	PortraitContent       *string `json:"portrait_content"`
 	PortraitGeneratedAt   *string `json:"portrait_generated_at"`
+	PortraitRange         *string `json:"portrait_range"`
+	PortraitSnapshotAt    *string `json:"portrait_snapshot_at"`
 	PortraitVersion       int     `json:"portrait_version"`
 	TotalExercises        int     `json:"total_exercises"`
 	CorrectRate           float64 `json:"correct_rate"`
@@ -54,6 +80,8 @@ type PortraitResponse struct {
 type GenerateResponse struct {
 	PortraitContent     string `json:"portrait_content"`
 	PortraitGeneratedAt string `json:"portrait_generated_at"`
+	PortraitRange       string `json:"portrait_range"`
+	PortraitSnapshotAt  string `json:"portrait_snapshot_at"`
 	PortraitVersion     int    `json:"portrait_version"`
 }
 
@@ -63,9 +91,28 @@ type ClearResponse struct {
 	Message string `json:"message"`
 }
 
-// GeneratorInput carries normalized profile data into an optional LLM portrait generator.
+// ActivityWindowData contains only behavior observed inside the selected range.
+type ActivityWindowData struct {
+	RangeType             string
+	StartDate             string
+	EndDate               string
+	SnapshotAt            time.Time
+	TotalExercises        int
+	CorrectCount          int
+	TotalStudyTimeMinutes int
+	ErrorTendency         map[string]float64
+	RecentConcepts        []string
+}
+
+// MasterySnapshotData contains current DKT state, independent from the activity range.
+type MasterySnapshotData struct {
+	MasteryVector map[string]float64
+}
+
+// GeneratorInput keeps range activity and current mastery semantics explicit for LLM adapters.
 type GeneratorInput struct {
-	Profile         Profile
+	Activity        ActivityWindowData
+	MasterySnapshot MasterySnapshotData
 	FallbackContent string
 }
 
@@ -73,6 +120,12 @@ type GeneratorInput struct {
 type Generator interface {
 	GeneratePortrait(context.Context, GeneratorInput) (string, error)
 }
+
+// ErrInvalidRange indicates that a portrait report range is unsupported.
+var ErrInvalidRange = errors.New("invalid portrait range")
+
+// ErrPortraitChanged indicates that a concurrent portrait operation won the revision race.
+var ErrPortraitChanged = errors.New("portrait changed concurrently")
 
 // Service implements student portrait read and maintenance use cases.
 type Service struct {
@@ -113,58 +166,104 @@ func (s *Service) GetPortrait(ctx context.Context, userID string) (PortraitRespo
 }
 
 // GeneratePortrait builds and stores a profile-based portrait report.
-func (s *Service) GeneratePortrait(ctx context.Context, userID string) (GenerateResponse, error) {
+func (s *Service) GeneratePortrait(ctx context.Context, userID string, rangeType string) (GenerateResponse, error) {
+	if rangeType == "" {
+		rangeType = string(learningrange.All)
+	}
+	kind, err := learningrange.Parse(rangeType)
+	if err != nil {
+		return GenerateResponse{}, ErrInvalidRange
+	}
 	profile, err := s.ensureProfile(ctx, userID)
 	if err != nil {
 		return GenerateResponse{}, err
 	}
 
-	generatedAt := s.now()
-	fallbackContent := buildPortraitContent(profile)
-	content := s.generatePortraitContent(ctx, profile, fallbackContent)
-	saved, ok, err := s.repo.SavePortrait(ctx, userID, content, generatedAt)
+	snapshotNow := s.now()
+	window := learningrange.Resolve(snapshotNow, kind)
+	rangeStats, err := s.repo.GetRangeStats(ctx, userID, window.Start.UTC(), window.End.UTC())
+	if err != nil {
+		return GenerateResponse{}, err
+	}
+	masteryStates, err := s.repo.ListMasteryStates(ctx, userID)
+	if err != nil {
+		return GenerateResponse{}, err
+	}
+	currentMastery := maputil.CloneFloatMap(profile.MasteryVector)
+	for _, state := range masteryStates {
+		currentMastery[state.ConceptID] = numutil.RoundPlaces(
+			masteryprojection.Current(state.Mastery, state.LastAttemptAt, snapshotNow),
+			4,
+		)
+	}
+	profile.TotalExercises = rangeStats.TotalExercises
+	profile.CorrectCount = rangeStats.CorrectCount
+	profile.TotalStudyTimeMinutes = rangeStats.TotalStudyTimeMinutes
+	profile.ErrorTendency = rangeStats.ErrorTendency
+	profile.RecentConcepts = rangeStats.RecentConcepts
+	reportInput := GeneratorInput{
+		Activity: ActivityWindowData{
+			RangeType:             rangeType,
+			StartDate:             timefmt.Date(window.Start),
+			EndDate:               timefmt.Date(window.Today),
+			SnapshotAt:            window.SnapshotAt,
+			TotalExercises:        profile.TotalExercises,
+			CorrectCount:          profile.CorrectCount,
+			TotalStudyTimeMinutes: profile.TotalStudyTimeMinutes,
+			ErrorTendency:         profile.ErrorTendency,
+			RecentConcepts:        profile.RecentConcepts,
+		},
+		MasterySnapshot: MasterySnapshotData{
+			MasteryVector: currentMastery,
+		},
+	}
+	reportInput.FallbackContent = buildPortraitContent(reportInput)
+	content := s.generatePortraitContent(ctx, reportInput)
+	generatedAt := learningrange.InPlatformZone(s.now())
+	saved, ok, err := s.repo.SavePortrait(ctx, userID, content, rangeType, generatedAt.UTC(), window.SnapshotAt.UTC(), profile.PortraitRevision)
 	if err != nil {
 		return GenerateResponse{}, err
 	}
 	if !ok {
-		return GenerateResponse{}, errors.New("portrait profile disappeared before save")
+		return GenerateResponse{}, ErrPortraitChanged
 	}
 	return GenerateResponse{
 		PortraitContent:     ptrutil.ValueOrZero(saved.PortraitContent),
-		PortraitGeneratedAt: timefmt.DateTimeMicros(generatedAt),
+		PortraitGeneratedAt: timefmt.DateTimeRFC3339(generatedAt),
+		PortraitRange:       rangeType,
+		PortraitSnapshotAt:  timefmt.DateTimeRFC3339(window.SnapshotAt),
 		PortraitVersion:     saved.PortraitVersion,
 	}, nil
 }
 
-func (s *Service) generatePortraitContent(ctx context.Context, profile Profile, fallbackContent string) string {
+func (s *Service) generatePortraitContent(ctx context.Context, input GeneratorInput) string {
 	if s.generator == nil {
-		return fallbackContent
+		return input.FallbackContent
 	}
-	content, err := s.generator.GeneratePortrait(ctx, GeneratorInput{
-		Profile:         profile,
-		FallbackContent: fallbackContent,
-	})
+	content, err := s.generator.GeneratePortrait(ctx, input)
 	if err != nil {
-		return fallbackContent
+		return input.FallbackContent
 	}
 	content = strings.TrimSpace(content)
 	if content == "" {
-		return fallbackContent
+		return input.FallbackContent
 	}
 	return content
 }
 
 // ClearPortrait removes generated portrait content for the current student.
 func (s *Service) ClearPortrait(ctx context.Context, userID string) (ClearResponse, error) {
-	if _, err := s.ensureProfile(ctx, userID); err != nil {
+	profile, err := s.ensureProfile(ctx, userID)
+	if err != nil {
 		return ClearResponse{}, err
 	}
-	ok, err := s.repo.ClearPortrait(ctx, userID, s.now())
+	updatedAt := s.now().UTC()
+	ok, err := s.repo.ClearPortrait(ctx, userID, updatedAt, profile.PortraitRevision)
 	if err != nil {
 		return ClearResponse{}, err
 	}
 	if !ok {
-		return ClearResponse{}, errors.New("portrait profile disappeared before clear")
+		return ClearResponse{}, ErrPortraitChanged
 	}
 	return ClearResponse{Cleared: true, Message: "画像已清除"}, nil
 }
@@ -177,7 +276,7 @@ func (s *Service) ensureProfile(ctx context.Context, userID string) (Profile, er
 	if ok {
 		return normalizeProfile(profile), nil
 	}
-	profile, err = s.repo.CreateProfile(ctx, userID, s.now())
+	profile, err = s.repo.CreateProfile(ctx, userID, s.now().UTC())
 	if err != nil {
 		return Profile{}, err
 	}
@@ -188,7 +287,9 @@ func toPortraitResponse(profile Profile) PortraitResponse {
 	return PortraitResponse{
 		StudentID:             profile.StudentID,
 		PortraitContent:       profile.PortraitContent,
-		PortraitGeneratedAt:   timefmt.OptionalDateTimeMicros(profile.PortraitGeneratedAt),
+		PortraitGeneratedAt:   optionalPlatformTimestamp(profile.PortraitGeneratedAt),
+		PortraitRange:         profile.PortraitRange,
+		PortraitSnapshotAt:    optionalPlatformTimestamp(profile.PortraitSnapshotAt),
 		PortraitVersion:       profile.PortraitVersion,
 		TotalExercises:        profile.TotalExercises,
 		CorrectRate:           numutil.RoundPlaces(numutil.Ratio(profile.TotalExercises, profile.CorrectCount), 2),
@@ -197,41 +298,51 @@ func toPortraitResponse(profile Profile) PortraitResponse {
 	}
 }
 
-func buildPortraitContent(profile Profile) string {
-	correctRate := numutil.Ratio(profile.TotalExercises, profile.CorrectCount)
+func optionalPlatformTimestamp(value *time.Time) *string {
+	if value == nil {
+		return nil
+	}
+	formatted := timefmt.DateTimeRFC3339(learningrange.InPlatformZone(*value))
+	return &formatted
+}
+
+func buildPortraitContent(input GeneratorInput) string {
+	activity := input.Activity
+	mastery := input.MasterySnapshot
+	correctRate := numutil.Ratio(activity.TotalExercises, activity.CorrectCount)
 	var builder strings.Builder
 	builder.WriteString("# 学生画像分析报告\n\n")
-	builder.WriteString("## 学习概况\n")
-	builder.WriteString(fmt.Sprintf("- 总练习次数: %d\n", profile.TotalExercises))
-	builder.WriteString(fmt.Sprintf("- 正确次数: %d\n", profile.CorrectCount))
+	builder.WriteString(fmt.Sprintf("统计范围：%s 至 %s；行为数据截至 %s。\n\n", activity.StartDate, activity.EndDate, activity.SnapshotAt.Format(time.RFC3339)))
+	builder.WriteString("## 范围内学习概况\n")
+	builder.WriteString(fmt.Sprintf("- 练习次数: %d\n", activity.TotalExercises))
+	builder.WriteString(fmt.Sprintf("- 正确次数: %d\n", activity.CorrectCount))
 	builder.WriteString(fmt.Sprintf("- 正确率: %.0f%%\n", correctRate*100))
-	builder.WriteString(fmt.Sprintf("- 总学习时长: %d 分钟\n", profile.TotalStudyTimeMinutes))
-	builder.WriteString(fmt.Sprintf("- 偏好难度: %.2f\n", profile.PreferredDifficulty))
-	builder.WriteString(fmt.Sprintf("- 学习节奏系数: %.2f\n", profile.LearningPace))
+	builder.WriteString(fmt.Sprintf("- 学习时长: %d 分钟\n", activity.TotalStudyTimeMinutes))
 
-	if len(profile.MasteryVector) > 0 {
-		builder.WriteString("\n## 知识点掌握度\n")
-		for _, item := range sortedTop(profile.MasteryVector, true, 10) {
+	if len(mastery.MasteryVector) > 0 {
+		builder.WriteString("\n## 当前知识点掌握状态\n")
+		builder.WriteString("以下为生成报告时读取的当前累计 DKT 状态，不代表本范围内的新增掌握度。\n")
+		for _, item := range sortedTop(mastery.MasteryVector, true, 10) {
 			builder.WriteString(fmt.Sprintf("- %s: %.0f%%\n", item.key, item.value*100))
 		}
 	}
 
-	if len(profile.ErrorTendency) > 0 {
-		builder.WriteString("\n## 错误倾向\n")
-		for _, item := range sortedTop(profile.ErrorTendency, false, 8) {
+	if len(activity.ErrorTendency) > 0 {
+		builder.WriteString("\n## 范围内错误倾向\n")
+		for _, item := range sortedTop(activity.ErrorTendency, false, 8) {
 			builder.WriteString(fmt.Sprintf("- %s: %s 次\n", item.key, formatNumber(item.value)))
 		}
 	}
 
-	if len(profile.RecentConcepts) > 0 {
-		builder.WriteString("\n## 近期学习重点\n")
-		for _, concept := range profile.RecentConcepts {
+	if len(activity.RecentConcepts) > 0 {
+		builder.WriteString("\n## 范围内近期学习重点\n")
+		for _, concept := range activity.RecentConcepts {
 			builder.WriteString(fmt.Sprintf("- %s\n", concept))
 		}
 	}
 
 	builder.WriteString("\n## 改进建议\n")
-	if profile.TotalExercises == 0 {
+	if activity.TotalExercises == 0 {
 		builder.WriteString("- 先完成一组基础练习，积累可分析的学习记录。\n")
 	} else if correctRate < 0.6 {
 		builder.WriteString("- 优先复盘近期错题，针对低掌握知识点进行小步练习。\n")

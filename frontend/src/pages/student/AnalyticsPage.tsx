@@ -19,6 +19,9 @@ import { Badge } from '../../components/ui/Badge';
 import { Progress } from '../../components/ui/Progress';
 import { Select } from '../../components/ui/Select';
 import { apiClient, getApiErrorMessage } from '@/libs/http/apiClient';
+import { StudentPortraitInsights } from '@/modules/student/components/StudentPortraitInsights';
+import { studentPortraitService } from '@/modules/student/services/studentPortraitService';
+import type { PortraitInsights, PortraitRangeType } from '@/modules/student/types/studentPortrait';
 import {
   Clock,
   BookOpen,
@@ -60,6 +63,8 @@ type MasteryResponse = { topics: MasteryTopic[]; model: string };
 
 type ClassRankingResponse = {
   in_class: boolean;
+  available: boolean;
+  unavailable_reason?: string;
   rank: number | null;
   total: number;
   percentile: number | null;
@@ -69,7 +74,7 @@ const timeRangeOptions = [
   { value: 'week', label: '当前周' },
   { value: 'month', label: '当前月' },
   { value: 'semester', label: '当前学期' },
-  { value: 'all', label: '全部' },
+  { value: 'all', label: '近一年' },
 ];
 
 function formatStudyTimeMinutes(minutes: number): string {
@@ -79,6 +84,15 @@ function formatStudyTimeMinutes(minutes: number): string {
   if (h === 0) return `${m}分钟`;
   if (m === 0) return `${h}小时`;
   return `${h}小时${m}分钟`;
+}
+
+function parseCalendarDate(value: string) {
+  const [year, month, day] = value.split('-').map(Number);
+  return {
+    month,
+    day,
+    weekday: new Date(Date.UTC(year, month - 1, day)).getUTCDay(),
+  };
 }
 
 const ERROR_TYPE_LABELS: Record<string, string> = {
@@ -95,6 +109,10 @@ const AnalyticsPageInner: React.FC = () => {
   const [stats, setStats] = useState<StatisticsResponse | null>(null);
   const [masteryTopics, setMasteryTopics] = useState<MasteryTopic[]>([]);
   const [classRanking, setClassRanking] = useState<ClassRankingResponse | null>(null);
+  const [portraitInsights, setPortraitInsights] = useState<PortraitInsights | null>(null);
+  const [portraitLoading, setPortraitLoading] = useState(true);
+  const [portraitError, setPortraitError] = useState<string | null>(null);
+  const [portraitRequestKey, setPortraitRequestKey] = useState(0);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
@@ -126,6 +144,35 @@ const AnalyticsPageInner: React.FC = () => {
     load();
     return () => { controller.abort(); };
   }, [timeRange]);
+
+  useEffect(() => {
+    const controller = new AbortController();
+    const loadPortraitInsights = async () => {
+      setPortraitLoading(true);
+      setPortraitError(null);
+      try {
+        const result = await studentPortraitService.getInsights(
+          timeRange as PortraitRangeType,
+          controller.signal,
+        );
+        if (!controller.signal.aborted) setPortraitInsights(result);
+      } catch (err) {
+        if (!controller.signal.aborted) {
+          setPortraitError(getApiErrorMessage(err, '加载学生画像失败'));
+        }
+      } finally {
+        if (!controller.signal.aborted) setPortraitLoading(false);
+      }
+    };
+    void loadPortraitInsights();
+    return () => controller.abort();
+  }, [portraitRequestKey, timeRange]);
+
+  useEffect(() => {
+    if (!portraitLoading && window.location.hash === '#portrait') {
+      document.getElementById('portrait')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    }
+  }, [portraitLoading]);
 
   const totalStudyTimeFormatted = useMemo(
     () => (overview != null ? formatStudyTimeMinutes(overview.study_time_minutes) : '—'),
@@ -161,7 +208,7 @@ const AnalyticsPageInner: React.FC = () => {
       const weeksInRange = stats.daily.length;
       return { current: activeCount, target: Math.max(weeksInRange, 1), label: '当前学期目标', unit: '周' as const };
     }
-    return { current: activeCount, target: 52, label: '近一年', unit: '周' as const };
+    return { current: activeCount, target: Math.max(stats.daily.length, 1), label: '近一年', unit: '周' as const };
   }, [stats, timeRange]);
 
   const CIRCLE_CIRCUMFERENCE = 352;
@@ -180,8 +227,7 @@ const AnalyticsPageInner: React.FC = () => {
     const active: boolean[] = [false, false, false, false, false, false, false];
     for (const d of stats.daily) {
       if ((d.exercises ?? 0) <= 0 && (d.study_minutes ?? 0) <= 0) continue;
-      const dateObj = new Date(d.date);
-      const jsDay = dateObj.getDay();
+      const jsDay = parseCalendarDate(d.date).weekday;
       const weekIndex = jsDay === 0 ? 6 : jsDay - 1;
       active[weekIndex] = true;
     }
@@ -207,12 +253,12 @@ const AnalyticsPageInner: React.FC = () => {
     const isWeek = stats.interval === 'week';
     const weekdayNames = ['日', '一', '二', '三', '四', '五', '六'];
     const categories = stats.daily.map((d, index) => {
-      const dateObj = new Date(d.date);
+      const date = parseCalendarDate(d.date);
       return isWeek
         ? `第${index + 1}周`
         : stats.daily!.length <= 7
-          ? `周${weekdayNames[dateObj.getDay()]}`
-          : `${dateObj.getMonth() + 1}/${dateObj.getDate()}`;
+          ? `周${weekdayNames[date.weekday]}`
+          : `${date.month}/${date.day}`;
     });
     const values = stats.daily.map((d) => d.study_minutes ?? 0);
     return {
@@ -516,12 +562,13 @@ const AnalyticsPageInner: React.FC = () => {
 
             <Card>
               <CardHeader>
-                <CardTitle className="text-lg">班级排名</CardTitle>
+                <CardTitle className="text-lg">累计学习投入排名</CardTitle>
+                <CardDescription>按累计学习时长与做题数计算，不随上方时间范围变化</CardDescription>
               </CardHeader>
               <CardContent>
                 {loading ? (
                   <div className="text-center py-4 text-surface-500 dark:text-surface-400">—</div>
-                ) : classRanking?.in_class ? (
+                ) : classRanking?.in_class && classRanking.available ? (
                   <>
                     <div className="text-center py-4">
                       <div className="text-5xl font-bold text-primary-600 dark:text-primary-400">#{classRanking.rank ?? '—'}</div>
@@ -536,6 +583,13 @@ const AnalyticsPageInner: React.FC = () => {
                       </>
                     )}
                   </>
+                ) : classRanking?.in_class ? (
+                  <div className="text-center py-4">
+                    <p className="text-sm text-surface-500 dark:text-surface-400">暂不提供排名</p>
+                    <p className="text-xs text-surface-400 dark:text-surface-500 mt-1">
+                      {classRanking.unavailable_reason ?? '继续完成课程练习后可查看'}
+                    </p>
+                  </div>
                 ) : (
                   <div className="text-center py-4">
                     <p className="text-sm text-surface-500 dark:text-surface-400">未加入班级</p>
@@ -546,6 +600,16 @@ const AnalyticsPageInner: React.FC = () => {
             </Card>
 
           </div>
+        </div>
+
+        <div className="mt-10">
+          <StudentPortraitInsights
+            range={timeRange as PortraitRangeType}
+            insights={portraitInsights}
+            loading={portraitLoading}
+            error={portraitError}
+            onRetry={() => setPortraitRequestKey((value) => value + 1)}
+          />
         </div>
       </div>
     </MainLayout>

@@ -4,11 +4,12 @@ import (
 	"container/heap"
 	"context"
 	"errors"
-	"math"
 	"sort"
 	"strings"
 	"time"
 
+	"mathstudy/backend/internal/application/learningrange"
+	"mathstudy/backend/internal/application/masteryprojection"
 	"mathstudy/backend/internal/platform/maputil"
 	"mathstudy/backend/internal/platform/numutil"
 	"mathstudy/backend/internal/platform/timefmt"
@@ -18,9 +19,8 @@ const (
 	// StreakLookbackDays matches the Python progress service lookback window.
 	StreakLookbackDays = 365
 
-	masteryThreshold  = 0.85
-	dktRetentionFloor = 0.05
-	dktModelName      = "dkt-sakt-lite"
+	masteryThreshold = 0.85
+	dktModelName     = "dkt-sakt-lite"
 )
 
 var (
@@ -50,6 +50,11 @@ type Repository interface {
 	CountErrorsByType(context.Context, string, time.Time, time.Time) (map[string]int, error)
 	ListClassStudentIDs(context.Context, string) ([]string, string, bool, error)
 	AttemptStatsForStudents(context.Context, string, []string) (map[string]StudentAttemptStats, error)
+	AttemptInsightsForStudents(context.Context, string, []string, time.Time, time.Time) (map[string]StudentAttemptInsight, error)
+	MasteryStatesForStudents(context.Context, []string) ([]StudentMasteryInsight, error)
+	KnowledgeNodeNames(context.Context, []string) (map[string]string, error)
+	ListPortraitActionProgresses(context.Context, string) (map[string]PortraitActionProgress, error)
+	StartPortraitAction(context.Context, string, string, time.Time) (bool, error)
 	DistinctChapters(context.Context) ([]string, error)
 }
 
@@ -258,10 +263,12 @@ type ErrorTypeDistribution struct {
 
 // ClassRankingResponse is the /progress/class-ranking response.
 type ClassRankingResponse struct {
-	InClass    bool     `json:"in_class"`
-	Rank       *int     `json:"rank"`
-	Total      int      `json:"total"`
-	Percentile *float64 `json:"percentile"`
+	InClass           bool     `json:"in_class"`
+	Available         bool     `json:"available"`
+	UnavailableReason string   `json:"unavailable_reason,omitempty"`
+	Rank              *int     `json:"rank"`
+	Total             int      `json:"total"`
+	Percentile        *float64 `json:"percentile"`
 }
 
 // Service implements student progress read use cases.
@@ -318,7 +325,7 @@ func learningGoalResponse(goal LearningGoal) LearningGoalResponse {
 // GetOverview returns the student learning progress overview.
 func (s *Service) GetOverview(ctx context.Context, userID string) (Overview, error) {
 	now := s.now()
-	snapshot, err := s.repo.GetOverviewSnapshot(ctx, userID, timefmt.StartOfDay(now))
+	snapshot, err := s.repo.GetOverviewSnapshot(ctx, userID, learningrange.StartOfPlatformDayUTC(now))
 	if err != nil {
 		return Overview{}, err
 	}
@@ -341,7 +348,7 @@ func (s *Service) GetOverview(ctx context.Context, userID string) (Overview, err
 
 	var recent *RecentContent
 	if snapshot.LatestAttempt != nil {
-		recent = &RecentContent{LastAccessed: timefmt.DateTimeMicros(*snapshot.LatestAttempt)}
+		recent = &RecentContent{LastAccessed: timefmt.DateTimeRFC3339(learningrange.InPlatformZone(*snapshot.LatestAttempt))}
 	}
 
 	return Overview{
@@ -574,58 +581,31 @@ func (s *Service) GetKnowledgeGraphView(ctx context.Context, userID string, filt
 
 // GetStatistics returns learning activity statistics.
 func (s *Service) GetStatistics(ctx context.Context, userID string, rangeType string) (StatisticsResponse, error) {
-	now := s.now()
-	today := timefmt.StartOfDay(now)
-	startDate := today.AddDate(0, 0, -weekdayMondayIndex(today))
-	rangeDays := 7
-	interval := "day"
-
-	switch rangeType {
-	case "month":
-		startDate = time.Date(today.Year(), today.Month(), 1, 0, 0, 0, 0, today.Location())
-		rangeDays = int(today.Sub(startDate).Hours()/24) + 1
-	case "semester":
-		interval = "week"
-		if today.Month() >= time.September {
-			startDate = time.Date(today.Year(), time.September, 1, 0, 0, 0, 0, today.Location())
-		} else if today.Month() == time.January {
-			startDate = time.Date(today.Year()-1, time.September, 1, 0, 0, 0, 0, today.Location())
-		} else {
-			startDate = time.Date(today.Year(), time.February, 1, 0, 0, 0, 0, today.Location())
-		}
-		rangeDays = int(today.Sub(startDate).Hours()/24) + 1
-	case "all":
-		interval = "week"
-		rangeDays = 365
-		startDate = today.AddDate(0, 0, -364)
-	default:
-		rangeDays = min(7, int(today.Sub(startDate).Hours()/24)+1)
-	}
-
-	endDate := time.Date(today.Year(), today.Month(), today.Day(), 23, 59, 59, int(time.Second-time.Nanosecond), today.Location())
+	kind := learningrange.ParseOrDefault(rangeType, learningrange.Week)
+	window := learningrange.Resolve(s.now(), kind)
 	var rows []PeriodStat
 	var err error
-	if interval == "day" {
-		rows, err = s.repo.ListLearningStatsByDay(ctx, userID, startDate, endDate)
+	if window.Interval == learningrange.DayInterval {
+		rows, err = s.repo.ListLearningStatsByDay(ctx, userID, window.Start.UTC(), window.End.UTC())
 	} else {
-		rows, err = s.repo.ListLearningStatsByWeek(ctx, userID, startDate, endDate)
+		rows, err = s.repo.ListLearningStatsByWeek(ctx, userID, window.Start.UTC(), window.End.UTC())
 	}
 	if err != nil {
 		return StatisticsResponse{}, err
 	}
 
-	daily := buildDailyStats(interval, startDate, today, rangeDays, rows)
-	errorCounts, err := s.repo.CountErrorsByType(ctx, userID, startDate, endDate)
+	daily := buildDailyStats(window.Interval, window.Start, window.Today, window.Days, rows)
+	errorCounts, err := s.repo.CountErrorsByType(ctx, userID, window.Start.UTC(), window.End.UTC())
 	if err != nil {
 		return StatisticsResponse{}, err
 	}
 	distribution := buildErrorDistribution(errorCounts)
 
 	return StatisticsResponse{
-		RangeDays:             rangeDays,
-		Interval:              interval,
-		StartDate:             timefmt.Date(startDate),
-		EndDate:               timefmt.Date(today),
+		RangeDays:             window.Days,
+		Interval:              window.Interval,
+		StartDate:             timefmt.Date(window.Start),
+		EndDate:               timefmt.Date(window.Today),
 		Daily:                 daily,
 		ErrorTypeDistribution: distribution,
 	}, nil
@@ -638,10 +618,10 @@ func (s *Service) GetClassRanking(ctx context.Context, userID string) (ClassRank
 		return ClassRankingResponse{}, err
 	}
 	if !inClass {
-		return ClassRankingResponse{InClass: false, Total: 0}, nil
+		return ClassRankingResponse{InClass: false, Available: false, Total: 0, UnavailableReason: "未加入班级"}, nil
 	}
 	if len(studentIDs) == 0 {
-		return ClassRankingResponse{InClass: true, Total: 0}, nil
+		return ClassRankingResponse{InClass: true, Available: false, Total: 0, UnavailableReason: "班级暂无学生"}, nil
 	}
 
 	stats, err := s.repo.AttemptStatsForStudents(ctx, teacherID, studentIDs)
@@ -664,17 +644,46 @@ func (s *Service) GetClassRanking(ctx context.Context, userID string) (ClassRank
 		return rankingRows[i].StudySeconds > rankingRows[j].StudySeconds
 	})
 
+	studentStat := stats[userID]
+	if studentStat.AttemptCount == 0 {
+		return ClassRankingResponse{
+			InClass:           true,
+			Available:         false,
+			UnavailableReason: "完成课程练习后可查看排名",
+			Total:             len(rankingRows),
+		}, nil
+	}
+	if len(rankingRows) < 2 {
+		return ClassRankingResponse{
+			InClass:           true,
+			Available:         false,
+			UnavailableReason: "班级人数不足，暂不提供排名",
+			Total:             len(rankingRows),
+		}, nil
+	}
 	rank := 1
-	for i, row := range rankingRows {
+	lowerPeers := 0
+	for _, row := range rankingRows {
 		if row.StudentID == userID {
-			rank = i + 1
-			break
+			continue
+		}
+		if row.StudySeconds > studentStat.StudySeconds ||
+			(row.StudySeconds == studentStat.StudySeconds && row.AttemptCount > studentStat.AttemptCount) {
+			rank++
+		}
+		if row.StudySeconds < studentStat.StudySeconds ||
+			(row.StudySeconds == studentStat.StudySeconds && row.AttemptCount < studentStat.AttemptCount) {
+			lowerPeers++
 		}
 	}
 	total := len(rankingRows)
-	percentile := numutil.RoundPlaces((1.0-float64(rank-1)/float64(total))*100.0, 1)
+	percentile := 0.0
+	if total > 1 {
+		percentile = numutil.RoundPlaces(float64(lowerPeers)/float64(total-1)*100, 1)
+	}
 	return ClassRankingResponse{
 		InClass:    true,
+		Available:  true,
 		Rank:       &rank,
 		Total:      total,
 		Percentile: &percentile,
@@ -697,11 +706,7 @@ func (s *Service) masteryDetails(ctx context.Context, userID string, fallback ma
 	}
 	now := s.now()
 	for _, state := range states {
-		rawMastery := state.Mastery
-		if state.LastAttemptAt != nil {
-			daysSince := now.Sub(*state.LastAttemptAt).Hours() / 24.0
-			rawMastery = applyForgetting(rawMastery, daysSince, dktRetentionFloor)
-		}
+		rawMastery := masteryprojection.Current(state.Mastery, state.LastAttemptAt, now)
 		mastery[state.ConceptID] = numutil.RoundPlaces(rawMastery, 4)
 		confidence[state.ConceptID] = numutil.RoundPlaces(state.Confidence, 4)
 		attempts[state.ConceptID] = state.AttemptCount
@@ -728,7 +733,7 @@ func (s *Service) calculateStreakDays(ctx context.Context, userID string) (int, 
 		activeDays[timefmt.Date(day)] = struct{}{}
 	}
 	streak := 0
-	current := timefmt.StartOfDay(s.now())
+	current := timefmt.StartOfDay(learningrange.InPlatformZone(s.now()))
 	for {
 		if _, ok := activeDays[timefmt.Date(current)]; !ok {
 			return streak, nil
@@ -910,12 +915,13 @@ func buildDailyStats(interval string, startDate time.Time, today time.Time, rang
 		if weekStart.After(today) {
 			break
 		}
-		if weekStart.Before(startDate) {
-			continue
+		displayDate := weekStart
+		if displayDate.Before(startDate) {
+			displayDate = startDate
 		}
 		row := statsByDate[timefmt.Date(weekStart)]
 		daily = append(daily, DailyStat{
-			Date:             timefmt.Date(weekStart),
+			Date:             timefmt.Date(displayDate),
 			Exercises:        row.Exercises,
 			CorrectExercises: row.CorrectExercises,
 			StudyMinutes:     row.StudySeconds / 60,
@@ -964,17 +970,6 @@ func graphRelationType(value string) string {
 	default:
 		return ""
 	}
-}
-
-func applyForgetting(mastery float64, daysSinceLast float64, floor float64) float64 {
-	if floor == 0 {
-		floor = dktRetentionFloor
-	}
-	if daysSinceLast <= 0 || mastery <= floor {
-		return mastery
-	}
-	decayed := floor + (mastery-floor)*math.Exp(-0.05*daysSinceLast)
-	return numutil.ClampFloat(decayed, 0.001, 0.999)
 }
 
 func weekdayMondayIndex(value time.Time) int {
