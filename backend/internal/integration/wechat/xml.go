@@ -30,29 +30,9 @@ type IncomingMessage struct {
 	MsgType      string   `xml:"MsgType"`
 	Content      string   `xml:"Content"`
 	MsgID        string   `xml:"MsgId"`
-	MsgDataID    string   `xml:"MsgDataId"`
-	Idx          string   `xml:"Idx"`
 	Event        string   `xml:"Event"`
 	EventKey     string   `xml:"EventKey"`
 	Ticket       string   `xml:"Ticket"`
-	Encrypt      string   `xml:"Encrypt"`
-
-	PicURL       string  `xml:"PicUrl"`
-	MediaID      string  `xml:"MediaId"`
-	Format       string  `xml:"Format"`
-	Recognition  string  `xml:"Recognition"`
-	ThumbMediaID string  `xml:"ThumbMediaId"`
-	LocationX    float64 `xml:"Location_X"`
-	LocationY    float64 `xml:"Location_Y"`
-	Scale        int     `xml:"Scale"`
-	Label        string  `xml:"Label"`
-	Title        string  `xml:"Title"`
-	Description  string  `xml:"Description"`
-	URL          string  `xml:"Url"`
-	Latitude     float64 `xml:"Latitude"`
-	Longitude    float64 `xml:"Longitude"`
-	Precision    float64 `xml:"Precision"`
-	MenuID       string  `xml:"MenuId"`
 }
 
 // EncryptedEnvelope contains the authenticated ciphertext wrapper used by
@@ -163,12 +143,6 @@ func validateIncomingMessage(message IncomingMessage) error {
 		return ErrInvalidMessage
 	}
 	if message.MsgID != "" && (!decimalText(message.MsgID) || len(message.MsgID) > maxMessageIDBytes) {
-		return ErrInvalidMessage
-	}
-	if message.MsgDataID != "" && (!decimalText(message.MsgDataID) || len(message.MsgDataID) > maxMessageIDBytes) {
-		return ErrInvalidMessage
-	}
-	if message.Idx != "" && (!decimalText(message.Idx) || len(message.Idx) > maxMessageIDBytes) {
 		return ErrInvalidMessage
 	}
 	if message.MsgType == "event" && !validBoundedText(message.Event, 1, maxEventTypeBytes) {

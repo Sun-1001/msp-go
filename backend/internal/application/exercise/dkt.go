@@ -27,7 +27,6 @@ type dktResult struct {
 
 func buildDKTSequence(history []LearningInteraction, current LearningInteraction) []LearningInteraction {
 	sequence := make([]LearningInteraction, 0, len(history)+1)
-	seenCurrent := false
 	for _, item := range history {
 		if strings.TrimSpace(item.ExerciseID) == "" {
 			continue
@@ -37,14 +36,9 @@ func buildDKTSequence(history []LearningInteraction, current LearningInteraction
 			continue
 		}
 		item.Difficulty = numutil.ClampFloat(item.Difficulty, 0, 1)
-		if item.ExerciseID == current.ExerciseID && item.SubmittedAt.Equal(current.SubmittedAt) {
-			seenCurrent = true
-		}
 		sequence = append(sequence, item)
 	}
-	if !seenCurrent {
-		sequence = append(sequence, current)
-	}
+	sequence = append(sequence, current)
 	sort.SliceStable(sequence, func(i, j int) bool {
 		return sequence[i].SubmittedAt.Before(sequence[j].SubmittedAt)
 	})

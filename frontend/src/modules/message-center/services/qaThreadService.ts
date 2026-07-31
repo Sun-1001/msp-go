@@ -121,8 +121,4 @@ export const qaThreadService = {
   async updateStatus(id: string, status: string): Promise<void> {
     await apiClient.put(`${BASE}/${id}/status`, { status });
   },
-
-  async delete(id: string): Promise<void> {
-    await apiClient.delete(`${BASE}/${id}`);
-  },
 };

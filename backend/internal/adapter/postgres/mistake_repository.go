@@ -3,6 +3,7 @@ package postgres
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -27,6 +28,23 @@ func NewMistakeRepository(db Querier) (MistakeRepository, error) {
 	return MistakeRepository{Repository: base}, nil
 }
 
+// WithTx runs fn in one database transaction when the repository is pool-backed.
+func (r MistakeRepository) WithTx(ctx context.Context, fn func(context.Context, mistakeapp.Repository) error) error {
+	if fn == nil {
+		return errors.New("mistake transaction function is nil")
+	}
+	return withRepositoryTx(ctx, "mistake", r.Repository, func(base Repository) MistakeRepository {
+		return MistakeRepository{Repository: base}
+	}, func(txRepo MistakeRepository) error {
+		return fn(ctx, txRepo)
+	})
+}
+
+// LockStudentTracking serializes mastery writes with exercise submissions.
+func (r MistakeRepository) LockStudentTracking(ctx context.Context, userID string) error {
+	return lockStudentTracking(ctx, r.DB(), userID)
+}
+
 // ListMistakes returns submitted incorrect attempts with their diagnosis and content.
 func (r MistakeRepository) ListMistakes(ctx context.Context, userID string, filter mistakeapp.ListFilter) ([]mistakeapp.MistakeRow, error) {
 	rows, err := r.DB().Query(ctx, `
@@ -34,6 +52,7 @@ func (r MistakeRepository) ListMistakes(ctx context.Context, userID string, filt
 		FROM public.content_attempts ca
 		JOIN public.diagnosis_reports dr ON ca.id = dr.attempt_id
 		JOIN public.contents c ON ca.content_id = c.id
+		`+mistakeDailyAssignmentJoin+`
 		WHERE
 			ca.student_id = $1 AND
 			ca.is_correct = false AND
@@ -41,11 +60,11 @@ func (r MistakeRepository) ListMistakes(ctx context.Context, userID string, filt
 			($2 = '' OR dr.error_type::text = $2) AND
 			($3 = '' OR EXISTS (
 				SELECT 1
-				FROM json_array_elements_text(c.concept_ids) AS concept(value)
+				FROM json_array_elements_text(coalesce(daily_assignment.question_concept_ids, c.concept_ids)) AS concept(value)
 				WHERE concept.value = $3
 			)) AND
-			c.difficulty >= $4 AND
-			c.difficulty <= $5 AND
+			coalesce(daily_assignment.question_difficulty, c.difficulty) >= $4 AND
+			coalesce(daily_assignment.question_difficulty, c.difficulty) <= $5 AND
 			($6::timestamp IS NULL OR ca.submitted_at >= $6) AND
 			($7::timestamp IS NULL OR ca.submitted_at <= $7)
 		ORDER BY ca.submitted_at DESC, ca.id DESC`,
@@ -123,6 +142,7 @@ func (r MistakeRepository) GetMistakeByAttempt(ctx context.Context, userID strin
 		FROM public.content_attempts ca
 		JOIN public.diagnosis_reports dr ON ca.id = dr.attempt_id
 		JOIN public.contents c ON ca.content_id = c.id
+		`+mistakeDailyAssignmentJoin+`
 		WHERE ca.id = $1 AND ca.student_id = $2`,
 		attemptID,
 		userID,
@@ -141,16 +161,23 @@ func (r MistakeRepository) GetAttemptContent(ctx context.Context, userID string,
 			ca.is_correct,
 			ca.score,
 			ca.submitted_at,
-			ca.time_spent_seconds,
-			c.id,
+				ca.time_spent_seconds,
+				daily_assignment.id,
+				CASE
+					WHEN daily_assignment.id IS NULL THEN c.status = 'PUBLISHED'::public.contentstatus AND c.deleted_at IS NULL
+					ELSE daily_assignment.reviewable
+				END,
+				daily_assignment.id IS NULL,
+				c.id,
 			c.type::text,
-			c.title,
-			c.body,
-			c.difficulty,
-			c.concept_ids,
-			c.meta
+			coalesce(daily_assignment.question_title, c.title),
+			coalesce(daily_assignment.question_body, c.body),
+			coalesce(daily_assignment.question_difficulty, c.difficulty),
+			coalesce(daily_assignment.question_concept_ids, c.concept_ids),
+			coalesce(daily_assignment.question_meta, c.meta)
 		FROM public.content_attempts ca
 		JOIN public.contents c ON ca.content_id = c.id
+		`+mistakeDailyAssignmentJoin+`
 		WHERE ca.id = $1 AND ca.student_id = $2`,
 		attemptID,
 		userID,
@@ -286,11 +313,22 @@ func (r MistakeRepository) UpdateProfileMastery(ctx context.Context, userID stri
 	return tag.RowsAffected() > 0, nil
 }
 
-// DeleteAttempt deletes one attempt owned by the student.
+// DeleteAttempt deletes one regular attempt while preserving immutable daily-task evidence.
 func (r MistakeRepository) DeleteAttempt(ctx context.Context, userID string, attemptID string) (bool, error) {
 	tag, err := r.DB().Exec(ctx, `
-		DELETE FROM public.content_attempts
-		WHERE id = $1 AND student_id = $2`,
+		DELETE FROM public.content_attempts attempt
+		WHERE attempt.id = $1
+		  AND attempt.student_id = $2
+		  AND NOT EXISTS (
+			  SELECT 1
+			  FROM public.daily_question_assignments assignment
+			  WHERE assignment.student_id = attempt.student_id
+			    AND (
+				    assignment.id = attempt.daily_assignment_id
+				    OR assignment.first_attempt_id = attempt.id
+				    OR assignment.corrected_attempt_id = attempt.id
+			    )
+		  )`,
 		attemptID,
 		userID,
 	)
@@ -300,10 +338,40 @@ func (r MistakeRepository) DeleteAttempt(ctx context.Context, userID string, att
 	return tag.RowsAffected() > 0, nil
 }
 
+const mistakeDailyAssignmentJoin = `
+		LEFT JOIN LATERAL (
+			SELECT
+					assignment.id,
+					assignment.status = 'completed'
+						AND assignment.first_attempt_id IS NOT NULL
+						AND assignment.first_result = 'incorrect'
+						AND assignment.corrected_attempt_id IS NULL AS reviewable,
+				assignment.question_title,
+				assignment.question_body,
+				assignment.question_difficulty,
+				assignment.question_concept_ids,
+				assignment.question_meta
+			FROM public.daily_question_assignments assignment
+			WHERE assignment.student_id = ca.student_id
+			  AND assignment.content_id = ca.content_id
+			  AND (
+				  assignment.id = ca.daily_assignment_id
+					  OR (
+						  ca.daily_assignment_id IS NULL
+						  AND (
+							  assignment.first_attempt_id = ca.id
+							  OR assignment.corrected_attempt_id = ca.id
+						  )
+					  )
+				  )
+				ORDER BY (assignment.id = ca.daily_assignment_id) DESC NULLS LAST
+			LIMIT 1
+		) daily_assignment ON true`
+
 const mistakeListFromWhere = `
 		FROM public.content_attempts ca
 		JOIN public.diagnosis_reports dr ON ca.id = dr.attempt_id
-		JOIN public.contents c ON ca.content_id = c.id
+		JOIN public.contents c ON ca.content_id = c.id` + mistakeDailyAssignmentJoin + `
 		LEFT JOIN public.student_profiles sp ON sp.student_id = ca.student_id
 		LEFT JOIN (
 			SELECT content_id, count(id)::int AS error_count
@@ -313,10 +381,10 @@ const mistakeListFromWhere = `
 		) ec ON ec.content_id = ca.content_id
 		LEFT JOIN LATERAL (
 			SELECT CASE
-				WHEN coalesce(json_array_length(c.concept_ids), 0) = 0 THEN 0.5
+				WHEN coalesce(json_array_length(coalesce(daily_assignment.question_concept_ids, c.concept_ids)), 0) = 0 THEN 0.5
 				ELSE coalesce(avg(coalesce((sp.mastery_vector ->> concept.value)::double precision, 0.5)), 0.5)
 			END AS avg_mastery
-			FROM json_array_elements_text(c.concept_ids) AS concept(value)
+			FROM json_array_elements_text(coalesce(daily_assignment.question_concept_ids, c.concept_ids)) AS concept(value)
 		) mastery ON true
 		WHERE
 			ca.student_id = $1 AND
@@ -325,11 +393,11 @@ const mistakeListFromWhere = `
 			($2 = '' OR dr.error_type::text = $2) AND
 			($3 = '' OR EXISTS (
 				SELECT 1
-				FROM json_array_elements_text(c.concept_ids) AS concept(value)
+				FROM json_array_elements_text(coalesce(daily_assignment.question_concept_ids, c.concept_ids)) AS concept(value)
 				WHERE concept.value = $3
 			)) AND
-			c.difficulty >= $4 AND
-			c.difficulty <= $5 AND
+			coalesce(daily_assignment.question_difficulty, c.difficulty) >= $4 AND
+			coalesce(daily_assignment.question_difficulty, c.difficulty) <= $5 AND
 			($6::timestamp IS NULL OR ca.submitted_at >= $6) AND
 			($7::timestamp IS NULL OR ca.submitted_at <= $7)`
 
@@ -342,13 +410,19 @@ const mistakeSelectColumns = `
 	ca.score,
 	ca.submitted_at,
 	ca.time_spent_seconds,
+	daily_assignment.id,
+	CASE
+		WHEN daily_assignment.id IS NULL THEN c.status = 'PUBLISHED'::public.contentstatus AND c.deleted_at IS NULL
+		ELSE daily_assignment.reviewable
+	END,
+	daily_assignment.id IS NULL,
 	c.id,
 	c.type::text,
-	c.title,
-	c.body,
-	c.difficulty,
-	c.concept_ids,
-	c.meta,
+	coalesce(daily_assignment.question_title, c.title),
+	coalesce(daily_assignment.question_body, c.body),
+	coalesce(daily_assignment.question_difficulty, c.difficulty),
+	coalesce(daily_assignment.question_concept_ids, c.concept_ids),
+	coalesce(daily_assignment.question_meta, c.meta),
 	dr.error_type::text,
 	dr.error_subtype,
 	dr.severity,
@@ -414,6 +488,7 @@ func scanMistakeListRow(rows pgx.Rows) (mistakeapp.MistakeListRow, error) {
 	var conceptIDsRaw []byte
 	var metaRaw []byte
 	var submittedAt pgtype.Timestamp
+	var dailyAssignmentID pgtype.Text
 	var errorType pgtype.Text
 	var errorSubtype pgtype.Text
 	var relatedConceptIDsRaw []byte
@@ -430,6 +505,9 @@ func scanMistakeListRow(rows pgx.Rows) (mistakeapp.MistakeListRow, error) {
 		&attempt.Score,
 		&submittedAt,
 		&attempt.TimeSpentSeconds,
+		&dailyAssignmentID,
+		&attempt.CanReview,
+		&attempt.CanDelete,
 		&content.ID,
 		&content.Type,
 		&content.Title,
@@ -450,6 +528,9 @@ func scanMistakeListRow(rows pgx.Rows) (mistakeapp.MistakeListRow, error) {
 		return mistakeapp.MistakeListRow{}, err
 	}
 	attempt.SubmittedAt = timestampPtr(submittedAt)
+	if dailyAssignmentID.Valid {
+		attempt.DailyAssignmentID = dailyAssignmentID.String
+	}
 	studentSteps, err := decodeStringSlice(studentStepsRaw)
 	if err != nil {
 		return mistakeapp.MistakeListRow{}, fmt.Errorf("decode student steps: %w", err)
@@ -490,6 +571,7 @@ func scanMistake(scanner rowScanner) (mistakeapp.MistakeRow, error) {
 	var conceptIDsRaw []byte
 	var metaRaw []byte
 	var submittedAt pgtype.Timestamp
+	var dailyAssignmentID pgtype.Text
 	var errorType pgtype.Text
 	var errorSubtype pgtype.Text
 	var relatedConceptIDsRaw []byte
@@ -504,6 +586,9 @@ func scanMistake(scanner rowScanner) (mistakeapp.MistakeRow, error) {
 		&attempt.Score,
 		&submittedAt,
 		&attempt.TimeSpentSeconds,
+		&dailyAssignmentID,
+		&attempt.CanReview,
+		&attempt.CanDelete,
 		&content.ID,
 		&content.Type,
 		&content.Title,
@@ -522,6 +607,9 @@ func scanMistake(scanner rowScanner) (mistakeapp.MistakeRow, error) {
 		return mistakeapp.MistakeRow{}, err
 	}
 	attempt.SubmittedAt = timestampPtr(submittedAt)
+	if dailyAssignmentID.Valid {
+		attempt.DailyAssignmentID = dailyAssignmentID.String
+	}
 	studentSteps, err := decodeStringSlice(studentStepsRaw)
 	if err != nil {
 		return mistakeapp.MistakeRow{}, fmt.Errorf("decode student steps: %w", err)
@@ -555,6 +643,7 @@ func scanAttemptAndContent(scanner rowScanner, attempt *mistakeapp.Attempt, cont
 	var conceptIDsRaw []byte
 	var metaRaw []byte
 	var submittedAt pgtype.Timestamp
+	var dailyAssignmentID pgtype.Text
 	if err := scanner.Scan(
 		&attempt.ID,
 		&attempt.ContentID,
@@ -564,6 +653,9 @@ func scanAttemptAndContent(scanner rowScanner, attempt *mistakeapp.Attempt, cont
 		&attempt.Score,
 		&submittedAt,
 		&attempt.TimeSpentSeconds,
+		&dailyAssignmentID,
+		&attempt.CanReview,
+		&attempt.CanDelete,
 		&content.ID,
 		&content.Type,
 		&content.Title,
@@ -575,6 +667,9 @@ func scanAttemptAndContent(scanner rowScanner, attempt *mistakeapp.Attempt, cont
 		return err
 	}
 	attempt.SubmittedAt = timestampPtr(submittedAt)
+	if dailyAssignmentID.Valid {
+		attempt.DailyAssignmentID = dailyAssignmentID.String
+	}
 	studentSteps, err := decodeStringSlice(studentStepsRaw)
 	if err != nil {
 		return fmt.Errorf("decode student steps: %w", err)

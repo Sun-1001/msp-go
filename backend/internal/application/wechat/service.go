@@ -169,7 +169,7 @@ func (s *Service) ProcessIncoming(ctx context.Context, message IncomingMessage) 
 		return ProcessResult{}, fmt.Errorf("claim wechat callback: %w", err)
 	}
 	if claim.Completed {
-		return ProcessResult{Reply: claim.Reply, Duplicate: true}, nil
+		return ProcessResult{Reply: claim.Reply}, nil
 	}
 	if !claim.Acquired {
 		return ProcessResult{}, ErrCallbackInProgress
@@ -242,7 +242,7 @@ func (s *Service) processText(ctx context.Context, message IncomingMessage) (Pro
 	}
 	processedAt := s.now()
 	observedAt := messageObservedAt(message, processedAt)
-	if _, err := s.repository.Bind(ctx, s.config.AppID, message.FromUserName, userID, observedAt, processedAt); err != nil {
+	if err := s.repository.Bind(ctx, s.config.AppID, message.FromUserName, userID, observedAt, processedAt); err != nil {
 		switch {
 		case errors.Is(err, ErrOpenIDAlreadyBound):
 			return ProcessResult{Reply: "该微信已绑定其他平台账号，请先在原账号中解绑。"}, nil

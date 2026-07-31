@@ -30,6 +30,7 @@ export type ExerciseErrorType =
   | 'answer_rate_limited' // OCR 请求被限流
   | 'answer_service_unavailable' // OCR 或数学判定服务不可用
   | 'exercise_changed' // 作答期间题目内容发生变化
+  | 'daily_assignment_stale' // 每日一题任务已完成或失效
   | 'network_error' // 网络错误
   | 'unknown'; // 其他错误
 
@@ -47,6 +48,13 @@ export interface ExerciseViewModelOptions {
 }
 
 type SubmissionStage = 'upload' | 'grading';
+
+interface PendingDailySubmission {
+  signature: string;
+  submissionId: string;
+  answerImage?: File;
+  answerImageUrl?: string;
+}
 
 const getErrorCode = (err: unknown): string => {
   if (!axios.isAxiosError(err)) return '';
@@ -199,6 +207,12 @@ const getSubmissionError = (
         message: '题目已更新，请重新加载后提交',
         type: 'exercise_changed',
       };
+    case 'DAILY_ASSIGNMENT_INVALID':
+    case 'DAILY_ASSIGNMENT_COMPLETED':
+      return {
+        message: '每日一题状态已更新，正在同步最新任务',
+        type: 'daily_assignment_stale',
+      };
     default:
       if (code.startsWith('MATH_')) {
         return {
@@ -245,9 +259,11 @@ export function useExerciseViewModel(options: ExerciseViewModelOptions = {}) {
   const submissionInFlightRef = useRef(false);
   const solutionInFlightRef = useRef(false);
   const questionVersionRef = useRef(0);
+  const pendingDailySubmissionRef = useRef<PendingDailySubmission | null>(null);
 
   const loadQuestion = useCallback((question: Question) => {
     questionVersionRef.current += 1;
+    pendingDailySubmissionRef.current = null;
     setCurrentQuestion(question);
     setSubmitResult(null);
     setSolution(null);
@@ -256,6 +272,18 @@ export function useExerciseViewModel(options: ExerciseViewModelOptions = {}) {
     setErrorType(null);
     setErrorSource(null);
     startTimeRef.current = Date.now();
+  }, []);
+
+  const clearQuestion = useCallback(() => {
+    questionVersionRef.current += 1;
+    pendingDailySubmissionRef.current = null;
+    setCurrentQuestion(null);
+    setSubmitResult(null);
+    setSolution(null);
+    setSolutionError(null);
+    setError(null);
+    setErrorType(null);
+    setErrorSource(null);
   }, []);
 
   const loadNextQuestion = useCallback(async (conceptId?: string, difficulty?: number) => {
@@ -267,6 +295,7 @@ export function useExerciseViewModel(options: ExerciseViewModelOptions = {}) {
       const question = await exerciseService.fetchNextQuestion(conceptId, difficulty);
       if (!question) {
         questionVersionRef.current += 1;
+        pendingDailySubmissionRef.current = null;
         setCurrentQuestion(null);
         setSubmitResult(null);
         setSolution(null);
@@ -278,6 +307,7 @@ export function useExerciseViewModel(options: ExerciseViewModelOptions = {}) {
         return;
       }
       questionVersionRef.current += 1;
+      pendingDailySubmissionRef.current = null;
       setCurrentQuestion(question);
       setSubmitResult(null);
       setSolution(null);
@@ -345,6 +375,7 @@ export function useExerciseViewModel(options: ExerciseViewModelOptions = {}) {
         questionType,
       });
       questionVersionRef.current += 1;
+      pendingDailySubmissionRef.current = null;
       setCurrentQuestion(question);
       setSubmitResult(null);
       setSolution(null);
@@ -382,6 +413,23 @@ export function useExerciseViewModel(options: ExerciseViewModelOptions = {}) {
 
       const submittedQuestion = currentQuestion;
       const submittedQuestionVersion = questionVersionRef.current;
+      const submissionSignature = normalizedAnswer
+        ? `${submittedQuestion.id}\u0000text\u0000${normalizedAnswer}`
+        : `${submittedQuestion.id}\u0000image`;
+      let pendingDailySubmission: PendingDailySubmission | undefined;
+      if (dailyAssignmentId) {
+        const currentPending = pendingDailySubmissionRef.current;
+        const matchesPending = currentPending?.signature === submissionSignature
+          && (normalizedAnswer !== '' || currentPending.answerImage === answerImage);
+        pendingDailySubmission = matchesPending
+          ? currentPending
+          : {
+              signature: submissionSignature,
+              submissionId: crypto.randomUUID(),
+              ...(!normalizedAnswer && answerImage ? { answerImage } : {}),
+            };
+        pendingDailySubmissionRef.current = pendingDailySubmission;
+      }
       let submissionStage: SubmissionStage = normalizedAnswer ? 'grading' : 'upload';
       submissionInFlightRef.current = true;
       setError(null);
@@ -391,7 +439,7 @@ export function useExerciseViewModel(options: ExerciseViewModelOptions = {}) {
       setSolution(null);
       setSolutionError(null);
       try {
-        let answerImageUrl: string | undefined;
+        let answerImageUrl = pendingDailySubmission?.answerImageUrl;
         if (!normalizedAnswer && answerImage) {
           const validation = validateAnswerImageFile(answerImage);
           if (!validation.valid) {
@@ -401,11 +449,17 @@ export function useExerciseViewModel(options: ExerciseViewModelOptions = {}) {
             return;
           }
 
-          setSubmitPhase('uploading');
-          const uploaded = await uploadService.uploadImage(answerImage);
-          answerImageUrl = uploaded.url.trim();
           if (!answerImageUrl) {
-            throw new Error('图片上传失败，请稍后重试');
+            setSubmitPhase('uploading');
+            const uploaded = await uploadService.uploadImage(answerImage);
+            answerImageUrl = uploaded.url.trim();
+            if (!answerImageUrl) {
+              throw new Error('图片上传失败，请稍后重试');
+            }
+            if (pendingDailySubmission) {
+              pendingDailySubmission = { ...pendingDailySubmission, answerImageUrl };
+              pendingDailySubmissionRef.current = pendingDailySubmission;
+            }
           }
         }
 
@@ -415,6 +469,7 @@ export function useExerciseViewModel(options: ExerciseViewModelOptions = {}) {
         const result = await exerciseService.submitAnswer({
           exerciseId: submittedQuestion.id,
           ...(dailyAssignmentId ? { dailyAssignmentId } : {}),
+          ...(pendingDailySubmission ? { submissionId: pendingDailySubmission.submissionId } : {}),
           ...(normalizedAnswer ? { answerText: normalizedAnswer } : {}),
           ...(answerImageUrl ? { answerImageUrl } : {}),
           timeSpentSeconds: timeSpent,
@@ -426,6 +481,7 @@ export function useExerciseViewModel(options: ExerciseViewModelOptions = {}) {
           return;
         }
         setSubmitResult(result);
+        pendingDailySubmissionRef.current = null;
         exerciseLogger.info('Answer submitted', {
           questionId: submittedQuestion.id,
           isCorrect: result.isCorrect,
@@ -497,6 +553,7 @@ export function useExerciseViewModel(options: ExerciseViewModelOptions = {}) {
     errorType,
     errorSource,
     loadQuestion,
+    clearQuestion,
     loadNextQuestion,
     generateQuestion,
     submitAnswer,

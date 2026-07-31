@@ -22,14 +22,10 @@ type ConversationRepository struct {
 }
 
 // NewConversationRepository creates a PostgreSQL-backed conversation repository.
-func NewConversationRepository(db Querier, reminders ...WechatReminderEnqueuer) (ConversationRepository, error) {
+func NewConversationRepository(db Querier, reminderEnqueuer WechatReminderEnqueuer) (ConversationRepository, error) {
 	base, err := NewRepository(db)
 	if err != nil {
 		return ConversationRepository{}, err
-	}
-	var reminderEnqueuer WechatReminderEnqueuer
-	if len(reminders) > 0 {
-		reminderEnqueuer = reminders[0]
 	}
 	return ConversationRepository{Repository: base, wechatReminders: reminderEnqueuer}, nil
 }
@@ -91,7 +87,7 @@ func (r ConversationRepository) listStudentConversations(ctx context.Context, st
 		) cnv ON true
 		WHERE c.student_id = $1 AND c.student_archived = false`+searchFilter+`
 		ORDER BY c.last_message_at DESC, c.id DESC
-		LIMIT $`+pgIdx(countArgs+1)+` OFFSET $`+pgIdx(countArgs+2),
+		LIMIT $`+idxStr(countArgs+1)+` OFFSET $`+idxStr(countArgs+2),
 		args...,
 	)
 	if err != nil {
@@ -345,7 +341,7 @@ func (r ConversationRepository) AcknowledgeConversationRead(ctx context.Context,
 }
 
 // CreateConversation creates a conversation and its first message.
-func (r ConversationRepository) CreateConversation(ctx context.Context, creatorID string, creatorRole user.Role, targetID string, subject string, initialMessage string, attachments []messageattachment.Attachment, _ time.Time) (conversationapp.ConversationDetail, error) {
+func (r ConversationRepository) CreateConversation(ctx context.Context, creatorID string, creatorRole user.Role, targetID string, subject string, initialMessage string, attachments []messageattachment.Attachment) (conversationapp.ConversationDetail, error) {
 	if creatorRole != user.RoleStudent && creatorRole != user.RoleTeacher {
 		return conversationapp.ConversationDetail{}, conversationapp.ErrForbidden
 	}
@@ -521,7 +517,7 @@ func (r ConversationRepository) CreateConversation(ctx context.Context, creatorI
 }
 
 // SendMessage adds a message, restores visibility, and updates last_message_at.
-func (r ConversationRepository) SendMessage(ctx context.Context, conversationID string, senderID string, senderRole string, text string, attachments []messageattachment.Attachment, _ time.Time) (conversationapp.Message, error) {
+func (r ConversationRepository) SendMessage(ctx context.Context, conversationID string, senderID string, senderRole string, text string, attachments []messageattachment.Attachment) (conversationapp.Message, error) {
 	msgID, err := newUUID()
 	if err != nil {
 		return conversationapp.Message{}, err
@@ -669,7 +665,6 @@ func (r ConversationRepository) ListTeacherContacts(ctx context.Context, student
 		if err := rows.Scan(&c.ID, &c.DisplayName, &c.Scope); err != nil {
 			return nil, err
 		}
-		c.TeacherName = c.DisplayName
 		contacts = append(contacts, c)
 	}
 	return contacts, rows.Err()
@@ -694,7 +689,6 @@ func (r ConversationRepository) ListStudentContacts(ctx context.Context, teacher
 		if err := rows.Scan(&c.ID, &c.DisplayName, &c.Scope); err != nil {
 			return nil, err
 		}
-		c.TeacherName = c.DisplayName
 		contacts = append(contacts, c)
 	}
 	return contacts, rows.Err()
@@ -728,7 +722,6 @@ func (r ConversationRepository) SearchContacts(ctx context.Context, query string
 		if err := rows.Scan(&c.ID, &c.DisplayName, &c.Scope); err != nil {
 			return nil, err
 		}
-		c.TeacherName = c.DisplayName
 		contacts = append(contacts, c)
 	}
 	return contacts, rows.Err()
@@ -739,10 +732,6 @@ func (r ConversationRepository) beginTx(ctx context.Context) (pgx.Tx, error) {
 		return nil, conversationapp.ErrConflict
 	}
 	return r.beginner.BeginTx(ctx, pgx.TxOptions{})
-}
-
-func pgIdx(n int) string {
-	return strconv.Itoa(n)
 }
 
 func idxStr(n int) string {

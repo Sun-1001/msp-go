@@ -4,6 +4,7 @@ import { useToast } from '../../../../components/ui/Toast';
 import { questionService } from '@/modules/question/services/questionService';
 import type { Question, QuestionStats } from '@/modules/question/types/question';
 import { logger } from '../../../../libs/utils/logger';
+import { getApiErrorMessage } from '@/libs/http/apiClient';
 
 const log = logger.createContextLogger('QuestionBankPage');
 
@@ -175,7 +176,7 @@ export function useQuestionBank() {
       await loadStats();
     } catch (err) {
       log.error('批量删除失败', err);
-      toast({ type: 'error', title: '批量删除失败，请稍后重试' });
+      toast({ type: 'error', title: getApiErrorMessage(err, '批量删除失败，请稍后重试') });
     } finally {
       setLoading(false);
     }
@@ -234,8 +235,8 @@ export function useQuestionBank() {
       toast({ type: 'success', title: `题目${statusLabels[newStatus] || '状态已更新'}` });
       await loadQuestions();
       await loadStats();
-    } catch {
-      toast({ type: 'error', title: '状态更新失败，请稍后重试' });
+    } catch (statusError) {
+      toast({ type: 'error', title: getApiErrorMessage(statusError, '状态更新失败，请稍后重试') });
     }
   };
 
@@ -270,8 +271,8 @@ export function useQuestionBank() {
       toast({ type: 'success', title: '题目已删除' });
       await loadQuestions();
       await loadStats();
-    } catch {
-      toast({ type: 'error', title: '删除失败，请稍后重试' });
+    } catch (deleteError) {
+      toast({ type: 'error', title: getApiErrorMessage(deleteError, '删除失败，请稍后重试') });
     }
   };
 

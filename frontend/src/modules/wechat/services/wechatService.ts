@@ -30,5 +30,3 @@ export const wechatService = {
     await apiClient.delete('/integrations/wechat/binding');
   },
 };
-
-export default wechatService;

@@ -44,7 +44,6 @@ export interface ListResponse {
 export interface Contact {
   id: string;
   display_name: string;
-  teacher_name: string;
   scope: string;
 }
 
@@ -103,10 +102,6 @@ export const conversationService = {
 
   async archive(id: string): Promise<void> {
     await apiClient.put(`${BASE}/${id}/archive`);
-  },
-
-  async delete(id: string): Promise<void> {
-    await apiClient.delete(`${BASE}/${id}`);
   },
 
   async contacts(): Promise<{ contacts: Contact[] }> {

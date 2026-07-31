@@ -261,6 +261,10 @@ func (h *Handler) update(w http.ResponseWriter, r *http.Request) {
 			writeQuestionError(w, http.StatusNotFound, "NOT_FOUND", "题目不存在或无权访问")
 			return
 		}
+		if errors.Is(err, questionapp.ErrScheduled) {
+			writeQuestionError(w, http.StatusConflict, "QUESTION_SCHEDULED", "题目已用于未来每日一题日程，请先从日程移除")
+			return
+		}
 		h.logQuestionError("update question failed", err)
 		writeQuestionError(w, http.StatusInternalServerError, "INTERNAL_ERROR", "更新失败")
 		return
@@ -323,6 +327,10 @@ func (h *Handler) delete(w http.ResponseWriter, r *http.Request) {
 			writeQuestionError(w, http.StatusNotFound, "NOT_FOUND", "题目不存在或无权删除")
 			return
 		}
+		if errors.Is(err, questionapp.ErrScheduled) {
+			writeQuestionError(w, http.StatusConflict, "QUESTION_SCHEDULED", "题目已用于未来每日一题日程，请先从日程移除")
+			return
+		}
 		h.logQuestionError("delete question failed", err)
 		writeQuestionError(w, http.StatusInternalServerError, "INTERNAL_ERROR", "删除题目失败")
 		return
@@ -355,6 +363,10 @@ func (h *Handler) batchOperation(w http.ResponseWriter, r *http.Request, fn func
 	if err != nil {
 		if errors.Is(err, questionapp.ErrBadRequest) {
 			writeQuestionError(w, http.StatusUnprocessableEntity, "VALIDATION_ERROR", "question_ids 长度必须在 1 到 100 之间")
+			return
+		}
+		if errors.Is(err, questionapp.ErrScheduled) {
+			writeQuestionError(w, http.StatusConflict, "QUESTION_SCHEDULED", "所选题目已用于未来每日一题日程，请先从日程移除")
 			return
 		}
 		h.logQuestionError("question batch operation failed", err)

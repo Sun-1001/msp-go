@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import {
   BookOpen,
@@ -53,9 +53,12 @@ export function PersonalizedQuestionPool({ classId }: PersonalizedQuestionPoolPr
   const [updatingIds, setUpdatingIds] = useState<string[]>([]);
   const [isImportModalOpen, setIsImportModalOpen] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const questionRequestRef = useRef(0);
   const returnPath = `/teacher/class/${encodeURIComponent(classId)}?tab=daily-question`;
 
   const loadQuestions = useCallback(async (signal?: AbortSignal) => {
+    const requestID = questionRequestRef.current + 1;
+    questionRequestRef.current = requestID;
     setIsLoading(true);
     setError(null);
     try {
@@ -64,24 +67,25 @@ export function PersonalizedQuestionPool({ classId }: PersonalizedQuestionPoolPr
           page: currentPage,
           pageSize: questionPageSize,
           group: selectedGroup || undefined,
+          status: 'active',
           sortBy: 'created_at',
           sortOrder: 'desc',
         }),
         questionService.getGroups(),
       ]);
-      if (!signal?.aborted) {
-        setQuestions(result.items.filter((question) => question.status !== 'archived'));
+      if (!signal?.aborted && questionRequestRef.current === requestID) {
+        setQuestions(result.items);
         setQuestionGroups(groups);
         setTotal(result.total);
       }
     } catch (loadError) {
-      if (!signal?.aborted) {
+      if (!signal?.aborted && questionRequestRef.current === requestID) {
         setQuestions([]);
         setTotal(0);
         setError(getApiErrorMessage(loadError, '个性化题库加载失败'));
       }
     } finally {
-      if (!signal?.aborted) setIsLoading(false);
+      if (!signal?.aborted && questionRequestRef.current === requestID) setIsLoading(false);
     }
   }, [currentPage, selectedGroup]);
 
@@ -216,8 +220,8 @@ export function PersonalizedQuestionPool({ classId }: PersonalizedQuestionPoolPr
           </p>
         </div>
         <div className="flex gap-2">
-          <Badge variant="outline">已发布 {publishedCount}</Badge>
-          <Badge variant="outline">每日候选 {candidateCount}</Badge>
+          <Badge variant="outline">本页已发布 {publishedCount}</Badge>
+          <Badge variant="outline">本页每日候选 {candidateCount}</Badge>
         </div>
       </div>
 

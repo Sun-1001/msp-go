@@ -2,6 +2,9 @@ package exercise
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"maps"
@@ -55,6 +58,7 @@ const (
 // Repository is the persistence surface required by exercise use cases.
 type Repository interface {
 	WithTx(context.Context, func(context.Context, Repository) error) error
+	LockStudentTracking(context.Context, string) error
 	GetTeacherIDForStudent(context.Context, string) (string, bool, error)
 	GetLatestSession(context.Context, string) (LearningSession, bool, error)
 	CreateSession(context.Context, string, time.Time) (LearningSession, error)
@@ -70,15 +74,17 @@ type Repository interface {
 	CreateProfile(context.Context, string, time.Time) (StudentProfile, error)
 	HasSubmittedAttempt(context.Context, string, string) (bool, error)
 	ListDKTStates(context.Context, string, []string) (map[string]DKTState, error)
-	ListRecentInteractions(context.Context, string, int) ([]LearningInteraction, error)
+	ListRecentInteractions(context.Context, string, string, int) ([]LearningInteraction, error)
 	InsertAttempt(context.Context, AttemptRecord) error
 	InsertDiagnosis(context.Context, DiagnosisRecord) error
 	UpsertDKTStates(context.Context, []DKTState) error
 	UpdateProfileTracking(context.Context, string, ProfileTrackingUpdate) error
 	GetDailyAssignment(context.Context, string, string) (DailyAssignmentBinding, bool, error)
 	GetDailyAssignmentForUpdate(context.Context, string, string) (DailyAssignmentBinding, bool, error)
-	HasDailyAssignmentContent(context.Context, string, string) (bool, error)
+	GetDailySubmissionResponse(context.Context, string, string, string) (SubmitResponse, bool, error)
+	HasReadyDailyAssignmentContent(context.Context, string, string) (bool, error)
 	ApplyDailyAttempt(context.Context, DailyAttemptUpdate) error
+	SaveDailySubmissionResponse(context.Context, string, string, string, SubmitResponse) error
 }
 
 // AnswerChecker compares student and correct answers.
@@ -147,6 +153,7 @@ type StudentProfile struct {
 
 // CandidateFilter stores exercise selection filters.
 type CandidateFilter struct {
+	StudentID      string
 	TeacherID      string
 	DifficultyMin  float64
 	DifficultyMax  float64
@@ -184,16 +191,18 @@ type LearningInteraction struct {
 
 // AttemptRecord stores data inserted into content_attempts.
 type AttemptRecord struct {
-	ID               string
-	ContentID        string
-	StudentID        string
-	StudentAnswer    string
-	StudentSteps     []string
-	IsCorrect        bool
-	Score            float64
-	StartedAt        time.Time
-	SubmittedAt      time.Time
-	TimeSpentSeconds int
+	ID                 string
+	ContentID          string
+	StudentID          string
+	DailyAssignmentID  string
+	DailySubmissionKey string
+	StudentAnswer      string
+	StudentSteps       []string
+	IsCorrect          bool
+	Score              float64
+	StartedAt          time.Time
+	SubmittedAt        time.Time
+	TimeSpentSeconds   int
 }
 
 // DailyAssignmentBinding carries the immutable question snapshot bound to a daily task.
@@ -203,6 +212,7 @@ type DailyAssignmentBinding struct {
 	AssignmentDate     string
 	ContentID          string
 	Status             string
+	FirstAttemptID     string
 	FirstResult        string
 	CorrectedAttemptID string
 	Question           *Exercise
@@ -251,6 +261,7 @@ type NextQuery struct {
 type SubmitRequest struct {
 	ExerciseID        string
 	DailyAssignmentID string
+	SubmissionID      string
 	AnswerText        string
 	AnswerImageURL    string
 	AnswerSteps       []string
@@ -270,7 +281,7 @@ type GenerationInput struct {
 	Concept             KnowledgeConcept
 	Difficulty          float64
 	QuestionType        string
-	AvoidQuestionBodies []string // Trusted internal daily-question history; adapters must bound prompt use.
+	AvoidQuestionBodies []string // Trusted internal exercise history; adapters must bound prompt use.
 	Feedback            string   // 首次生成为空；重试时携带上次验证失败原因
 }
 
@@ -580,7 +591,19 @@ func (s *Service) GetNextExercise(ctx context.Context, userID string, query Next
 			return nil, err
 		}
 		if ok && current.Status == "PUBLISHED" && current.GeneratedByStudentID == "" {
-			return toExerciseResponse(current), nil
+			assigned, assignmentErr := s.repo.HasReadyDailyAssignmentContent(ctx, userID, current.ID)
+			if assignmentErr != nil {
+				return nil, assignmentErr
+			}
+			if !assigned {
+				canAccess, accessErr := canAccessExercise(ctx, s.repo, userID, current)
+				if accessErr != nil && !errors.Is(accessErr, ErrForbidden) {
+					return nil, accessErr
+				}
+				if canAccess {
+					return toExerciseResponse(current), nil
+				}
+			}
 		}
 		if err := s.repo.UpdateSessionCurrentContent(ctx, session.ID, nil); err != nil {
 			return nil, err
@@ -606,6 +629,7 @@ func (s *Service) GetNextExercise(ctx context.Context, userID string, query Next
 	}
 
 	candidates, err := s.repo.ListCandidateExercises(ctx, CandidateFilter{
+		StudentID:      userID,
 		TeacherID:      teacherID,
 		DifficultyMin:  math.Max(0, targetDifficulty-0.15),
 		DifficultyMax:  math.Min(1, targetDifficulty+0.15),
@@ -618,6 +642,7 @@ func (s *Service) GetNextExercise(ctx context.Context, userID string, query Next
 	candidates = preferConcept(candidates, targetConcept)
 	if len(candidates) == 0 {
 		candidates, err = s.repo.ListCandidateExercises(ctx, CandidateFilter{
+			StudentID:      userID,
 			TeacherID:      teacherID,
 			DifficultyMin:  0,
 			DifficultyMax:  1,
@@ -804,7 +829,7 @@ func (s *Service) GenerateExercise(ctx context.Context, userID string, request G
 			continue
 		}
 		if questiondedupe.IsDuplicate(generated.Body, request.AvoidQuestionBodies) {
-			lastVerifyErr = generatedContentInvalid("生成题目与学生历史每日题重复，请更换题目条件、数值或问法")
+			lastVerifyErr = generatedContentInvalid("生成题目与学生历史题目重复，请更换题目条件、数值或问法")
 			if attempt == maxAttempts {
 				return nil, ErrAIGenerationUnavailable
 			}
@@ -842,10 +867,27 @@ func (s *Service) GenerateExercise(ctx context.Context, userID string, request G
 // SubmitAnswer records an answer, performs lightweight grading, and updates tracking state.
 func (s *Service) SubmitAnswer(ctx context.Context, userID string, request SubmitRequest) (SubmitResponse, error) {
 	request.DailyAssignmentID = strings.TrimSpace(request.DailyAssignmentID)
+	request.SubmissionID = strings.TrimSpace(request.SubmissionID)
 	request.AnswerText = strings.TrimSpace(request.AnswerText)
 	request.AnswerImageURL = strings.TrimSpace(request.AnswerImageURL)
-	if request.ExerciseID == "" || (request.AnswerText == "" && request.AnswerImageURL == "") {
+	if request.ExerciseID == "" || len(request.SubmissionID) > 128 || (request.AnswerText == "" && request.AnswerImageURL == "") {
 		return SubmitResponse{}, ErrBadRequest
+	}
+	dailySubmissionKey := ""
+	if request.DailyAssignmentID != "" {
+		dailySubmissionKey = makeDailySubmissionKey(request)
+		cached, found, err := s.repo.GetDailySubmissionResponse(
+			ctx,
+			request.DailyAssignmentID,
+			userID,
+			dailySubmissionKey,
+		)
+		if err != nil {
+			return SubmitResponse{}, err
+		}
+		if found {
+			return cached, nil
+		}
 	}
 
 	var exercise Exercise
@@ -912,7 +954,6 @@ func (s *Service) SubmitAnswer(ctx context.Context, userID string, request Submi
 		errorType = diagnosis.ErrorType
 	}
 
-	now := s.now().UTC()
 	attemptID, err := s.newID()
 	if err != nil {
 		return SubmitResponse{}, err
@@ -927,6 +968,10 @@ func (s *Service) SubmitAnswer(ctx context.Context, userID string, request Submi
 
 	var response SubmitResponse
 	err = s.repo.WithTx(ctx, func(txCtx context.Context, repo Repository) error {
+		if err := repo.LockStudentTracking(txCtx, userID); err != nil {
+			return err
+		}
+		now := s.now().UTC()
 		var currentExercise Exercise
 		var currentCorrectAnswer string
 		var dailyBinding DailyAssignmentBinding
@@ -939,14 +984,33 @@ func (s *Service) SubmitAnswer(ctx context.Context, userID string, request Submi
 				request.ExerciseID,
 			)
 		} else {
-			currentExercise, currentCorrectAnswer, dailyBinding, readErr = dailySubmissionExercise(
+			var ok bool
+			dailyBinding, ok, readErr = repo.GetDailyAssignmentForUpdate(
 				txCtx,
-				repo,
-				userID,
 				request.DailyAssignmentID,
-				request.ExerciseID,
-				true,
+				userID,
 			)
+			if readErr == nil {
+				var cached SubmitResponse
+				var found bool
+				cached, found, readErr = repo.GetDailySubmissionResponse(
+					txCtx,
+					request.DailyAssignmentID,
+					userID,
+					dailySubmissionKey,
+				)
+				if readErr == nil && found {
+					response = cached
+					return nil
+				}
+			}
+			if readErr == nil {
+				currentExercise, currentCorrectAnswer, dailyBinding, readErr = dailySubmissionExerciseFromBinding(
+					dailyBinding,
+					ok,
+					request.ExerciseID,
+				)
+			}
 		}
 		if readErr != nil {
 			return readErr
@@ -955,16 +1019,18 @@ func (s *Service) SubmitAnswer(ctx context.Context, userID string, request Submi
 			return ErrExerciseChanged
 		}
 		attempt := AttemptRecord{
-			ID:               attemptID,
-			ContentID:        currentExercise.ID,
-			StudentID:        userID,
-			StudentAnswer:    studentAnswer,
-			StudentSteps:     request.AnswerSteps,
-			IsCorrect:        check.Decision == mathsolverapp.DecisionCorrect,
-			Score:            boolScore(check.Decision == mathsolverapp.DecisionCorrect),
-			StartedAt:        now,
-			SubmittedAt:      now,
-			TimeSpentSeconds: request.TimeSpentSeconds,
+			ID:                 attemptID,
+			ContentID:          currentExercise.ID,
+			StudentID:          userID,
+			DailyAssignmentID:  dailyBinding.ID,
+			DailySubmissionKey: dailySubmissionKey,
+			StudentAnswer:      studentAnswer,
+			StudentSteps:       request.AnswerSteps,
+			IsCorrect:          check.Decision == mathsolverapp.DecisionCorrect,
+			Score:              boolScore(check.Decision == mathsolverapp.DecisionCorrect),
+			StartedAt:          now,
+			SubmittedAt:        now,
+			TimeSpentSeconds:   request.TimeSpentSeconds,
 		}
 		if err := repo.InsertAttempt(txCtx, attempt); err != nil {
 			return err
@@ -1009,7 +1075,7 @@ func (s *Service) SubmitAnswer(ctx context.Context, userID string, request Submi
 		}
 
 		isCorrect := check.Decision == mathsolverapp.DecisionCorrect
-		masteryUpdate, err := s.updateTracking(txCtx, repo, userID, currentExercise, isCorrect, errorType, now)
+		masteryUpdate, err := s.updateTracking(txCtx, repo, userID, attempt.ID, currentExercise, isCorrect, errorType, now)
 		if err != nil {
 			return err
 		}
@@ -1034,6 +1100,17 @@ func (s *Service) SubmitAnswer(ctx context.Context, userID string, request Submi
 			MasteryModel:       dktModelName,
 			NextRecommendation: nextRecommendation(isCorrect, masteryUpdate),
 		}
+		if request.DailyAssignmentID != "" {
+			if err := repo.SaveDailySubmissionResponse(
+				txCtx,
+				attempt.ID,
+				userID,
+				dailySubmissionKey,
+				response,
+			); err != nil {
+				return err
+			}
+		}
 		return nil
 	})
 	if err != nil {
@@ -1048,9 +1125,12 @@ func validateDailyAssignmentBinding(binding DailyAssignmentBinding, ok bool, exe
 	}
 	switch binding.Status {
 	case "ready":
+		if binding.FirstAttemptID != "" {
+			return ErrDailyAssignmentClosed
+		}
 		return nil
 	case "completed":
-		if binding.FirstResult == "incorrect" && binding.CorrectedAttemptID == "" {
+		if binding.FirstAttemptID != "" && binding.FirstResult == "incorrect" && binding.CorrectedAttemptID == "" {
 			return nil
 		}
 		return ErrDailyAssignmentClosed
@@ -1088,6 +1168,14 @@ func dailySubmissionExercise(
 	if err != nil {
 		return Exercise{}, "", DailyAssignmentBinding{}, err
 	}
+	return dailySubmissionExerciseFromBinding(binding, ok, exerciseID)
+}
+
+func dailySubmissionExerciseFromBinding(
+	binding DailyAssignmentBinding,
+	ok bool,
+	exerciseID string,
+) (Exercise, string, DailyAssignmentBinding, error) {
 	if err := validateDailyAssignmentBinding(binding, ok, exerciseID); err != nil {
 		return Exercise{}, "", DailyAssignmentBinding{}, err
 	}
@@ -1096,6 +1184,25 @@ func dailySubmissionExercise(
 		return Exercise{}, "", DailyAssignmentBinding{}, ErrDailyAssignmentInvalid
 	}
 	return *binding.Question, correctAnswer, binding, nil
+}
+
+func makeDailySubmissionKey(request SubmitRequest) string {
+	if request.SubmissionID != "" {
+		return "client:" + request.SubmissionID
+	}
+	payload, _ := json.Marshal(struct {
+		ExerciseID     string   `json:"exercise_id"`
+		AnswerText     string   `json:"answer_text"`
+		AnswerImageURL string   `json:"answer_image_url"`
+		AnswerSteps    []string `json:"answer_steps"`
+	}{
+		ExerciseID:     request.ExerciseID,
+		AnswerText:     request.AnswerText,
+		AnswerImageURL: request.AnswerImageURL,
+		AnswerSteps:    request.AnswerSteps,
+	})
+	sum := sha256.Sum256(payload)
+	return "legacy:" + hex.EncodeToString(sum[:])
 }
 
 func dailySolutionExercise(
@@ -1113,7 +1220,10 @@ func dailySolutionExercise(
 		return Exercise{}, ErrDailyAssignmentInvalid
 	}
 	switch binding.Status {
-	case "ready", "completed":
+	case "completed":
+		if binding.FirstAttemptID == "" {
+			return Exercise{}, ErrDailyAssignmentInvalid
+		}
 		return *binding.Question, nil
 	default:
 		return Exercise{}, ErrDailyAssignmentInvalid
@@ -1140,6 +1250,22 @@ func (s *Service) CanSubmitExercise(ctx context.Context, userID string, exercise
 	return false, err
 }
 
+// CanSubmitReviewExercise reports whether a regular or daily-bound mistake can still be redone.
+func (s *Service) CanSubmitReviewExercise(ctx context.Context, userID string, exerciseID string, dailyAssignmentID string) (bool, error) {
+	dailyAssignmentID = strings.TrimSpace(dailyAssignmentID)
+	if dailyAssignmentID == "" {
+		return s.CanSubmitExercise(ctx, userID, exerciseID)
+	}
+	_, _, _, err := dailySubmissionExercise(ctx, s.repo, userID, dailyAssignmentID, exerciseID, false)
+	if err == nil {
+		return true, nil
+	}
+	if errors.Is(err, ErrDailyAssignmentInvalid) || errors.Is(err, ErrDailyAssignmentClosed) {
+		return false, nil
+	}
+	return false, err
+}
+
 type exerciseGetter func(context.Context, string) (Exercise, bool, error)
 
 func loadSubmissionExercise(ctx context.Context, repo Repository, userID string, exerciseID string, get exerciseGetter) (Exercise, string, error) {
@@ -1155,6 +1281,13 @@ func loadSubmissionExercise(ctx context.Context, repo Repository, userID string,
 		return Exercise{}, "", err
 	}
 	if !canAccess {
+		return Exercise{}, "", ErrBadRequest
+	}
+	assigned, err := repo.HasReadyDailyAssignmentContent(ctx, userID, exercise.ID)
+	if err != nil {
+		return Exercise{}, "", err
+	}
+	if assigned {
 		return Exercise{}, "", ErrBadRequest
 	}
 	correctAnswer := strings.TrimSpace(metautil.String(exercise.Meta, "answer"))
@@ -1347,49 +1480,52 @@ func (s *Service) GetSolution(ctx context.Context, userID string, exerciseID str
 	var exercise Exercise
 	var err error
 	if dailyAssignmentID == "" {
-		exercise, err = s.authorizedExercise(ctx, userID, exerciseID)
+		exercise, err = regularSolutionExercise(ctx, s.repo, userID, exerciseID)
 	} else {
-		exercise, err = dailySolutionExercise(ctx, s.repo, userID, dailyAssignmentID, exerciseID)
+		exercise, err = eligibleDailySolutionExercise(ctx, s.repo, userID, dailyAssignmentID, exerciseID)
 	}
 	if err != nil {
 		return SolutionResponse{}, err
 	}
-	hasAttempt, err := s.repo.HasSubmittedAttempt(ctx, userID, exerciseID)
-	if err != nil {
-		return SolutionResponse{}, err
-	}
-	if !hasAttempt {
-		return SolutionResponse{}, ErrNotFound
+	finalize := func(response SolutionResponse) (SolutionResponse, error) {
+		return s.finalizeSolutionResponse(
+			ctx,
+			userID,
+			exerciseID,
+			dailyAssignmentID,
+			exercise,
+			response,
+		)
 	}
 	answer := strings.TrimSpace(metautil.String(exercise.Meta, "answer"))
 	if answer == "" {
-		return unavailableSolution(exerciseID, answer, nil, &mathsolverapp.Failure{
+		return finalize(unavailableSolution(exerciseID, answer, nil, &mathsolverapp.Failure{
 			Code:      mathsolverapp.FailureInvalidInput,
 			Stage:     "reference_answer",
 			Message:   "题目缺少可用于验证解析的标准答案",
 			Retryable: false,
-		}), nil
+		}))
 	}
 	if invalidReference, invalid := invalidMultipleChoiceReferenceCheck(exercise, answer); invalid {
 		verification := evaluationDetail(invalidReference)
-		return unavailableSolution(exerciseID, answer, &verification, invalidReference.Failure), nil
+		return finalize(unavailableSolution(exerciseID, answer, &verification, invalidReference.Failure))
 	}
 	steps := metautil.StringSlice(exercise.Meta, "solution_steps")
 	if len(steps) > 0 {
-		return SolutionResponse{
+		return finalize(SolutionResponse{
 			ExerciseID: exerciseID,
 			Answer:     answer,
 			Steps:      steps,
 			Source:     "cached",
-		}, nil
+		})
 	}
 	if s.solutionSolver == nil {
-		return unavailableSolution(exerciseID, answer, nil, &mathsolverapp.Failure{
+		return finalize(unavailableSolution(exerciseID, answer, nil, &mathsolverapp.Failure{
 			Code:      mathsolverapp.FailureSolverUnavailable,
 			Stage:     "solution_generation",
 			Message:   "通用数学求解服务未配置",
 			Retryable: true,
-		}), nil
+		}))
 	}
 
 	solverExercise := exercise
@@ -1401,29 +1537,29 @@ func (s *Service) GetSolution(ctx context.Context, userID string, exerciseID str
 		AnswerType: metautil.String(exercise.Meta, "answer_type"),
 	})
 	if err != nil {
-		return unavailableSolution(exerciseID, answer, nil, solutionSolverFailure(err, "solution_generation")), nil
+		return finalize(unavailableSolution(exerciseID, answer, nil, solutionSolverFailure(err, "solution_generation")))
 	}
 	candidate, ok := normalizeSolutionResult(candidate)
 	if !ok {
-		return unavailableSolution(exerciseID, answer, nil, &mathsolverapp.Failure{
+		return finalize(unavailableSolution(exerciseID, answer, nil, &mathsolverapp.Failure{
 			Code:      mathsolverapp.FailureSolverInvalid,
 			Stage:     "solution_generation",
 			Message:   "通用数学求解服务返回了无效结果",
 			Retryable: true,
-		}), nil
+		}))
 	}
 	if candidate.Status == SolutionStatusIndeterminate {
-		return unavailableSolution(exerciseID, answer, nil, &mathsolverapp.Failure{
+		return finalize(unavailableSolution(exerciseID, answer, nil, &mathsolverapp.Failure{
 			Code:      mathsolverapp.FailureSolverIndeterminate,
 			Stage:     "solution_generation",
 			Message:   candidate.Reason,
 			Retryable: candidate.Retryable,
-		}), nil
+		}))
 	}
 
 	answerVerification, err := s.verifySolutionAnswer(ctx, exercise, candidate.Answer, answer)
 	if err != nil {
-		return unavailableSolution(exerciseID, answer, nil, solutionSolverFailure(err, "solution_verification")), nil
+		return finalize(unavailableSolution(exerciseID, answer, nil, solutionSolverFailure(err, "solution_verification")))
 	}
 	answerVerification = normalizeAnswerCheckResult(answerVerification)
 	answerVerificationDetail := evaluationDetail(answerVerification)
@@ -1437,22 +1573,22 @@ func (s *Service) GetSolution(ctx context.Context, userID string, exerciseID str
 			message = answerVerification.Failure.Message
 			retryable = answerVerification.Failure.Retryable
 		}
-		return unavailableSolution(exerciseID, answer, &answerVerificationDetail, &mathsolverapp.Failure{
+		return finalize(unavailableSolution(exerciseID, answer, &answerVerificationDetail, &mathsolverapp.Failure{
 			Code:      mathsolverapp.FailureVerificationFailed,
 			Stage:     "solution_verification",
 			Message:   message,
 			Retryable: retryable,
-		}), nil
+		}))
 	}
 
 	verifier, ok := s.solutionSolver.(SolutionVerifier)
 	if !ok {
-		return unavailableSolution(exerciseID, answer, &answerVerificationDetail, &mathsolverapp.Failure{
+		return finalize(unavailableSolution(exerciseID, answer, &answerVerificationDetail, &mathsolverapp.Failure{
 			Code:      mathsolverapp.FailureSolverUnavailable,
 			Stage:     "solution_verification",
 			Message:   "通用数学解析验证服务未配置",
 			Retryable: true,
-		}), nil
+		}))
 	}
 	verification, err := verifier.VerifySolution(ctx, SolutionVerificationInput{
 		Exercise:        solverExercise,
@@ -1462,7 +1598,7 @@ func (s *Service) GetSolution(ctx context.Context, userID string, exerciseID str
 		AnswerType:      metautil.String(exercise.Meta, "answer_type"),
 	})
 	if err != nil {
-		return unavailableSolution(exerciseID, answer, &answerVerificationDetail, solutionSolverFailure(err, "solution_verification")), nil
+		return finalize(unavailableSolution(exerciseID, answer, &answerVerificationDetail, solutionSolverFailure(err, "solution_verification")))
 	}
 	verification = normalizeAnswerCheckResult(verification)
 	verificationDetail := evaluationDetail(verification)
@@ -1476,32 +1612,99 @@ func (s *Service) GetSolution(ctx context.Context, userID string, exerciseID str
 			message = verification.Failure.Message
 			retryable = verification.Failure.Retryable
 		}
-		return unavailableSolution(exerciseID, answer, &verificationDetail, &mathsolverapp.Failure{
+		return finalize(unavailableSolution(exerciseID, answer, &verificationDetail, &mathsolverapp.Failure{
 			Code:      mathsolverapp.FailureVerificationFailed,
 			Stage:     "solution_verification",
 			Message:   message,
 			Retryable: retryable,
-		}), nil
+		}))
 	}
-	var currentExercise Exercise
-	if dailyAssignmentID == "" {
-		currentExercise, err = s.authorizedExercise(ctx, userID, exerciseID)
-	} else {
-		currentExercise, err = dailySolutionExercise(ctx, s.repo, userID, dailyAssignmentID, exerciseID)
-	}
-	if err != nil {
-		return SolutionResponse{}, err
-	}
-	if !sameSubmissionExercise(exercise, currentExercise) {
-		return SolutionResponse{}, ErrExerciseChanged
-	}
-	return SolutionResponse{
+	return finalize(SolutionResponse{
 		ExerciseID:   exerciseID,
 		Answer:       answer,
 		Steps:        candidate.Steps,
 		Source:       "solver_verified",
 		Verification: &verificationDetail,
-	}, nil
+	})
+}
+
+func regularSolutionExercise(ctx context.Context, repo Repository, userID string, exerciseID string) (Exercise, error) {
+	exercise, err := authorizedExercise(ctx, repo, userID, exerciseID)
+	if err != nil {
+		return Exercise{}, err
+	}
+	assigned, err := repo.HasReadyDailyAssignmentContent(ctx, userID, exerciseID)
+	if err != nil {
+		return Exercise{}, err
+	}
+	if assigned {
+		return Exercise{}, ErrNotFound
+	}
+	hasAttempt, err := repo.HasSubmittedAttempt(ctx, userID, exerciseID)
+	if err != nil {
+		return Exercise{}, err
+	}
+	if !hasAttempt {
+		return Exercise{}, ErrNotFound
+	}
+	return exercise, nil
+}
+
+func eligibleDailySolutionExercise(
+	ctx context.Context,
+	repo Repository,
+	userID string,
+	dailyAssignmentID string,
+	exerciseID string,
+) (Exercise, error) {
+	exercise, err := dailySolutionExercise(ctx, repo, userID, dailyAssignmentID, exerciseID)
+	if err != nil {
+		return Exercise{}, err
+	}
+	assigned, err := repo.HasReadyDailyAssignmentContent(ctx, userID, exerciseID)
+	if err != nil {
+		return Exercise{}, err
+	}
+	if assigned {
+		return Exercise{}, ErrDailyAssignmentInvalid
+	}
+	return exercise, nil
+}
+
+func (s *Service) finalizeSolutionResponse(
+	ctx context.Context,
+	userID string,
+	exerciseID string,
+	dailyAssignmentID string,
+	expected Exercise,
+	response SolutionResponse,
+) (SolutionResponse, error) {
+	var current Exercise
+	err := s.repo.WithTx(ctx, func(txCtx context.Context, repo Repository) error {
+		if lockErr := repo.LockStudentTracking(txCtx, userID); lockErr != nil {
+			return lockErr
+		}
+		var loadErr error
+		if dailyAssignmentID == "" {
+			current, loadErr = regularSolutionExercise(txCtx, repo, userID, exerciseID)
+		} else {
+			current, loadErr = eligibleDailySolutionExercise(
+				txCtx,
+				repo,
+				userID,
+				dailyAssignmentID,
+				exerciseID,
+			)
+		}
+		return loadErr
+	})
+	if err != nil {
+		return SolutionResponse{}, err
+	}
+	if !sameSubmissionExercise(expected, current) {
+		return SolutionResponse{}, ErrExerciseChanged
+	}
+	return response, nil
 }
 
 func unavailableSolution(exerciseID string, answer string, verification *EvaluationDetail, failure *mathsolverapp.Failure) SolutionResponse {
@@ -1592,12 +1795,16 @@ func (s *Service) verifySolutionAnswer(ctx context.Context, exercise Exercise, c
 }
 
 func (s *Service) authorizedExercise(ctx context.Context, userID string, exerciseID string) (Exercise, error) {
-	exercise, ok, err := s.repo.GetExercise(ctx, exerciseID)
+	return authorizedExercise(ctx, s.repo, userID, exerciseID)
+}
+
+func authorizedExercise(ctx context.Context, repo Repository, userID string, exerciseID string) (Exercise, error) {
+	exercise, ok, err := repo.GetExercise(ctx, exerciseID)
 	if err != nil {
 		return Exercise{}, err
 	}
 	if !ok {
-		_, enrolled, err := s.repo.GetTeacherIDForStudent(ctx, userID)
+		_, enrolled, err := repo.GetTeacherIDForStudent(ctx, userID)
 		if err != nil {
 			return Exercise{}, err
 		}
@@ -1606,24 +1813,20 @@ func (s *Service) authorizedExercise(ctx context.Context, userID string, exercis
 		}
 		return Exercise{}, ErrNotFound
 	}
-	canAccess, err := canAccessExercise(ctx, s.repo, userID, exercise)
+	canAccess, err := canAccessExercise(ctx, repo, userID, exercise)
 	if err != nil {
 		return Exercise{}, err
 	}
 	if !canAccess {
 		return Exercise{}, ErrNotFound
 	}
+	if exercise.Status != "PUBLISHED" {
+		return Exercise{}, ErrNotFound
+	}
 	return exercise, nil
 }
 
 func canAccessExercise(ctx context.Context, repo Repository, userID string, exercise Exercise) (bool, error) {
-	assigned, err := repo.HasDailyAssignmentContent(ctx, userID, exercise.ID)
-	if err != nil {
-		return false, err
-	}
-	if assigned {
-		return true, nil
-	}
 	if exercise.GeneratedByStudentID != "" {
 		return exercise.GeneratedByStudentID == userID, nil
 	}
@@ -1652,7 +1855,7 @@ func (s *Service) getOrCreateSessionWithRepo(ctx context.Context, repo Repositor
 	return repo.CreateSession(ctx, userID, s.now())
 }
 
-func (s *Service) updateTracking(ctx context.Context, repo Repository, userID string, exercise Exercise, isCorrect bool, errorType *string, now time.Time) (map[string]float64, error) {
+func (s *Service) updateTracking(ctx context.Context, repo Repository, userID string, attemptID string, exercise Exercise, isCorrect bool, errorType *string, now time.Time) (map[string]float64, error) {
 	profile, ok, err := repo.GetProfile(ctx, userID)
 	if err != nil {
 		return nil, err
@@ -1678,7 +1881,7 @@ func (s *Service) updateTracking(ctx context.Context, repo Repository, userID st
 	if err != nil {
 		return nil, err
 	}
-	history, err := repo.ListRecentInteractions(ctx, userID, dktMaxSequenceLength)
+	history, err := repo.ListRecentInteractions(ctx, userID, attemptID, dktMaxSequenceLength)
 	if err != nil {
 		return nil, err
 	}

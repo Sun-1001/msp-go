@@ -157,21 +157,51 @@ func (r ClassRepository) GetTeacherClassDetail(ctx context.Context, teacherID st
 
 // RemoveStudent removes one student enrollment from a teacher-owned class.
 func (r ClassRepository) RemoveStudent(ctx context.Context, teacherID string, classID string, studentID string) (bool, error) {
-	tag, err := r.DB().Exec(ctx, `
-		DELETE FROM public.class_enrollments ce
-		USING public.classes c
-		WHERE ce.class_id = c.id
-			AND c.id = $1
-			AND c.teacher_id = $2
-			AND ce.student_id = $3`,
-		classID,
-		teacherID,
-		studentID,
-	)
-	if err != nil {
-		return false, err
-	}
-	return tag.RowsAffected() > 0, nil
+	removed := false
+	err := r.withTx(ctx, func(tx ClassRepository) error {
+		var enrollmentID string
+		var enrolledClassID string
+		var enrolledStudentID string
+		var joinedAt time.Time
+		err := tx.DB().QueryRow(ctx, `
+			DELETE FROM public.class_enrollments enrollment
+			USING public.classes class_info
+			WHERE enrollment.class_id = class_info.id
+				AND class_info.id = $1
+				AND class_info.teacher_id = $2
+				AND enrollment.student_id = $3
+			RETURNING enrollment.id, enrollment.class_id, enrollment.student_id, enrollment.joined_at`,
+			classID,
+			teacherID,
+			studentID,
+		).Scan(&enrollmentID, &enrolledClassID, &enrolledStudentID, &joinedAt)
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+
+		_, err = tx.DB().Exec(ctx, `
+			INSERT INTO public.class_enrollment_history (
+				enrollment_id, class_id, student_id, joined_at, left_at
+			)
+			VALUES ($1, $2, $3, $4, clock_timestamp() AT TIME ZONE 'UTC')
+			ON CONFLICT (enrollment_id) DO UPDATE SET
+				left_at = EXCLUDED.left_at
+			WHERE public.class_enrollment_history.left_at IS NULL`,
+			enrollmentID,
+			enrolledClassID,
+			enrolledStudentID,
+			joinedAt,
+		)
+		if err != nil {
+			return err
+		}
+		removed = true
+		return nil
+	})
+	return removed, err
 }
 
 // DisbandClass deletes a teacher-owned class and its enrollments.
@@ -251,14 +281,32 @@ func (r ClassRepository) CreateEnrollment(ctx context.Context, classID string, s
 	if err != nil {
 		return err
 	}
-	_, err = r.DB().Exec(ctx, `
-		INSERT INTO public.class_enrollments (id, class_id, student_id, joined_at)
-		VALUES ($1, $2, $3, $4)`,
-		id,
-		classID,
-		studentID,
-		joinedAt,
-	)
+	err = r.withTx(ctx, func(tx ClassRepository) error {
+		if _, err := tx.DB().Exec(ctx, `
+			INSERT INTO public.class_enrollments (id, class_id, student_id, joined_at)
+			VALUES ($1, $2, $3, $4)`,
+			id,
+			classID,
+			studentID,
+			joinedAt,
+		); err != nil {
+			return err
+		}
+		_, err := tx.DB().Exec(ctx, `
+			INSERT INTO public.class_enrollment_history (
+				enrollment_id,
+				class_id,
+				student_id,
+				joined_at
+			)
+			VALUES ($1, $2, $3, $4)`,
+			id,
+			classID,
+			studentID,
+			joinedAt,
+		)
+		return err
+	})
 	if err != nil {
 		if isUniqueViolation(err) {
 			return classroomapp.ErrConflict
@@ -270,15 +318,45 @@ func (r ClassRepository) CreateEnrollment(ctx context.Context, classID string, s
 
 // LeaveClass deletes the current class enrollment for one student.
 func (r ClassRepository) LeaveClass(ctx context.Context, studentID string) (bool, error) {
-	tag, err := r.DB().Exec(ctx, `
-		DELETE FROM public.class_enrollments
-		WHERE student_id = $1`,
-		studentID,
-	)
-	if err != nil {
-		return false, err
-	}
-	return tag.RowsAffected() > 0, nil
+	left := false
+	err := r.withTx(ctx, func(tx ClassRepository) error {
+		var enrollmentID string
+		var classID string
+		var enrolledStudentID string
+		var joinedAt time.Time
+		err := tx.DB().QueryRow(ctx, `
+			DELETE FROM public.class_enrollments
+			WHERE student_id = $1
+			RETURNING id, class_id, student_id, joined_at`,
+			studentID,
+		).Scan(&enrollmentID, &classID, &enrolledStudentID, &joinedAt)
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+
+		_, err = tx.DB().Exec(ctx, `
+			INSERT INTO public.class_enrollment_history (
+				enrollment_id, class_id, student_id, joined_at, left_at
+			)
+			VALUES ($1, $2, $3, $4, clock_timestamp() AT TIME ZONE 'UTC')
+			ON CONFLICT (enrollment_id) DO UPDATE SET
+				left_at = EXCLUDED.left_at
+			WHERE public.class_enrollment_history.left_at IS NULL`,
+			enrollmentID,
+			classID,
+			enrolledStudentID,
+			joinedAt,
+		)
+		if err != nil {
+			return err
+		}
+		left = true
+		return nil
+	})
+	return left, err
 }
 
 // GetStudentClass returns the student's current class with teacher and enrollment details.

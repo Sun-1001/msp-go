@@ -150,6 +150,10 @@ func (h *Handler) delete(w http.ResponseWriter, r *http.Request) {
 			writeMistakeError(w, http.StatusNotFound, "NOT_FOUND", "错题记录不存在")
 			return
 		}
+		if errors.Is(err, mistakeapp.ErrDailyAttemptLocked) {
+			writeMistakeError(w, http.StatusConflict, "DAILY_ATTEMPT_LOCKED", "每日一题作答记录不能删除")
+			return
+		}
 		h.logMistakeError("delete mistake failed", err)
 		writeMistakeError(w, http.StatusInternalServerError, "INTERNAL_ERROR", "删除错题失败")
 		return

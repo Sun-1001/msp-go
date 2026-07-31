@@ -28,12 +28,13 @@ const (
 	SourceTeacherBank      = "teacher_bank"
 	SourceAIGenerated      = "ai_generated"
 
-	ReasonMistakeReview  = "mistake_review"
-	ReasonLearningGoal   = "learning_goal"
-	ReasonWeakest        = "weakest_concept"
-	ReasonDefault        = "default_concept"
-	ReasonTeacherUniform = "teacher_uniform"
-	ReasonRepeatFallback = "repeat_fallback"
+	ReasonMistakeReview   = "mistake_review"
+	ReasonLearningGoal    = "learning_goal"
+	ReasonWeakest         = "weakest_concept"
+	ReasonDefault         = "default_concept"
+	ReasonTeacherFallback = "teacher_concept_fallback"
+	ReasonTeacherUniform  = "teacher_uniform"
+	ReasonRepeatFallback  = "repeat_fallback"
 
 	FailureTeacherNotAssigned = "teacher_not_assigned"
 
@@ -45,13 +46,14 @@ const (
 
 	ReminderKindManualStudent    = "manual_student_reminder"
 	ReminderKindAutomaticStudent = "automatic_student_reminder"
-	ReminderKindUniformLowStock  = "uniform_low_stock"
 
-	defaultHistoryDays      = 7
-	maxHistoryDays          = 366
-	MaxUniformScheduleItems = 60
-	defaultStalePreparation = 2 * time.Minute
-	recentAttemptExclusion  = 20
+	defaultHistoryDays              = 7
+	maxHistoryDays                  = 366
+	MaxUniformScheduleItems         = 60
+	defaultStalePreparation         = 2 * time.Minute
+	recentAttemptExclusion          = 20
+	historicalQuestionBodyLimit     = 200
+	maxBackgroundPreparationRetries = 3
 )
 
 var (
@@ -65,6 +67,7 @@ var (
 	ErrInvalidContent             = errors.New("invalid daily question content")
 	ErrDuplicateQuestion          = errors.New("daily question duplicate")
 	ErrSelectionLocked            = errors.New("daily question class selection is locked")
+	ErrUniformScheduleChanged     = errors.New("daily question uniform schedule changed")
 	ErrUniformQuestionNotAssigned = errors.New("daily question uniform class has no question assigned")
 	ErrStrategyChanged            = errors.New("daily question class strategy changed during assignment")
 	ErrReminderUnavailable        = errors.New("daily question wechat reminder is unavailable")
@@ -81,7 +84,7 @@ type Repository interface {
 	ListStreakDates(context.Context, string, time.Time, time.Time) ([]time.Time, error)
 	GetStudentContext(context.Context, string, time.Time) (StudentContext, error)
 	SelectTargetConcept(context.Context, string) (TargetSelection, bool, error)
-	ListHistoricalQuestionBodies(context.Context, string, time.Time) ([]string, error)
+	ListHistoricalQuestionBodies(context.Context, string, time.Time, int) ([]string, error)
 	ListRecentAttemptedContentIDs(context.Context, string, int) ([]string, error)
 	FindTeacherContent(context.Context, string, string, time.Time, bool, string, []string, []string) (ContentChoice, bool, error)
 	FindTeacherRepeatFallback(context.Context, string, string, time.Time, bool, string, []string) (ContentChoice, bool, error)
@@ -93,7 +96,7 @@ type Repository interface {
 	FailPreparation(context.Context, string, string, string, time.Time) error
 	MarkOpened(context.Context, string, time.Time, time.Time) (Assignment, bool, error)
 	GetClassSettings(context.Context, string, string, time.Time) (ClassSettings, bool, error)
-	UpsertClassSettings(context.Context, ClassSettings, time.Time, time.Time) (ClassSettings, bool, error)
+	UpsertClassSettings(context.Context, ClassSettingsUpdate, time.Time, time.Time) (ClassSettingsUpdateResult, bool, error)
 	GetClassStatistics(context.Context, string, string, time.Time) (ClassStatistics, bool, error)
 	CreateClassReminder(context.Context, ClassReminderInput) (ReminderResult, bool, error)
 	DispatchAutomaticReminders(context.Context, time.Time, time.Time) error
@@ -203,6 +206,20 @@ type ClassSettings struct {
 	TodayReminderRecipientCount int    `json:"today_reminder_recipient_count"`
 }
 
+// ClassSettingsUpdate carries only the teacher settings explicitly changed by one request.
+type ClassSettingsUpdate struct {
+	ClassID             string
+	TeacherID           string
+	Strategy            *string
+	AutoReminderEnabled *bool
+}
+
+// ClassSettingsUpdateResult includes the committed settings and transition metadata.
+type ClassSettingsUpdateResult struct {
+	Settings                ClassSettings
+	AutoReminderJustEnabled bool
+}
+
 // ClassUniformScheduleItem is one teacher-managed class-day question.
 type ClassUniformScheduleItem struct {
 	AssignmentDate  string  `json:"assignment_date"`
@@ -216,18 +233,20 @@ type ClassUniformScheduleItem struct {
 
 // ClassUniformSchedule is the ordered Shanghai-calendar plan for one class.
 type ClassUniformSchedule struct {
-	ClassID   string                     `json:"class_id"`
-	StartDate string                     `json:"start_date"`
-	Items     []ClassUniformScheduleItem `json:"items"`
+	ClassID         string                     `json:"class_id"`
+	StartDate       string                     `json:"start_date"`
+	ScheduleVersion int64                      `json:"schedule_version"`
+	Items           []ClassUniformScheduleItem `json:"items"`
 }
 
 // UniformScheduleInput replaces the editable part of a class schedule.
 type UniformScheduleInput struct {
-	TeacherID  string
-	ClassID    string
-	StartDate  time.Time
-	ContentIDs []string
-	Now        time.Time
+	TeacherID       string
+	ClassID         string
+	Today           time.Time
+	ScheduleVersion int64
+	ContentIDs      []string
+	Now             time.Time
 }
 
 // WeakConcept is one class aggregate used by the teacher view.
@@ -262,7 +281,8 @@ type ClassReminderInput struct {
 	Now            time.Time
 }
 
-// ReminderResult describes one reminder request.
+// ReminderResult describes one reminder request. RecipientCount is the number
+// of jobs newly queued or requeued by this request, not the day's cumulative total.
 type ReminderResult struct {
 	ReminderID     string `json:"reminder_id"`
 	RecipientCount int    `json:"recipient_count"`
@@ -290,6 +310,7 @@ type TodayResponse struct {
 	UpdatedAt          *string                       `json:"updated_at"`
 	FailureCode        *string                       `json:"failure_code"`
 	Question           *exerciseapp.ExerciseResponse `json:"question"`
+	RetryCount         int                           `json:"-"`
 }
 
 // HistoryQuery accepts either a Shanghai month (YYYY-MM) or the latest N days.
@@ -414,12 +435,29 @@ func (s *Service) GetToday(ctx context.Context, studentID string) (TodayResponse
 // AI work is synchronous to reuse the existing verified generation pipeline; a durable
 // preparing row lets concurrent requests observe progress and recover abandoned work.
 func (s *Service) PrepareToday(ctx context.Context, studentID string) (TodayResponse, error) {
-	return s.prepareDate(ctx, studentID, shanghaiDay(s.now()), 0, true, false)
+	rawNow := s.now()
+	return s.prepareDate(ctx, studentID, shanghaiDay(rawNow), rawNow, 0, true, false)
 }
 
 // PrepareTodayInBackground assigns today's question without recording a student page visit.
 func (s *Service) PrepareTodayInBackground(ctx context.Context, studentID string) (TodayResponse, error) {
-	return s.prepareDate(ctx, studentID, shanghaiDay(s.now()), 0, false, false)
+	rawNow := s.now()
+	assignmentDate := shanghaiDay(rawNow)
+	response, err := s.prepareDate(ctx, studentID, assignmentDate, rawNow, 0, false, false)
+	if err == nil || response.AssignmentID != nil {
+		return response, err
+	}
+
+	// Preparation errors are persisted before they are returned. Reload with a
+	// short independent context so the worker can classify and bound retries
+	// even when the per-student generation context has already expired.
+	readCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 2*time.Second)
+	defer cancel()
+	assignment, found, readErr := s.repo.GetAssignment(readCtx, studentID, assignmentDate)
+	if readErr == nil && found {
+		return assignmentResponse(assignment, 0), err
+	}
+	return response, err
 }
 
 // prepareDate creates today's task or resumes an existing historical task after
@@ -429,11 +467,11 @@ func (s *Service) prepareDate(
 	ctx context.Context,
 	studentID string,
 	assignmentDate time.Time,
+	rawNow time.Time,
 	strategyRetry int,
 	markOpened bool,
 	requireExisting bool,
 ) (TodayResponse, error) {
-	rawNow := s.now()
 	today := shanghaiDay(rawNow)
 	now := shanghaiNow(rawNow)
 	assignmentDate = shanghaiDay(assignmentDate)
@@ -457,6 +495,11 @@ func (s *Service) prepareDate(
 		return TodayResponse{}, ErrNotFound
 	}
 	if found {
+		if !markOpened && !requireExisting &&
+			current.RetryCount >= maxBackgroundPreparationRetries &&
+			current.Status != StatusPreparing {
+			return assignmentResponse(current, streak), nil
+		}
 		switch current.Status {
 		case StatusCompleted:
 			return assignmentResponse(current, streak), nil
@@ -480,6 +523,18 @@ func (s *Service) prepareDate(
 			case StatusPreparing:
 				if !s.isPreparationStale(current, now) {
 					return assignmentResponse(current, streak), nil
+				}
+				if !markOpened && !requireExisting &&
+					current.RetryCount >= maxBackgroundPreparationRetries &&
+					current.GenerationToken != nil {
+					return s.failPreparation(
+						ctx,
+						current,
+						*current.GenerationToken,
+						"background_retry_exhausted",
+						now,
+						streak,
+					)
 				}
 			}
 		case StatusReady:
@@ -552,7 +607,7 @@ func (s *Service) prepareDate(
 		StaleBefore:     now.Add(-s.preparationStaleAfter),
 	})
 	if errors.Is(err, ErrStrategyChanged) && strategyRetry < 2 {
-		return s.prepareDate(ctx, studentID, assignmentDate, strategyRetry+1, markOpened, requireExisting)
+		return s.prepareDate(ctx, studentID, assignmentDate, rawNow, strategyRetry+1, markOpened, requireExisting)
 	}
 	if err != nil {
 		return TodayResponse{}, err
@@ -565,7 +620,12 @@ func (s *Service) prepareDate(
 		return s.failPreparation(ctx, reservation, generationToken, "target_concept_unavailable", now, streak)
 	}
 
-	historicalBodies, err := s.repo.ListHistoricalQuestionBodies(ctx, studentID, assignmentDate)
+	historicalBodies, err := s.repo.ListHistoricalQuestionBodies(
+		ctx,
+		studentID,
+		assignmentDate,
+		historicalQuestionBodyLimit,
+	)
 	if err != nil {
 		return TodayResponse{}, s.abortPreparation(ctx, reservation, generationToken, "history_lookup_failed", now, err)
 	}
@@ -597,7 +657,7 @@ func (s *Service) prepareDate(
 		if !finished {
 			return s.reloadAssignment(ctx, studentID, assignmentDate, streak)
 		}
-		s.reconcileUniformLowStock(ctx, studentContext, assignmentDate, now)
+		s.reconcileUniformLowStock(ctx, studentContext, today, now)
 		return s.reloadAssignment(ctx, studentID, assignmentDate, streak)
 	}
 	if studentContext.ClassStrategy == StrategyUniform && studentContext.ClassID != "" {
@@ -642,10 +702,11 @@ func (s *Service) prepareDate(
 		if usedFallback {
 			return fallback, nil
 		}
-		if _, err := s.failPreparation(ctx, reservation, generationToken, "ai_generation_rate_limited", now, streak); err != nil {
+		response, err := s.failPreparation(ctx, reservation, generationToken, "ai_generation_rate_limited", now, streak)
+		if err != nil {
 			return TodayResponse{}, err
 		}
-		return TodayResponse{}, ErrRateLimited
+		return response, ErrRateLimited
 	}
 	difficulty := normalizeDifficulty(studentContext.PreferredDifficulty)
 	generated, err := s.generator.GenerateExercise(ctx, studentID, exerciseapp.GenerateExerciseRequest{
@@ -759,8 +820,10 @@ func (s *Service) GetDate(ctx context.Context, studentID string, value string) (
 	if !found {
 		return TodayResponse{}, ErrNotFound
 	}
-	if s.isPreparationStale(assignment, shanghaiNow(rawNow)) {
-		return s.prepareDate(ctx, studentID, date, 0, true, true)
+	if assignment.Status == StatusUnavailable ||
+		(assignment.Status == StatusReady && assignment.Question == nil) ||
+		s.isPreparationStale(assignment, shanghaiNow(rawNow)) {
+		return s.prepareDate(ctx, studentID, date, rawNow, 0, true, true)
 	}
 	if assignment.OpenedAt == nil && (assignment.Status == StatusReady || assignment.Status == StatusCompleted) {
 		opened, ok, err := s.repo.MarkOpened(ctx, studentID, date, shanghaiNow(rawNow))
@@ -805,29 +868,22 @@ func (s *Service) SetClassSettings(
 		return ClassSettings{}, ErrReminderUnavailable
 	}
 
-	rawNow := s.now()
-	today := shanghaiDay(rawNow)
-	current, err := s.GetClassSettings(ctx, teacherID, classID)
-	if err != nil {
-		return ClassSettings{}, err
-	}
-	nextStrategy := current.Strategy
+	var normalizedStrategy *string
 	if strategy != nil {
-		nextStrategy = strings.ToLower(strings.TrimSpace(*strategy))
-		if nextStrategy != StrategyPersonalized && nextStrategy != StrategyUniform {
+		value := strings.ToLower(strings.TrimSpace(*strategy))
+		if value != StrategyPersonalized && value != StrategyUniform {
 			return ClassSettings{}, ErrInvalidStrategy
 		}
-	}
-	nextAutoReminderEnabled := current.AutoReminderEnabled
-	if autoReminderEnabled != nil {
-		nextAutoReminderEnabled = *autoReminderEnabled
+		normalizedStrategy = &value
 	}
 
-	updated, found, err := s.repo.UpsertClassSettings(ctx, ClassSettings{
+	rawNow := s.now()
+	today := shanghaiDay(rawNow)
+	result, found, err := s.repo.UpsertClassSettings(ctx, ClassSettingsUpdate{
 		ClassID:             classID,
 		TeacherID:           teacherID,
-		Strategy:            nextStrategy,
-		AutoReminderEnabled: nextAutoReminderEnabled,
+		Strategy:            normalizedStrategy,
+		AutoReminderEnabled: autoReminderEnabled,
 	}, today, shanghaiNow(rawNow))
 	if err != nil {
 		return ClassSettings{}, err
@@ -839,13 +895,14 @@ func (s *Service) SetClassSettings(
 	// The setting is the durable source of truth. Reminder reconciliation is
 	// intentionally compensating: a queue failure must not make a committed
 	// teacher choice look as though it failed to save.
-	if autoReminderEnabled != nil && *autoReminderEnabled && !current.AutoReminderEnabled {
+	updated := result.Settings
+	if result.AutoReminderJustEnabled {
 		reminder, err := s.createClassReminder(ctx, teacherID, classID, today, ReminderKindAutomaticStudent, rawNow)
 		if err != nil {
 			slog.Error("daily question immediate reminder reconciliation failed", "error_code", "repository_error")
 		} else if reminder.RecipientCount > 0 {
 			updated.TodayReminderSent = true
-			updated.TodayReminderRecipientCount = reminder.RecipientCount
+			updated.TodayReminderRecipientCount += reminder.RecipientCount
 		}
 	}
 	if s.remindersEnabled {
@@ -864,16 +921,11 @@ func (s *Service) GetClassUniformSchedule(ctx context.Context, teacherID, classI
 	}
 	rawNow := s.now()
 	today := shanghaiDay(rawNow)
-	settings, err := s.GetClassSettings(ctx, teacherID, classID)
-	if err != nil {
-		return ClassUniformSchedule{}, err
-	}
-	start := uniformScheduleStartDate(settings, today)
 	schedule, found, err := s.repo.GetClassUniformSchedule(
 		ctx,
 		teacherID,
 		classID,
-		start,
+		today,
 		MaxUniformScheduleItems,
 	)
 	if err != nil {
@@ -883,19 +935,18 @@ func (s *Service) GetClassUniformSchedule(ctx context.Context, teacherID, classI
 		return ClassUniformSchedule{}, ErrNotFound
 	}
 	if s.remindersEnabled {
-		if err := s.repo.EnsureUniformLowStockAlert(ctx, teacherID, classID, today, shanghaiNow(rawNow)); err != nil {
-			return ClassUniformSchedule{}, err
+		if err := s.repo.EnsureUniformLowStockAlert(ctx, teacherID, classID, today, shanghaiNow(rawNow)); err != nil && ctx.Err() == nil {
+			slog.Error("daily question low-stock reconciliation after schedule read failed", "error_code", "repository_error")
 		}
 	}
-	schedule.StartDate = dateString(start)
 	return schedule, nil
 }
 
 // ReplaceClassUniformSchedule maps the supplied order to consecutive Shanghai dates.
 // Dates already obtained by at least one student must remain at the same position.
-func (s *Service) ReplaceClassUniformSchedule(ctx context.Context, teacherID, classID string, contentIDs []string) (ClassUniformSchedule, error) {
+func (s *Service) ReplaceClassUniformSchedule(ctx context.Context, teacherID, classID string, scheduleVersion int64, contentIDs []string) (ClassUniformSchedule, error) {
 	classID = strings.TrimSpace(classID)
-	if classID == "" || len(contentIDs) > MaxUniformScheduleItems {
+	if classID == "" || scheduleVersion < 0 || len(contentIDs) > MaxUniformScheduleItems {
 		return ClassUniformSchedule{}, ErrInvalidContent
 	}
 	normalized := make([]string, 0, len(contentIDs))
@@ -913,17 +964,13 @@ func (s *Service) ReplaceClassUniformSchedule(ctx context.Context, teacherID, cl
 	}
 	rawNow := s.now()
 	today := shanghaiDay(rawNow)
-	settings, err := s.GetClassSettings(ctx, teacherID, classID)
-	if err != nil {
-		return ClassUniformSchedule{}, err
-	}
-	start := uniformScheduleStartDate(settings, today)
 	schedule, found, err := s.repo.ReplaceClassUniformSchedule(ctx, UniformScheduleInput{
-		TeacherID:  teacherID,
-		ClassID:    classID,
-		StartDate:  start,
-		ContentIDs: normalized,
-		Now:        shanghaiNow(rawNow),
+		TeacherID:       teacherID,
+		ClassID:         classID,
+		Today:           today,
+		ScheduleVersion: scheduleVersion,
+		ContentIDs:      normalized,
+		Now:             shanghaiNow(rawNow),
 	})
 	if err != nil {
 		return ClassUniformSchedule{}, err
@@ -931,12 +978,11 @@ func (s *Service) ReplaceClassUniformSchedule(ctx context.Context, teacherID, cl
 	if !found {
 		return ClassUniformSchedule{}, ErrNotFound
 	}
-	if s.remindersEnabled && settings.Strategy == StrategyUniform {
-		if err := s.repo.EnsureUniformLowStockAlert(ctx, teacherID, classID, today, shanghaiNow(rawNow)); err != nil {
-			return ClassUniformSchedule{}, err
+	if s.remindersEnabled {
+		if err := s.repo.EnsureUniformLowStockAlert(ctx, teacherID, classID, today, shanghaiNow(rawNow)); err != nil && ctx.Err() == nil {
+			slog.Error("daily question low-stock reconciliation after schedule update failed", "error_code", "repository_error")
 		}
 	}
-	schedule.StartDate = dateString(start)
 	return schedule, nil
 }
 
@@ -1090,7 +1136,11 @@ func (s *Service) chooseTeacherContent(
 	if !found {
 		return ContentChoice{}, "", "", false, nil
 	}
-	return choice, source, target.Reason, true, nil
+	reason := target.Reason
+	if choice.TargetConceptID != target.ConceptID {
+		reason = ReasonTeacherFallback
+	}
+	return choice, source, reason, true, nil
 }
 
 // chooseTeacherRepeatFallback is used only after the AI path cannot produce a new question.
@@ -1257,6 +1307,7 @@ func assignmentResponse(assignment Assignment, streak int) TodayResponse {
 		UpdatedAt:          timePointer(assignment.UpdatedAt),
 		FailureCode:        failureCode,
 		Question:           assignment.Question,
+		RetryCount:         assignment.RetryCount,
 	}
 }
 

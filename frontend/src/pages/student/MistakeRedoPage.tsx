@@ -74,7 +74,7 @@ export const MistakeRedoPage: React.FC = () => {
     loadQuestion,
     submitAnswer,
     loadSolution,
-  } = useExerciseViewModel();
+  } = useExerciseViewModel({ dailyAssignmentId: review?.context.dailyAssignmentId });
 
   useEffect(() => {
     if (!attemptId) {

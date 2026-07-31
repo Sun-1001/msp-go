@@ -49,6 +49,7 @@ var exportableTables = []ExportableTableItem{
 	{Name: "announcement_dismissals", DisplayName: "公告关闭记录"},
 	{Name: "classes", DisplayName: "班级"},
 	{Name: "class_enrollments", DisplayName: "班级学生"},
+	{Name: "class_enrollment_history", DisplayName: "班级学生历史"},
 	{Name: "security_logs", DisplayName: "安全日志"},
 }
 
@@ -63,6 +64,7 @@ var importOrder = []string{
 	"announcement_dismissals",
 	"classes",
 	"class_enrollments",
+	"class_enrollment_history",
 	"contents",
 	"learning_sessions",
 	"session_messages",

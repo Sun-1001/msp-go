@@ -30,9 +30,9 @@ Copy-Item .env.example .env
 - 探测固定覆盖 `documents/.mathstudy-storage-connectivity-check.txt`，内容不含凭据，不会随测试次数累积对象。
 - 保存成功后新上传和 OCR 图片回读立即使用新后端；不会自动回退到旧后端，切换前应自行迁移仍需访问的历史对象。
 
-每日一题默认由 Go API 进程在 `Asia/Shanghai` 零点预分配；进程启动或重启后也会立即补齐当天尚未处理的学生。`DAILY_QUESTION_PREGENERATION_ENABLED` 控制总开关，批大小、进程内并发、批间隔和单学生超时分别由 `DAILY_QUESTION_PREGENERATION_BATCH_SIZE`、`DAILY_QUESTION_PREGENERATION_CONCURRENCY`、`DAILY_QUESTION_PREGENERATION_BATCH_INTERVAL_MS`、`DAILY_QUESTION_PREGENERATION_STUDENT_TIMEOUT_SECONDS` 控制；单学生超时必须小于 120 秒，避免超过准备行的失效接管窗口。单个学生失败或最终未分配时，学生进入每日题页面的幂等 prepare 仍会继续兜底。多实例部署必须只在一个调度实例设置 `DAILY_QUESTION_PREGENERATION_ENABLED=true`，其余实例设为 `false`；当前并发控制是进程内上限，assignment 唯一约束和 generation token 只负责防止同一学生重复落题，不能替代全局 worker 租约。
+每日一题默认由 Go API 进程在 `Asia/Shanghai` 零点预分配；进程启动或重启后也会立即补齐当天尚未处理的学生。`DAILY_QUESTION_PREGENERATION_ENABLED` 控制总开关，批大小、进程内并发、批间隔和单学生超时分别由 `DAILY_QUESTION_PREGENERATION_BATCH_SIZE`、`DAILY_QUESTION_PREGENERATION_CONCURRENCY`、`DAILY_QUESTION_PREGENERATION_BATCH_INTERVAL_MS`、`DAILY_QUESTION_PREGENERATION_STUDENT_TIMEOUT_SECONDS` 控制；单学生超时必须小于 120 秒，避免超过准备行的失效接管窗口。`preparing` 及 AI、Solver、限频和瞬态仓储失败会在当天约 5 分钟后幂等重扫，持久化 `retry_count` 最多允许三次后台重领；未布置统一题不会持久化失败 assignment，因此 worker 会在当天继续低成本重扫，并在教师补排期后自动补分配；无目标知识点和 AI 权限/配额阻断等配置错误不循环。学生进入每日题页面后的手动恢复不受后台次数上限限制。多实例部署仍应只在一个调度实例设置 `DAILY_QUESTION_PREGENERATION_ENABLED=true`，其余实例设为 `false`；assignment 唯一约束和 generation token 防止同一学生重复落题，但不替代全局 worker 租约。
 
-开启 `WECHAT_MESSAGE_REMINDERS_ENABLED=true` 后，教师可以按班级开启每日一题自动提醒。API 进程会在上海时间每天 08:00 扫描已开启的班级；进程在 08:00 后启动时也会补做当日幂等扫描，单次数据库故障会在当天每 5 分钟重试。仅有可作答且未完成的每日题时，才向已绑定且已关注的学生创建公众号模板消息任务；不会创建 `notices` 或站内通知。教师当天开启自动提醒时，若当天尚无手动或自动学生提醒，会立即尝试入队；关闭后不会继续发送自动提醒，重新开启会复用仍在处理的任务或为已跳过的任务创建新的当日来源。班级统一题日程剩余恰好一题时，系统只向该教师创建公众号低库存提醒；补题后旧提醒会失效，之后再次降至一题可以重新提醒。自动学生提醒和低库存事件均在发送前重新校验当前状态，多实例重复扫描不会重复发送；手动“提醒未完成学生”同样只进入公众号队列。每日题提醒复用 `WECHAT_NOTICE_TEMPLATE_ID`，不增加新的公众号模板或环境变量。
+开启 `WECHAT_MESSAGE_REMINDERS_ENABLED=true` 后，教师可以按班级开启每日一题自动提醒。API 进程会在上海时间每天 08:00 扫描已开启的班级；进程在 08:00 后启动时也会补做当日幂等扫描，单次数据库故障会在当天每 5 分钟重试。仅有可作答且未完成的每日题时，才创建公众号模板消息任务；不会创建 `notices` 或站内通知。教师当天把自动提醒从关闭改为开启时会立即尝试入队，策略与开关的并发保存按字段合并；若当天已有手动提醒，则首次自动扫描不再重复提醒。自动提醒按班级和日期保持唯一，对账会补充缺失学生并恢复 `skipped/dead`，但不重置已发送任务。教师每次手动点击都会创建独立事件，并为点击时仍未完成的学生创建新一轮公众号任务；连续或并发点击不会复用上一轮来源，也不需要等待上一轮进入终态。班级统一题日程剩余恰好一道时只提醒教师；低库存对账按发送时的上海自然日核对，并可恢复 `skipped/dead`。已发送的阈值事件不会因 30 天任务清理而重复，补题后再次降至一道才生成新提醒。发送前仍会校验当前题目、完成状态、绑定和关注状态。每日题提醒复用 `WECHAT_NOTICE_TEMPLATE_ID`，不增加新的公众号模板或环境变量。
 
 公众号配置项如下：
 
@@ -104,7 +104,7 @@ FROM public.go_schema_migrations
 ORDER BY version;
 ```
 
-当前 forward migration 链包含生产基线以及每日一题、画像报告和画像行动等后续增量。全新空库第一次 migration runner 应记录当前全部版本，紧接着重复执行应为 `applied_count=0`。精确版本清单与能力归属以 [迁移策略](../../backend/migrations/README.md) 为唯一来源。
+当前生产迁移链由 `0001` 至 `0009` 九个迁移组成。每日一题及其班级自动提醒、公众号专用事件位于已发布的 `0005_daily_question`；`0006` 至 `0008` 交付画像报告范围、画像并发修订和画像行动；作答幂等绑定、历史回填、手动/自动提醒并发约束、统一题冻结快照、日程乐观锁和班级成员历史通过 `0009_daily_question_integrity` 向前追加。全新空库第一次 migration runner 应记录版本 `1` 至 `9`；已同步版本 8 的数据库应只应用版本 9，紧接着重复执行应为 `applied_count=0`。迁移前已离班且从未产生 assignment 的成员无法从现有数据恢复到历史名册。消息中心北京时间默认值位于 `0003`，微信公众号绑定和基础提醒任务位于 `0004`。曾把每日题完整性迁移以本地版本 `0006` 执行的数据库与当前共享迁移历史冲突，必须先核对实际 schema 和迁移账本，再按 [迁移策略](../../backend/migrations/README.md) 重建或实施经过评审的数据保留校准，不能直接重放。
 
 重整前执行过旧开发迁移 `0001` 至 `0015` 的数据库不属于可原地升级目标。migration runner 会校验迁移版本、名称和未知记录，并在账本与当前代码不一致时拒绝继续。可丢弃的开发库应删除并重建；任何不可丢弃的库必须先停止发布，完成实际 schema、业务数据和 `go_schema_migrations` 核对，再设计专门的数据保留迁移，禁止删除版本记录后重放基线。
 

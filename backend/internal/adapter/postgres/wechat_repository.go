@@ -34,7 +34,7 @@ func NewWechatRepository(db Querier) (WechatRepository, error) {
 // GetByUserID loads the Official Account identity bound to one platform user.
 func (r WechatRepository) GetByUserID(ctx context.Context, appID, userID string) (wechatapp.Binding, bool, error) {
 	row := r.DB().QueryRow(ctx, `
-		SELECT user_id, open_id, subscribed, bound_at
+		SELECT open_id, subscribed, bound_at
 		FROM public.wechat_user_bindings
 		WHERE app_id = $1 AND user_id = $2`,
 		appID,
@@ -51,10 +51,10 @@ func (r WechatRepository) GetByUserID(ctx context.Context, appID, userID string)
 }
 
 // Bind associates an openid with one user without allowing either identity to be reassigned.
-func (r WechatRepository) Bind(ctx context.Context, appID, openID, userID string, observedAt, processedAt time.Time) (wechatapp.Binding, error) {
+func (r WechatRepository) Bind(ctx context.Context, appID, openID, userID string, observedAt, processedAt time.Time) error {
 	id, err := newUUID()
 	if err != nil {
-		return wechatapp.Binding{}, err
+		return err
 	}
 	row := r.DB().QueryRow(ctx, `
 		INSERT INTO public.wechat_user_bindings AS binding (
@@ -109,7 +109,7 @@ func (r WechatRepository) Bind(ctx context.Context, appID, openID, userID string
 			END,
 			updated_at = EXCLUDED.updated_at
 		WHERE binding.user_id IS NULL OR binding.user_id = EXCLUDED.user_id
-		RETURNING user_id, open_id, subscribed, bound_at`,
+		RETURNING 1`,
 		id,
 		appID,
 		openID,
@@ -117,11 +117,11 @@ func (r WechatRepository) Bind(ctx context.Context, appID, openID, userID string
 		observedAt,
 		processedAt,
 	)
-	binding, err := scanWechatBinding(row)
-	if err != nil {
-		return wechatapp.Binding{}, normalizeWechatBindError(err)
+	var bound int
+	if err := row.Scan(&bound); err != nil {
+		return normalizeWechatBindError(err)
 	}
-	return binding, nil
+	return nil
 }
 
 // SetSubscription records subscribe and unsubscribe callbacks even before binding.
@@ -189,13 +189,9 @@ func (r WechatRepository) Unbind(ctx context.Context, appID, userID string, now 
 
 func scanWechatBinding(row pgx.Row) (wechatapp.Binding, error) {
 	var binding wechatapp.Binding
-	var userID pgtype.Text
 	var boundAt pgtype.Timestamp
-	if err := row.Scan(&userID, &binding.OpenID, &binding.Subscribed, &boundAt); err != nil {
+	if err := row.Scan(&binding.OpenID, &binding.Subscribed, &boundAt); err != nil {
 		return wechatapp.Binding{}, err
-	}
-	if userID.Valid {
-		binding.UserID = userID.String
 	}
 	binding.BoundAt = timestampPtr(boundAt)
 	return binding, nil

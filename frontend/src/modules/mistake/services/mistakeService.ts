@@ -51,6 +51,8 @@ export interface MistakeRecord {
   mastery: MistakeMastery;
   errorCount: number;
   lastReviewedAt: string | null;
+  canReview: boolean;
+  canDelete: boolean;
 }
 
 export interface PaginationInfo {
@@ -168,6 +170,7 @@ export interface ReviewExercise {
 export interface ReviewContext {
   isReview: boolean;
   originalAttemptId: string;
+  dailyAssignmentId?: string;
   previousAnswer: string;
   previousErrorType: string | null;
   previousExplanation: string;
@@ -235,6 +238,8 @@ interface MistakeListResponseRaw {
     };
     error_count: number;
     last_reviewed_at: string | null;
+    can_review: boolean;
+    can_delete: boolean;
   }>;
   pagination: {
     page: number;
@@ -332,6 +337,7 @@ interface ReviewExerciseResponseRaw {
   context: {
     is_review: boolean;
     original_attempt_id: string;
+    daily_assignment_id?: string;
     previous_answer: string;
     previous_error_type: string | null;
     previous_explanation: string;
@@ -372,6 +378,8 @@ function mapMistakeRecord(raw: MistakeListResponseRaw['items'][number]): Mistake
     mastery: raw.mastery,
     errorCount: raw.error_count,
     lastReviewedAt: raw.last_reviewed_at,
+    canReview: raw.can_review,
+    canDelete: raw.can_delete,
   };
 }
 
@@ -467,6 +475,9 @@ function mapReviewExerciseResponse(raw: ReviewExerciseResponseRaw): ReviewExerci
     context: {
       isReview: raw.context.is_review,
       originalAttemptId: raw.context.original_attempt_id,
+      ...(raw.context.daily_assignment_id
+        ? { dailyAssignmentId: raw.context.daily_assignment_id }
+        : {}),
       previousAnswer: raw.context.previous_answer,
       previousErrorType: raw.context.previous_error_type,
       previousExplanation: raw.context.previous_explanation,
