@@ -142,15 +142,17 @@ export const MistakeBookPage: React.FC = () => {
                             </div>
                           </div>
                           <div className="flex flex-wrap gap-2 sm:justify-end">
-                            <Button
-                              variant="ghost"
-                              size="icon"
-                              className="text-surface-400 hover:bg-red-50 hover:text-red-600 dark:hover:bg-red-900/30 dark:hover:text-red-400"
-                              onClick={() => handleDeleteMistake(item.id)}
-                              title="删除错题"
-                            >
-                              <Trash2 className="h-4 w-4" />
-                            </Button>
+                            {item.canDelete ? (
+                              <Button
+                                variant="ghost"
+                                size="icon"
+                                className="text-surface-400 hover:bg-red-50 hover:text-red-600 dark:hover:bg-red-900/30 dark:hover:text-red-400"
+                                onClick={() => handleDeleteMistake(item.id)}
+                                title="删除错题"
+                              >
+                                <Trash2 className="h-4 w-4" />
+                              </Button>
+                            ) : null}
                             <Button
                               size="sm"
                               variant="outline"
@@ -160,12 +162,14 @@ export const MistakeBookPage: React.FC = () => {
                               <CheckCircle className="mr-1 h-3 w-3" />
                               已掌握
                             </Button>
-                            <Button
-                              size="sm"
-                              onClick={() => navigate(`/mistake-book/${encodeURIComponent(item.id)}/redo`)}
-                            >
-                              重做 <ArrowRight className="ml-1 h-3 w-3" />
-                            </Button>
+                            {item.canReview ? (
+                              <Button
+                                size="sm"
+                                onClick={() => navigate(`/mistake-book/${encodeURIComponent(item.id)}/redo`)}
+                              >
+                                重做 <ArrowRight className="ml-1 h-3 w-3" />
+                              </Button>
+                            ) : null}
                           </div>
                         </div>
                       </div>

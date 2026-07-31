@@ -23,6 +23,7 @@ import {
 } from 'lucide-react';
 import { buildExerciseTutorLaunch } from './exerciseTutorLaunch';
 import { DailyQuestionStatusEntry } from '@/modules/daily-question/components/DailyQuestionStatusEntry';
+import { useShanghaiDate } from '@/modules/daily-question/hooks/useShanghaiDate';
 import { dailyQuestionService } from '@/modules/daily-question/services/dailyQuestionService';
 import type { DailyQuestionAssignment } from '@/modules/daily-question/types/dailyQuestion';
 import { getApiErrorMessage } from '@/libs/http/apiClient';
@@ -48,6 +49,7 @@ const tutorCopy = {
 
 export const ExercisePage: React.FC = () => {
   const navigate = useNavigate();
+  const todayDate = useShanghaiDate();
   const [searchParams] = useSearchParams();
   const requestedMode: ExerciseMode = searchParams.get('mode') === 'ai' ? 'ai' : 'class';
   const requestedConceptId = searchParams.get('concept_id')?.trim() ?? '';
@@ -112,6 +114,7 @@ export const ExercisePage: React.FC = () => {
     const loadDailyStatus = async () => {
       setIsDailyStatusLoading(true);
       setDailyStatusError(null);
+      setDailyAssignment(null);
       try {
         const nextAssignment = await dailyQuestionService.getToday(controller.signal);
         if (!controller.signal.aborted) {
@@ -130,7 +133,7 @@ export const ExercisePage: React.FC = () => {
 
     void loadDailyStatus();
     return () => controller.abort();
-  }, []);
+  }, [todayDate]);
 
   useEffect(() => {
     return () => {

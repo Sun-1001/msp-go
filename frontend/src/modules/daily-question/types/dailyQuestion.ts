@@ -58,6 +58,7 @@ export interface DailyQuestionUniformScheduleItem {
 
 export interface DailyQuestionUniformSchedule {
   startDate: string;
+  scheduleVersion: number;
   items: DailyQuestionUniformScheduleItem[];
 }
 

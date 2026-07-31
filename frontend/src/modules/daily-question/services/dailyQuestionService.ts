@@ -72,6 +72,7 @@ interface DailyQuestionReminderResponse {
 
 interface DailyQuestionUniformScheduleResponse {
   start_date?: string;
+  schedule_version?: number;
   items?: Array<{
     assignment_date: string;
     content_id: string;
@@ -148,6 +149,7 @@ function mapUniformSchedule(
 ): DailyQuestionUniformSchedule {
   return {
     startDate: raw.start_date ?? raw.items?.[0]?.assignment_date ?? '',
+    scheduleVersion: Math.max(0, Math.trunc(raw.schedule_version ?? 0)),
     items: (raw.items ?? []).map((item) => ({
       assignmentDate: item.assignment_date,
       contentId: item.content_id,
@@ -182,7 +184,7 @@ export const dailyQuestionService = {
     const normalizedDate = requireISODate(date);
     const response = await apiClient.get<DailyQuestionAssignmentResponse>(
       `/daily-question/${encodeURIComponent(normalizedDate)}`,
-      { signal },
+      { timeout: 120_000, signal },
     );
     return mapAssignment(response.data);
   },
@@ -254,11 +256,15 @@ export const dailyQuestionService = {
 
   async setUniformSchedule(
     classId: string,
+    scheduleVersion: number,
     contentIds: string[],
   ): Promise<DailyQuestionUniformSchedule> {
+    const normalizedScheduleVersion = Math.trunc(scheduleVersion);
     const normalizedContentIds = contentIds.map((contentId) => contentId.trim());
     if (
-      normalizedContentIds.length > 60
+      !Number.isSafeInteger(normalizedScheduleVersion)
+      || normalizedScheduleVersion < 0
+      || normalizedContentIds.length > 60
       || normalizedContentIds.some((contentId) => !contentId)
       || new Set(normalizedContentIds).size !== normalizedContentIds.length
     ) {
@@ -266,7 +272,10 @@ export const dailyQuestionService = {
     }
     const response = await apiClient.put<DailyQuestionUniformScheduleResponse>(
       classDailyQuestionPath(classId, 'uniform-schedule'),
-      { content_ids: normalizedContentIds },
+      {
+        schedule_version: normalizedScheduleVersion,
+        content_ids: normalizedContentIds,
+      },
     );
     return mapUniformSchedule(response.data);
   },

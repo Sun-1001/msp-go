@@ -21,14 +21,10 @@ type QAThreadRepository struct {
 }
 
 // NewQAThreadRepository creates a PostgreSQL-backed Q&A thread repository.
-func NewQAThreadRepository(db Querier, reminders ...WechatReminderEnqueuer) (QAThreadRepository, error) {
+func NewQAThreadRepository(db Querier, reminderEnqueuer WechatReminderEnqueuer) (QAThreadRepository, error) {
 	base, err := NewRepository(db)
 	if err != nil {
 		return QAThreadRepository{}, err
-	}
-	var reminderEnqueuer WechatReminderEnqueuer
-	if len(reminders) > 0 {
-		reminderEnqueuer = reminders[0]
 	}
 	return QAThreadRepository{Repository: base, wechatReminders: reminderEnqueuer}, nil
 }
@@ -407,7 +403,7 @@ func extractTitle(content string, maxLen int) string {
 }
 
 // CreateThread creates a new question thread with the first message.
-func (r QAThreadRepository) CreateThread(ctx context.Context, studentID string, teacherID string, content string, source string, attachments []messageattachment.Attachment, _ time.Time) (qathreadapp.ThreadDetail, error) {
+func (r QAThreadRepository) CreateThread(ctx context.Context, studentID string, teacherID string, content string, source string, attachments []messageattachment.Attachment) (qathreadapp.ThreadDetail, error) {
 	threadID, err := newUUID()
 	if err != nil {
 		return qathreadapp.ThreadDetail{}, err
@@ -573,7 +569,7 @@ func (r QAThreadRepository) CreateThread(ctx context.Context, studentID string, 
 }
 
 // CreateThreadMessage adds a message to a thread and updates status.
-func (r QAThreadRepository) CreateThreadMessage(ctx context.Context, threadID string, senderID string, senderRole string, text string, attachments []messageattachment.Attachment, _ time.Time) (qathreadapp.Message, error) {
+func (r QAThreadRepository) CreateThreadMessage(ctx context.Context, threadID string, senderID string, senderRole string, text string, attachments []messageattachment.Attachment) (qathreadapp.Message, error) {
 	msgID, err := newUUID()
 	if err != nil {
 		return qathreadapp.Message{}, err

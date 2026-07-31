@@ -75,16 +75,6 @@ export async function fetchCompleteOffsetMessageHistory<T extends { id: string; 
   throw new Error('message history changed while loading all pages');
 }
 
-export function selectListItemID(
-  currentID: string,
-  itemIDs: string[],
-  deepLinkID: string,
-): string {
-  if (deepLinkID) return deepLinkID;
-  if (currentID && itemIDs.includes(currentID)) return currentID;
-  return itemIDs[0] ?? '';
-}
-
 export function latestPageChanged(
   current: Array<{ id: string }>,
   latestPage: Array<{ id: string }>,

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   Bell,
   CalendarDays,
@@ -41,63 +41,94 @@ export function TeacherDailyQuestionPanel({ classId }: TeacherDailyQuestionPanel
   const [settings, setSettings] = useState<DailyQuestionClassSettings | null>(null);
   const [statistics, setStatistics] = useState<DailyQuestionClassStatistics | null>(null);
   const [todayUniformAssigned, setTodayUniformAssigned] = useState(false);
-  const [isLoading, setIsLoading] = useState(true);
+  const [isLoadingSettings, setIsLoadingSettings] = useState(true);
+  const [isLoadingStatistics, setIsLoadingStatistics] = useState(true);
   const [isSavingStrategy, setIsSavingStrategy] = useState(false);
-  const [isConfiguringUniform, setIsConfiguringUniform] = useState(false);
   const [isSendingReminder, setIsSendingReminder] = useState(false);
   const [isSavingAutoReminder, setIsSavingAutoReminder] = useState(false);
   const [isAutoReminderConfirmOpen, setIsAutoReminderConfirmOpen] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const [settingsError, setSettingsError] = useState<string | null>(null);
+  const [statisticsError, setStatisticsError] = useState<string | null>(null);
+  const settingsRequestRef = useRef(0);
+  const statisticsRequestRef = useRef(0);
+  const settingsMutationRef = useRef(false);
 
-  const loadData = useCallback(async (signal?: AbortSignal) => {
-    setIsLoading(true);
-    setError(null);
+  const loadSettings = useCallback(async (signal?: AbortSignal) => {
+    const requestID = settingsRequestRef.current + 1;
+    settingsRequestRef.current = requestID;
+    setIsLoadingSettings(true);
+    setSettingsError(null);
     try {
-      const [nextSettings, nextStatistics] = await Promise.all([
-        dailyQuestionService.getClassSettings(classId, signal),
-        dailyQuestionService.getClassStatistics(classId, selectedDate, signal),
-      ]);
-      if (signal?.aborted) return;
+      const nextSettings = await dailyQuestionService.getClassSettings(classId, signal);
+      if (signal?.aborted || settingsRequestRef.current !== requestID) return;
       setSettings(nextSettings);
+    } catch (loadError) {
+      if (signal?.aborted || settingsRequestRef.current !== requestID) return;
+      setSettingsError(getApiErrorMessage(loadError, '每日一题设置加载失败'));
+    } finally {
+      if (!signal?.aborted && settingsRequestRef.current === requestID) {
+        setIsLoadingSettings(false);
+      }
+    }
+  }, [classId]);
+
+  useEffect(() => {
+    const controller = new AbortController();
+    void loadSettings(controller.signal);
+    return () => controller.abort();
+  }, [loadSettings, today]);
+
+  const loadStatistics = useCallback(async (signal?: AbortSignal) => {
+    const requestID = statisticsRequestRef.current + 1;
+    statisticsRequestRef.current = requestID;
+    setIsLoadingStatistics(true);
+    setStatisticsError(null);
+    setStatistics(null);
+    try {
+      const nextStatistics = await dailyQuestionService.getClassStatistics(
+        classId,
+        selectedDate,
+        signal,
+      );
+      if (signal?.aborted || statisticsRequestRef.current !== requestID) return;
       setStatistics(nextStatistics);
     } catch (loadError) {
-      if (signal?.aborted) return;
-      setError(getApiErrorMessage(loadError, '每日一题班级数据加载失败'));
+      if (signal?.aborted || statisticsRequestRef.current !== requestID) return;
+      setStatisticsError(getApiErrorMessage(loadError, '每日一题统计加载失败'));
     } finally {
-      if (!signal?.aborted) {
-        setIsLoading(false);
+      if (!signal?.aborted && statisticsRequestRef.current === requestID) {
+        setIsLoadingStatistics(false);
       }
     }
   }, [classId, selectedDate]);
 
   useEffect(() => {
     const controller = new AbortController();
-    void loadData(controller.signal);
+    void loadStatistics(controller.signal);
     return () => controller.abort();
-  }, [loadData]);
+  }, [loadStatistics]);
 
   useEffect(() => {
     setSelectedDate(today);
     setTodayUniformAssigned(false);
   }, [today]);
 
+  const reloadData = useCallback(async () => {
+    await Promise.all([loadSettings(), loadStatistics()]);
+  }, [loadSettings, loadStatistics]);
+
   const updateStrategy = async (strategy: DailyQuestionClassStrategy) => {
-    if (isSavingStrategy || !settings) return;
-    if (strategy === 'personalized' && isConfiguringUniform) {
-      setIsConfiguringUniform(false);
-      return;
-    }
+    if (settingsMutationRef.current || !settings) return;
     if (settings.strategy === strategy) return;
-    if (strategy === 'uniform' && !settings.uniformReady) {
-      setIsConfiguringUniform(true);
-      toast({ type: 'info', title: '请先保存统一题生效日的题目日程' });
-      return;
-    }
+    settingsMutationRef.current = true;
+    const requestID = settingsRequestRef.current + 1;
+    settingsRequestRef.current = requestID;
     setIsSavingStrategy(true);
     try {
       const nextSettings = await dailyQuestionService.setClassSettings(classId, strategy);
-      setSettings(nextSettings);
-      setIsConfiguringUniform(false);
+      if (settingsRequestRef.current === requestID) {
+        setSettings(nextSettings);
+      }
       toast({
         type: 'success',
         title: nextSettings.strategy === nextSettings.effectiveStrategy
@@ -107,71 +138,91 @@ export function TeacherDailyQuestionPanel({ classId }: TeacherDailyQuestionPanel
     } catch (saveError) {
       toast({ type: 'error', title: getApiErrorMessage(saveError, '分配策略保存失败') });
     } finally {
+      settingsMutationRef.current = false;
       setIsSavingStrategy(false);
+      if (settingsRequestRef.current === requestID) {
+        setIsLoadingSettings(false);
+      }
     }
   };
 
-  const displayedStrategy: DailyQuestionClassStrategy | undefined = isConfiguringUniform
-    ? 'uniform'
-    : settings?.strategy;
+  const displayedStrategy = settings?.strategy;
   const showUniformSchedule = settings
-    ? isConfiguringUniform
-      || settings.strategy === 'uniform'
+    ? settings.strategy === 'uniform'
       || settings.effectiveStrategy === 'uniform'
     : false;
   const todayUniformReady = todayUniformAssigned || Boolean(settings?.uniformReady);
 
   const sendReminder = async () => {
-    if (isSendingReminder) return;
+    if (isSendingReminder || settingsMutationRef.current) return;
+    settingsMutationRef.current = true;
+    const requestID = settingsRequestRef.current + 1;
+    settingsRequestRef.current = requestID;
     setIsSendingReminder(true);
     try {
       const result = await dailyQuestionService.sendClassReminder(classId, selectedDate);
+      const currentReminderTotal = settings?.todayReminderRecipientCount ?? 0;
+      const nextReminderTotal = currentReminderTotal + result.recipientCount;
       if (selectedDate === today && result.recipientCount > 0) {
         setSettings((current) => current
           ? {
               ...current,
               todayReminderSent: true,
-              todayReminderRecipientCount: result.recipientCount,
+              todayReminderRecipientCount: current.todayReminderRecipientCount + result.recipientCount,
             }
           : current);
       }
       toast({
         type: 'success',
         title: result.recipientCount > 0
-          ? `已通过公众号提醒 ${result.recipientCount} 名未完成学生`
-          : '当前没有需要通过公众号提醒的学生',
+          ? `本次已创建 ${result.recipientCount} 条公众号提醒`
+          : '本次没有新增公众号提醒',
+        description: `今日累计提醒 ${nextReminderTotal} 人次。`,
       });
     } catch (reminderError) {
       toast({ type: 'error', title: getApiErrorMessage(reminderError, '提醒发送失败') });
     } finally {
+      settingsMutationRef.current = false;
       setIsSendingReminder(false);
+      if (settingsRequestRef.current === requestID) {
+        setIsLoadingSettings(false);
+      }
     }
   };
 
   const updateAutoReminder = async (enabled: boolean) => {
-    if (!settings || isSavingAutoReminder) return;
+    if (!settings || settingsMutationRef.current) return;
+    settingsMutationRef.current = true;
+    const requestID = settingsRequestRef.current + 1;
+    settingsRequestRef.current = requestID;
     setIsSavingAutoReminder(true);
     try {
       const nextSettings = await dailyQuestionService.setClassAutoReminder(classId, enabled);
-      setSettings(nextSettings);
-      setIsAutoReminderConfirmOpen(false);
+      if (settingsRequestRef.current === requestID) {
+        setSettings(nextSettings);
+        setIsAutoReminderConfirmOpen(false);
+      }
       toast({
         type: 'success',
         title: enabled ? '已开启每日自动提醒' : '已关闭每日自动提醒',
         description: enabled
           ? nextSettings.todayReminderSent
-            ? `今天已通过微信公众号提醒 ${nextSettings.todayReminderRecipientCount} 名未完成学生。`
+            ? `今天已创建公众号提醒，累计 ${nextSettings.todayReminderRecipientCount} 人次。`
             : '每天 08:00（北京时间）仅通过微信公众号提醒未完成学生；今天暂无可发送的提醒。'
           : '关闭后不再发送每日一题自动提醒。',
       });
     } catch (saveError) {
       toast({ type: 'error', title: getApiErrorMessage(saveError, '自动提醒设置保存失败') });
     } finally {
+      settingsMutationRef.current = false;
       setIsSavingAutoReminder(false);
+      if (settingsRequestRef.current === requestID) {
+        setIsLoadingSettings(false);
+      }
     }
   };
 
-  if (isLoading && !settings && !statistics) {
+  if (isLoadingSettings && !settings) {
     return (
       <div className="flex min-h-56 items-center justify-center gap-2 text-sm text-surface-500 dark:text-surface-400">
         <Loader2 className="h-5 w-5 animate-spin" aria-hidden="true" />
@@ -180,11 +231,11 @@ export function TeacherDailyQuestionPanel({ classId }: TeacherDailyQuestionPanel
     );
   }
 
-  if (error && !settings && !statistics) {
+  if (settingsError && !settings) {
     return (
       <div className="flex min-h-56 flex-col items-center justify-center gap-4 text-center">
-        <p className="text-sm text-red-600 dark:text-red-400">{error}</p>
-        <Button variant="outline" onClick={() => void loadData()}>
+        <p className="text-sm text-red-600 dark:text-red-400">{settingsError}</p>
+        <Button variant="outline" onClick={() => void loadSettings()}>
           <RefreshCw className="mr-2 h-4 w-4" aria-hidden="true" />
           重新加载
         </Button>
@@ -201,7 +252,11 @@ export function TeacherDailyQuestionPanel({ classId }: TeacherDailyQuestionPanel
             每日题统计
           </h3>
           <p className="mt-1 text-sm text-surface-500 dark:text-surface-400">
-            {statistics ? `${statistics.completedCount}/${statistics.studentCount} 人已完成` : '暂无统计'}
+            {isLoadingStatistics
+              ? '正在加载统计'
+              : statistics
+                ? `${statistics.completedCount}/${statistics.studentCount} 人已完成`
+                : '统计暂不可用'}
           </p>
         </div>
         <div className="flex items-center gap-2">
@@ -219,15 +274,23 @@ export function TeacherDailyQuestionPanel({ classId }: TeacherDailyQuestionPanel
             size="icon"
             aria-label="刷新每日题统计"
             title="刷新"
-            disabled={isLoading}
-            onClick={() => void loadData()}
+            disabled={isLoadingStatistics}
+            onClick={() => void loadStatistics()}
           >
-            <RefreshCw className={`h-4 w-4 ${isLoading ? 'animate-spin' : ''}`} aria-hidden="true" />
+            <RefreshCw className={`h-4 w-4 ${isLoadingStatistics ? 'animate-spin' : ''}`} aria-hidden="true" />
           </Button>
         </div>
       </div>
 
-      {error ? <p className="text-sm text-red-600 dark:text-red-400">{error}</p> : null}
+      {settingsError ? (
+        <div className="flex items-center justify-between gap-3 text-sm text-red-600 dark:text-red-400">
+          <span>{settingsError}</span>
+          <Button variant="ghost" size="sm" onClick={() => void loadSettings()}>
+            <RefreshCw className="mr-1.5 h-4 w-4" aria-hidden="true" />
+            重试设置
+          </Button>
+        </div>
+      ) : null}
 
       <div>
         <h3 className="mb-3 text-sm font-medium text-surface-700 dark:text-surface-300">题目分配</h3>
@@ -236,7 +299,7 @@ export function TeacherDailyQuestionPanel({ classId }: TeacherDailyQuestionPanel
             variant={displayedStrategy === 'personalized' ? 'primary' : 'outline'}
             className="rounded-r-none"
             aria-pressed={displayedStrategy === 'personalized'}
-            disabled={isSavingStrategy}
+            disabled={isSavingStrategy || isSavingAutoReminder}
             onClick={() => void updateStrategy('personalized')}
           >
             学生个性化题
@@ -245,7 +308,7 @@ export function TeacherDailyQuestionPanel({ classId }: TeacherDailyQuestionPanel
             variant={displayedStrategy === 'uniform' ? 'primary' : 'outline'}
             className="-ml-px rounded-l-none"
             aria-pressed={displayedStrategy === 'uniform'}
-            disabled={isSavingStrategy}
+            disabled={isSavingStrategy || isSavingAutoReminder}
             onClick={() => void updateStrategy('uniform')}
           >
             班级统一题
@@ -257,24 +320,19 @@ export function TeacherDailyQuestionPanel({ classId }: TeacherDailyQuestionPanel
             {strategyLabel(settings.effectiveStrategy)}；{settings.effectiveDate} 起切换为
             {strategyLabel(settings.strategy)}。
           </p>
-        ) : isConfiguringUniform ? (
-          <p className="mt-2 text-sm text-primary-700 dark:text-primary-300">
-            保存下方生效日题目后，再点击“班级统一题”完成启用。
-          </p>
         ) : null}
       </div>
 
       {showUniformSchedule ? (
         <UniformQuestionSchedule
           classId={classId}
-          onSaved={() => void loadData()}
+          onSaved={() => void reloadData()}
           onTodayAssignedChange={setTodayUniformAssigned}
         />
       ) : null}
 
       {settings?.strategy === 'personalized'
-        && settings.effectiveStrategy === 'personalized'
-        && !isConfiguringUniform ? (
+        && settings.effectiveStrategy === 'personalized' ? (
         <PersonalizedQuestionPool classId={classId} />
       ) : null}
 
@@ -296,7 +354,7 @@ export function TeacherDailyQuestionPanel({ classId }: TeacherDailyQuestionPanel
               <span className="text-sm text-surface-500 dark:text-surface-400">
                 {settings.autoReminderEnabled
                   ? settings.todayReminderSent
-                    ? `今日已提醒 ${settings.todayReminderRecipientCount} 人`
+                    ? `今日累计 ${settings.todayReminderRecipientCount} 人次`
                     : '今日尚未发送'
                   : '已关闭'}
               </span>
@@ -306,7 +364,7 @@ export function TeacherDailyQuestionPanel({ classId }: TeacherDailyQuestionPanel
                 aria-checked={settings.autoReminderEnabled}
                 aria-describedby="daily-question-auto-reminder-description"
                 aria-label="切换每日一题自动提醒"
-                disabled={isSavingAutoReminder}
+                disabled={isSavingAutoReminder || isSavingStrategy}
                 onClick={() => {
                   if (settings.autoReminderEnabled) {
                     void updateAutoReminder(false);
@@ -326,6 +384,23 @@ export function TeacherDailyQuestionPanel({ classId }: TeacherDailyQuestionPanel
               </button>
             </div>
           </div>
+        </div>
+      ) : null}
+
+      {statisticsError ? (
+        <div className="flex items-center justify-between gap-3 text-sm text-red-600 dark:text-red-400">
+          <span>{statisticsError}</span>
+          <Button variant="ghost" size="sm" onClick={() => void loadStatistics()}>
+            <RefreshCw className="mr-1.5 h-4 w-4" aria-hidden="true" />
+            重试统计
+          </Button>
+        </div>
+      ) : null}
+
+      {isLoadingStatistics && !statistics ? (
+        <div className="flex min-h-32 items-center justify-center gap-2 text-sm text-surface-500 dark:text-surface-400">
+          <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" />
+          正在加载每日题统计
         </div>
       ) : null}
 
@@ -381,23 +456,27 @@ export function TeacherDailyQuestionPanel({ classId }: TeacherDailyQuestionPanel
             )}
           </div>
 
-          <div className="flex justify-end border-t border-surface-200 pt-5 dark:border-surface-700">
+        </>
+      ) : null}
+
+      {settings ? (
+        <div className="space-y-2 border-t border-surface-200 pt-5 dark:border-surface-700">
+          <div className="flex justify-end">
             <Button
               variant="outline"
               isLoading={isSendingReminder}
               disabled={
                 selectedDate !== today
-                || Boolean(settings?.todayReminderSent)
-                || (settings?.effectiveStrategy === 'uniform' && !todayUniformReady)
+                || isSavingStrategy
+                || isSavingAutoReminder
+                || (settings.effectiveStrategy === 'uniform' && !todayUniformReady)
               }
               title={
                 selectedDate !== today
                   ? '仅支持提醒今日未完成学生'
-                  : settings?.todayReminderSent
-                    ? '今天已创建公众号提醒'
-                  : settings?.effectiveStrategy === 'uniform' && !todayUniformReady
+                  : settings.effectiveStrategy === 'uniform' && !todayUniformReady
                     ? '请先布置今日统一题'
-                    : '仅通过微信公众号提醒今日未完成学生'
+                    : '可重复创建微信公众号提醒'
               }
               onClick={() => void sendReminder()}
             >
@@ -406,9 +485,9 @@ export function TeacherDailyQuestionPanel({ classId }: TeacherDailyQuestionPanel
             </Button>
           </div>
           <p className="text-right text-xs text-surface-500 dark:text-surface-400">
-            仅发送微信公众号提醒，不会创建站内通知。
+            可重复提醒；今日累计 {settings.todayReminderRecipientCount} 人次。仅发送微信公众号提醒，不会创建站内通知。
           </p>
-        </>
+        </div>
       ) : null}
 
       <ConfirmDialog

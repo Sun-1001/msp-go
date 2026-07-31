@@ -21,6 +21,8 @@ var (
 	ErrBadRequest = errors.New("question bad request")
 	// ErrForbidden is returned when a question exists but is not owned by the current teacher.
 	ErrForbidden = errors.New("question forbidden")
+	// ErrScheduled is returned when a future uniform daily-question schedule still references the question.
+	ErrScheduled = errors.New("question is scheduled for daily question")
 )
 
 // Public question bank input limits shared by HTTP and application boundaries.

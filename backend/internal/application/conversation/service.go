@@ -40,9 +40,9 @@ type Repository interface {
 	// AcknowledgeConversationRead marks messages through a server-provided message cutoff.
 	AcknowledgeConversationRead(ctx context.Context, conversationID string, userID string, throughMessageID string) (bool, error)
 	// CreateConversation creates a new conversation between a student and teacher.
-	CreateConversation(ctx context.Context, creatorID string, creatorRole user.Role, targetID string, subject string, initialMessage string, attachments []messageattachment.Attachment, now time.Time) (ConversationDetail, error)
+	CreateConversation(ctx context.Context, creatorID string, creatorRole user.Role, targetID string, subject string, initialMessage string, attachments []messageattachment.Attachment) (ConversationDetail, error)
 	// SendMessage adds a message to a conversation.
-	SendMessage(ctx context.Context, conversationID string, senderID string, senderRole string, text string, attachments []messageattachment.Attachment, now time.Time) (Message, error)
+	SendMessage(ctx context.Context, conversationID string, senderID string, senderRole string, text string, attachments []messageattachment.Attachment) (Message, error)
 	// ArchiveConversation archives a conversation for one participant.
 	ArchiveConversation(ctx context.Context, conversationID string, userID string, role user.Role) (bool, error)
 	// ListTeacherContacts returns teachers the student can message.
@@ -67,7 +67,6 @@ type Message struct {
 type Contact struct {
 	ID          string `json:"id"`
 	DisplayName string `json:"display_name"`
-	TeacherName string `json:"teacher_name"` // Deprecated: kept temporarily for rolling frontend deployments.
 	Scope       string `json:"scope"`
 }
 
@@ -182,7 +181,7 @@ func (s *Service) CreateConversation(ctx context.Context, creatorID string, crea
 		!validText(subject) || !validText(initialMessage) {
 		return ConversationDetail{}, ErrInvalidInput
 	}
-	return s.repo.CreateConversation(ctx, creatorID, creatorRole, targetID, subject, initialMessage, normalizedAttachments, time.Now())
+	return s.repo.CreateConversation(ctx, creatorID, creatorRole, targetID, subject, initialMessage, normalizedAttachments)
 }
 
 // SendMessage sends a message in an existing conversation.
@@ -195,7 +194,7 @@ func (s *Service) SendMessage(ctx context.Context, conversationID string, sender
 		utf8.RuneCountInString(text) > maxMessageRunes || !validText(text) {
 		return Message{}, ErrInvalidInput
 	}
-	return s.repo.SendMessage(ctx, conversationID, senderID, senderRole, text, normalizedAttachments, time.Now())
+	return s.repo.SendMessage(ctx, conversationID, senderID, senderRole, text, normalizedAttachments)
 }
 
 // ArchiveConversation archives a conversation for the requesting participant.

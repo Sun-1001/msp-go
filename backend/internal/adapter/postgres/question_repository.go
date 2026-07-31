@@ -247,6 +247,17 @@ func (r QuestionRepository) CreateQuestion(ctx context.Context, ownerID string, 
 
 // UpdateQuestion updates a teacher-owned problem.
 func (r QuestionRepository) UpdateQuestion(ctx context.Context, ownerID string, questionID string, update questionapp.QuestionUpdate, now time.Time) (questionapp.Question, bool, error) {
+	var question questionapp.Question
+	var found bool
+	err := r.withTx(ctx, func(tx QuestionRepository) error {
+		var err error
+		question, found, err = tx.updateQuestion(ctx, ownerID, questionID, update, now)
+		return err
+	})
+	return question, found, err
+}
+
+func (r QuestionRepository) updateQuestion(ctx context.Context, ownerID string, questionID string, update questionapp.QuestionUpdate, now time.Time) (questionapp.Question, bool, error) {
 	current, ok, err := r.loadQuestionForUpdate(ctx, ownerID, questionID)
 	if err != nil || !ok {
 		if err == nil && !ok {
@@ -279,6 +290,15 @@ func (r QuestionRepository) UpdateQuestion(ctx context.Context, ownerID string, 
 		status, ok := questionStatusToDB(*update.Status)
 		if !ok {
 			return questionapp.Question{}, false, questionapp.ErrBadRequest
+		}
+		if status != "PUBLISHED" {
+			scheduled, err := r.hasFutureUniformSchedule(ctx, ownerID, []string{questionID})
+			if err != nil {
+				return questionapp.Question{}, false, err
+			}
+			if scheduled {
+				return questionapp.Question{}, false, questionapp.ErrScheduled
+			}
 		}
 		current.Status = status
 	}
@@ -340,6 +360,37 @@ func (r QuestionRepository) UpdateQuestion(ctx context.Context, ownerID string, 
 
 // DeleteQuestion soft-deletes a teacher-owned problem.
 func (r QuestionRepository) DeleteQuestion(ctx context.Context, ownerID string, questionID string, now time.Time) (bool, error) {
+	var deleted bool
+	err := r.withTx(ctx, func(tx QuestionRepository) error {
+		var err error
+		deleted, err = tx.deleteQuestion(ctx, ownerID, questionID, now)
+		return err
+	})
+	return deleted, err
+}
+
+func (r QuestionRepository) deleteQuestion(ctx context.Context, ownerID string, questionID string, now time.Time) (bool, error) {
+	_, found, err := r.loadQuestionForUpdate(ctx, ownerID, questionID)
+	if err != nil {
+		return false, err
+	}
+	if !found {
+		forbidden, err := r.questionVisibleButNotOwned(ctx, ownerID, questionID)
+		if err != nil {
+			return false, err
+		}
+		if forbidden {
+			return false, questionapp.ErrForbidden
+		}
+		return false, nil
+	}
+	scheduled, err := r.hasFutureUniformSchedule(ctx, ownerID, []string{questionID})
+	if err != nil {
+		return false, err
+	}
+	if scheduled {
+		return false, questionapp.ErrScheduled
+	}
 	tag, err := r.DB().Exec(ctx, `
 		UPDATE public.contents
 		SET deleted_at = $3,
@@ -356,13 +407,6 @@ func (r QuestionRepository) DeleteQuestion(ctx context.Context, ownerID string, 
 		return false, err
 	}
 	if tag.RowsAffected() == 0 {
-		forbidden, err := r.questionVisibleButNotOwned(ctx, ownerID, questionID)
-		if err != nil {
-			return false, err
-		}
-		if forbidden {
-			return false, questionapp.ErrForbidden
-		}
 		return false, nil
 	}
 	if err := r.insertAudit(ctx, questionID, ownerID, "DELETE", map[string]any{}, now); err != nil {
@@ -460,6 +504,52 @@ func (r QuestionRepository) BatchPublish(ctx context.Context, ownerID string, id
 
 // BatchDelete soft-deletes teacher-owned problem content.
 func (r QuestionRepository) BatchDelete(ctx context.Context, ownerID string, ids []string, now time.Time) (int, error) {
+	var deleted int
+	err := r.withTx(ctx, func(tx QuestionRepository) error {
+		var err error
+		deleted, err = tx.batchDelete(ctx, ownerID, ids, now)
+		return err
+	})
+	return deleted, err
+}
+
+func (r QuestionRepository) batchDelete(ctx context.Context, ownerID string, ids []string, now time.Time) (int, error) {
+	rows, err := r.DB().Query(ctx, `
+		SELECT id
+		FROM public.contents
+		WHERE owner_teacher_id = $1
+		  AND id = ANY($2::varchar[])
+		  AND deleted_at IS NULL
+		  AND type = 'PROBLEM'::public.contenttype
+		ORDER BY id
+		FOR UPDATE`, ownerID, ids)
+	if err != nil {
+		return 0, err
+	}
+	lockedIDs := make([]string, 0, len(ids))
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			rows.Close()
+			return 0, err
+		}
+		lockedIDs = append(lockedIDs, id)
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return 0, err
+	}
+	rows.Close()
+	if len(lockedIDs) == 0 {
+		return 0, nil
+	}
+	scheduled, err := r.hasFutureUniformSchedule(ctx, ownerID, lockedIDs)
+	if err != nil {
+		return 0, err
+	}
+	if scheduled {
+		return 0, questionapp.ErrScheduled
+	}
 	tag, err := r.DB().Exec(ctx, `
 		UPDATE public.contents
 		SET deleted_at = $3,
@@ -469,14 +559,14 @@ func (r QuestionRepository) BatchDelete(ctx context.Context, ownerID string, ids
 			AND deleted_at IS NULL
 			AND type = 'PROBLEM'::public.contenttype`,
 		ownerID,
-		ids,
+		lockedIDs,
 		now,
 	)
 	if err != nil {
 		return 0, err
 	}
 	count := int(tag.RowsAffected())
-	for _, id := range ids[:min(count, len(ids))] {
+	for _, id := range lockedIDs[:min(count, len(lockedIDs))] {
 		if err := r.insertAudit(ctx, id, ownerID, "DELETE", map[string]any{}, now); err != nil {
 			return count, err
 		}
@@ -575,7 +665,8 @@ func (r QuestionRepository) loadQuestionForUpdate(ctx context.Context, ownerID s
 		WHERE id = $1
 			AND owner_teacher_id = $2
 			AND deleted_at IS NULL
-			AND type = 'PROBLEM'::public.contenttype`,
+			AND type = 'PROBLEM'::public.contenttype
+		FOR UPDATE`,
 		questionID,
 		ownerID,
 	)
@@ -605,6 +696,23 @@ func (r QuestionRepository) loadQuestionForUpdate(ctx context.Context, ownerID s
 	current.Tags = tags
 	current.Meta = meta
 	return current, true, nil
+}
+
+func (r QuestionRepository) hasFutureUniformSchedule(ctx context.Context, ownerID string, questionIDs []string) (bool, error) {
+	if len(questionIDs) == 0 {
+		return false, nil
+	}
+	return r.Exists(ctx, `
+		SELECT EXISTS (
+			SELECT 1
+			FROM public.daily_question_class_selections selection
+			JOIN public.classes class ON class.id = selection.class_id
+			WHERE selection.content_id = ANY($2::varchar[])
+			  AND class.teacher_id = $1
+			  AND selection.assignment_date >= (CURRENT_TIMESTAMP AT TIME ZONE 'Asia/Shanghai')::date
+			  AND selection.source = 'teacher_bank'
+			  AND selection.selection_reason = 'teacher_uniform'
+		)`, ownerID, questionIDs)
 }
 
 func (r QuestionRepository) questionVisibleButNotOwned(ctx context.Context, ownerID string, questionID string) (bool, error) {
@@ -818,7 +926,9 @@ func questionWhereClause(ownerID string, filter questionapp.ListFilter) (string,
 		args = append(args, filter.Type)
 		conditions = append(conditions, fmt.Sprintf("c.meta->>'type' = $%d", len(args)))
 	}
-	if status, ok := questionStatusToDB(filter.Status); ok {
+	if strings.EqualFold(strings.TrimSpace(filter.Status), "active") {
+		conditions = append(conditions, "c.status IN ('DRAFT'::public.contentstatus, 'PUBLISHED'::public.contentstatus)")
+	} else if status, ok := questionStatusToDB(filter.Status); ok {
 		args = append(args, status)
 		conditions = append(conditions, fmt.Sprintf("c.status = $%d::public.contentstatus", len(args)))
 	}

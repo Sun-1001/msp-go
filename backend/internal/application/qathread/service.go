@@ -34,8 +34,8 @@ type Repository interface {
 	ListThreads(ctx context.Context, userID string, role user.Role, search string, status string, className string, teacherID string, page, pageSize int) ([]any, int, error)
 	GetThread(ctx context.Context, threadID string, userID string, role user.Role, page, pageSize int) (any, bool, error)
 	AcknowledgeThreadRead(ctx context.Context, threadID string, userID string, role user.Role, throughMessageID string) (bool, error)
-	CreateThread(ctx context.Context, studentID string, teacherID string, content string, source string, attachments []messageattachment.Attachment, now time.Time) (ThreadDetail, error)
-	CreateThreadMessage(ctx context.Context, threadID string, senderID string, senderRole string, text string, attachments []messageattachment.Attachment, now time.Time) (Message, error)
+	CreateThread(ctx context.Context, studentID string, teacherID string, content string, source string, attachments []messageattachment.Attachment) (ThreadDetail, error)
+	CreateThreadMessage(ctx context.Context, threadID string, senderID string, senderRole string, text string, attachments []messageattachment.Attachment) (Message, error)
 	UpdateThreadStatus(ctx context.Context, threadID string, teacherID string, status string) (bool, error)
 }
 
@@ -189,7 +189,7 @@ func (s *Service) CreateThread(ctx context.Context, studentID string, teacherID 
 		utf8.RuneCountInString(source) > maxSourceRunes || !validText(content) || !validText(source) {
 		return ThreadDetail{}, ErrInvalidInput
 	}
-	return s.repo.CreateThread(ctx, studentID, teacherID, content, source, normalizedAttachments, time.Now())
+	return s.repo.CreateThread(ctx, studentID, teacherID, content, source, normalizedAttachments)
 }
 
 // CreateThreadMessage adds a message to a thread.
@@ -202,7 +202,7 @@ func (s *Service) CreateThreadMessage(ctx context.Context, threadID string, send
 		utf8.RuneCountInString(text) > maxMessageRunes || !validText(text) {
 		return Message{}, ErrInvalidInput
 	}
-	return s.repo.CreateThreadMessage(ctx, threadID, senderID, senderRole, text, normalizedAttachments, time.Now())
+	return s.repo.CreateThreadMessage(ctx, threadID, senderID, senderRole, text, normalizedAttachments)
 }
 
 // UpdateThreadStatus updates a thread's status.

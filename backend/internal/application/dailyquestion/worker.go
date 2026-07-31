@@ -7,6 +7,8 @@ import (
 	"log/slog"
 	"sync"
 	"time"
+
+	airiskapp "mathstudy/backend/internal/application/airisk"
 )
 
 const (
@@ -101,7 +103,7 @@ func (w *Worker) Run(ctx context.Context) error {
 
 		runDate := shanghaiDay(w.now())
 		w.logger.Info("daily question batch started", "assignment_date", dateString(runDate))
-		err := w.prepareDate(ctx, runDate)
+		retryNeeded, err := w.prepareDate(ctx, runDate)
 		if ctx.Err() != nil {
 			return nil
 		}
@@ -120,30 +122,41 @@ func (w *Worker) Run(ctx context.Context) error {
 			nextRun = nextShanghaiWorkerRetry(now)
 			continue
 		}
+		if retryNeeded {
+			w.logger.Info(
+				"daily question batch completed with recoverable preparations",
+				"assignment_date", dateString(runDate),
+				"retry_delay", dailyWorkerRetryDelay,
+			)
+			nextRun = nextShanghaiWorkerRetry(now)
+			continue
+		}
 		w.logger.Info("daily question batch completed", "assignment_date", dateString(runDate))
 		nextRun = nextShanghaiMidnight(now)
 	}
 }
 
-func (w *Worker) prepareDate(ctx context.Context, date time.Time) error {
+func (w *Worker) prepareDate(ctx context.Context, date time.Time) (bool, error) {
 	dayCtx, cancel := context.WithDeadline(ctx, date.AddDate(0, 0, 1))
 	defer cancel()
 
 	afterID := ""
+	retryNeeded := false
 	for dayCtx.Err() == nil && shanghaiDay(w.now()).Equal(date) {
 		studentIDs, err := w.listActiveStudentPage(dayCtx, afterID)
 		if err != nil {
 			if dayCtx.Err() != nil {
-				return nil
+				return retryNeeded, nil
 			}
-			return fmt.Errorf("list active students for daily question: %w", err)
+			return retryNeeded, fmt.Errorf("list active students for daily question: %w", err)
 		}
 		if len(studentIDs) == 0 {
-			return nil
+			return retryNeeded, nil
 		}
 
-		failures := w.prepareBatch(dayCtx, date, studentIDs)
-		for errorCode, count := range failures {
+		batch := w.prepareBatch(dayCtx, date, studentIDs)
+		retryNeeded = retryNeeded || batch.retryNeeded
+		for errorCode, count := range batch.failures {
 			w.logger.Warn(
 				"daily question batch student preparations failed",
 				"assignment_date", dateString(date),
@@ -152,17 +165,17 @@ func (w *Worker) prepareDate(ctx context.Context, date time.Time) error {
 			)
 		}
 		if dayCtx.Err() != nil || !shanghaiDay(w.now()).Equal(date) {
-			return nil
+			return retryNeeded, nil
 		}
 		afterID = studentIDs[len(studentIDs)-1]
 		if len(studentIDs) < w.config.BatchSize {
-			return nil
+			return retryNeeded, nil
 		}
 		if err := waitForWorkerTimer(dayCtx, w.config.BatchInterval); err != nil {
-			return nil
+			return retryNeeded, nil
 		}
 	}
-	return nil
+	return retryNeeded, nil
 }
 
 func (w *Worker) listActiveStudentPage(ctx context.Context, afterID string) ([]string, error) {
@@ -183,9 +196,19 @@ func (w *Worker) listActiveStudentPage(ctx context.Context, afterID string) ([]s
 	return nil, lastErr
 }
 
-func (w *Worker) prepareBatch(ctx context.Context, date time.Time, studentIDs []string) map[string]int {
+type workerBatchResult struct {
+	failures    map[string]int
+	retryNeeded bool
+}
+
+type workerStudentResult struct {
+	failureCode string
+	retryNeeded bool
+}
+
+func (w *Worker) prepareBatch(ctx context.Context, date time.Time, studentIDs []string) workerBatchResult {
 	slots := make(chan struct{}, w.config.Concurrency)
-	results := make(chan string, len(studentIDs))
+	results := make(chan workerStudentResult, len(studentIDs))
 	var waitGroup sync.WaitGroup
 
 dispatch:
@@ -206,20 +229,93 @@ dispatch:
 				return
 			}
 			studentCtx, cancel := context.WithTimeout(ctx, w.config.StudentTimeout)
-			_, err := w.preparer.PrepareTodayInBackground(studentCtx, studentID)
+			response, err := w.preparer.PrepareTodayInBackground(studentCtx, studentID)
 			cancel()
-			if err != nil && ctx.Err() == nil {
-				results <- workerPreparationErrorCode(err)
+			if ctx.Err() == nil {
+				result := classifyWorkerPreparation(response, err)
+				if result.failureCode != "" || result.retryNeeded {
+					results <- result
+				}
 			}
 		}(studentID)
 	}
 	waitGroup.Wait()
 	close(results)
-	failures := make(map[string]int)
-	for errorCode := range results {
-		failures[errorCode]++
+	batch := workerBatchResult{failures: make(map[string]int)}
+	for result := range results {
+		if result.failureCode != "" {
+			batch.failures[result.failureCode]++
+		}
+		batch.retryNeeded = batch.retryNeeded || result.retryNeeded
 	}
-	return failures
+	return batch
+}
+
+func classifyWorkerPreparation(response TodayResponse, err error) workerStudentResult {
+	failureCode := ""
+	if response.FailureCode != nil {
+		failureCode = *response.FailureCode
+	}
+
+	switch response.Status {
+	case StatusPreparing:
+		if failureCode == "" {
+			failureCode = StatusPreparing
+		}
+		return workerStudentResult{
+			failureCode: failureCode,
+			retryNeeded: true,
+		}
+	case StatusUnavailable:
+		if failureCode == "" {
+			failureCode = StatusUnavailable
+		}
+		return workerStudentResult{
+			failureCode: failureCode,
+			retryNeeded: response.RetryCount < maxBackgroundPreparationRetries &&
+				workerFailureIsRecoverable(failureCode, err),
+		}
+	}
+
+	if err == nil {
+		return workerStudentResult{}
+	}
+	return workerStudentResult{
+		failureCode: workerPreparationErrorCode(err),
+		retryNeeded: workerPreparationErrorIsRecoverable(err),
+	}
+}
+
+func workerFailureIsRecoverable(failureCode string, err error) bool {
+	switch failureCode {
+	case "ai_generation_unavailable",
+		"ai_generation_timeout",
+		"solver_unavailable",
+		"ai_generation_invalid_response",
+		"ai_generation_invalid_content",
+		"ai_generation_rate_limited",
+		"history_lookup_failed",
+		"recent_attempt_lookup_failed",
+		"content_selection_failed",
+		"repeat_fallback_failed",
+		"assignment_finalize_failed",
+		"question_repeated_during_assignment",
+		"content_unavailable",
+		FailureTeacherNotAssigned:
+		return true
+	case "ai_access_unavailable":
+		return errors.Is(err, airiskapp.ErrUnavailable) || errors.Is(err, airiskapp.ErrConcurrencyExceeded)
+	default:
+		return false
+	}
+}
+
+func workerPreparationErrorIsRecoverable(err error) bool {
+	return !errors.Is(err, ErrNotFound) &&
+		!errors.Is(err, ErrForbidden) &&
+		!errors.Is(err, airiskapp.ErrAccessBlocked) &&
+		!errors.Is(err, airiskapp.ErrContentBlocked) &&
+		!errors.Is(err, airiskapp.ErrQuotaExceeded)
 }
 
 func workerPreparationErrorCode(err error) string {

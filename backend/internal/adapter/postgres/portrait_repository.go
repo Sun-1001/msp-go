@@ -2,6 +2,7 @@ package postgres
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 
@@ -169,6 +170,23 @@ func NewPortraitRepository(db Querier) (PortraitRepository, error) {
 		return PortraitRepository{}, err
 	}
 	return PortraitRepository{Repository: base}, nil
+}
+
+// WithTx runs fn in one database transaction when the repository is pool-backed.
+func (r PortraitRepository) WithTx(ctx context.Context, fn func(context.Context, portraitapp.Repository) error) error {
+	if fn == nil {
+		return errors.New("portrait transaction function is nil")
+	}
+	return withRepositoryTx(ctx, "portrait", r.Repository, func(base Repository) PortraitRepository {
+		return PortraitRepository{Repository: base}
+	}, func(txRepo PortraitRepository) error {
+		return fn(ctx, txRepo)
+	})
+}
+
+// LockStudentTracking serializes portrait writes with mastery updates.
+func (r PortraitRepository) LockStudentTracking(ctx context.Context, userID string) error {
+	return lockStudentTracking(ctx, r.DB(), userID)
 }
 
 // GetProfile returns a student profile when it exists.

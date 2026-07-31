@@ -19,6 +19,8 @@ import (
 
 // Repository is the persistence surface required by student portrait use cases.
 type Repository interface {
+	WithTx(context.Context, func(context.Context, Repository) error) error
+	LockStudentTracking(context.Context, string) error
 	GetProfile(context.Context, string) (Profile, bool, error)
 	CreateProfile(context.Context, string, time.Time) (Profile, error)
 	GetRangeStats(context.Context, string, time.Time, time.Time) (RangeStats, error)
@@ -220,12 +222,34 @@ func (s *Service) GeneratePortrait(ctx context.Context, userID string, rangeType
 	reportInput.FallbackContent = buildPortraitContent(reportInput)
 	content := s.generatePortraitContent(ctx, reportInput)
 	generatedAt := learningrange.InPlatformZone(s.now())
-	saved, ok, err := s.repo.SavePortrait(ctx, userID, content, rangeType, generatedAt.UTC(), window.SnapshotAt.UTC(), profile.PortraitRevision)
+	var saved Profile
+	err = s.repo.WithTx(ctx, func(txCtx context.Context, repo Repository) error {
+		if err := repo.LockStudentTracking(txCtx, userID); err != nil {
+			return err
+		}
+		var (
+			ok      bool
+			saveErr error
+		)
+		saved, ok, saveErr = repo.SavePortrait(
+			txCtx,
+			userID,
+			content,
+			rangeType,
+			generatedAt.UTC(),
+			window.SnapshotAt.UTC(),
+			profile.PortraitRevision,
+		)
+		if saveErr != nil {
+			return saveErr
+		}
+		if !ok {
+			return ErrPortraitChanged
+		}
+		return nil
+	})
 	if err != nil {
 		return GenerateResponse{}, err
-	}
-	if !ok {
-		return GenerateResponse{}, ErrPortraitChanged
 	}
 	return GenerateResponse{
 		PortraitContent:     ptrutil.ValueOrZero(saved.PortraitContent),
@@ -258,12 +282,21 @@ func (s *Service) ClearPortrait(ctx context.Context, userID string) (ClearRespon
 		return ClearResponse{}, err
 	}
 	updatedAt := s.now().UTC()
-	ok, err := s.repo.ClearPortrait(ctx, userID, updatedAt, profile.PortraitRevision)
+	err = s.repo.WithTx(ctx, func(txCtx context.Context, repo Repository) error {
+		if err := repo.LockStudentTracking(txCtx, userID); err != nil {
+			return err
+		}
+		ok, err := repo.ClearPortrait(txCtx, userID, updatedAt, profile.PortraitRevision)
+		if err != nil {
+			return err
+		}
+		if !ok {
+			return ErrPortraitChanged
+		}
+		return nil
+	})
 	if err != nil {
 		return ClearResponse{}, err
-	}
-	if !ok {
-		return ClearResponse{}, ErrPortraitChanged
 	}
 	return ClearResponse{Cleared: true, Message: "画像已清除"}, nil
 }

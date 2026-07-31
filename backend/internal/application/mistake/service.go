@@ -22,10 +22,14 @@ var (
 	ErrNotFound = errors.New("mistake not found")
 	// ErrProfileNotFound is returned when a mistake write needs a missing student profile.
 	ErrProfileNotFound = errors.New("student profile not found")
+	// ErrDailyAttemptLocked protects the immutable evidence behind a daily completion.
+	ErrDailyAttemptLocked = errors.New("daily question attempts cannot be deleted")
 )
 
 // Repository is the persistence surface required by mistake book use cases.
 type Repository interface {
+	WithTx(context.Context, func(context.Context, Repository) error) error
+	LockStudentTracking(context.Context, string) error
 	ListMistakes(context.Context, string, ListFilter) ([]MistakeRow, error)
 	ListMistakePage(context.Context, string, ListQuery) ([]MistakeListRow, int, error)
 	GetMistakeByAttempt(context.Context, string, string) (MistakeRow, bool, error)
@@ -40,7 +44,7 @@ type Repository interface {
 
 // ReviewEligibility checks whether an owned mistake's exercise remains submittable.
 type ReviewEligibility interface {
-	CanSubmitExercise(context.Context, string, string) (bool, error)
+	CanSubmitReviewExercise(context.Context, string, string, string) (bool, error)
 }
 
 // ListFilter stores database-level mistake filters.
@@ -98,14 +102,17 @@ type AttemptHistoryRow struct {
 
 // Attempt stores student answer data.
 type Attempt struct {
-	ID               string
-	ContentID        string
-	StudentAnswer    string
-	StudentSteps     []string
-	IsCorrect        bool
-	Score            float64
-	SubmittedAt      *time.Time
-	TimeSpentSeconds int
+	ID                string
+	ContentID         string
+	DailyAssignmentID string
+	CanReview         bool
+	CanDelete         bool
+	StudentAnswer     string
+	StudentSteps      []string
+	IsCorrect         bool
+	Score             float64
+	SubmittedAt       *time.Time
+	TimeSpentSeconds  int
 }
 
 // Content stores exercise-like content fields used by the mistake book.
@@ -151,6 +158,8 @@ type MistakeItem struct {
 	Mastery        MistakeMastery   `json:"mastery"`
 	ErrorCount     int              `json:"error_count"`
 	LastReviewedAt *string          `json:"last_reviewed_at"`
+	CanReview      bool             `json:"can_review"`
+	CanDelete      bool             `json:"can_delete"`
 }
 
 // MistakeExercise stores exercise summary data for a mistake row.
@@ -319,6 +328,7 @@ type ReviewExercise struct {
 type ReviewContext struct {
 	IsReview            bool    `json:"is_review"`
 	OriginalAttemptID   string  `json:"original_attempt_id"`
+	DailyAssignmentID   string  `json:"daily_assignment_id,omitempty"`
 	PreviousAnswer      string  `json:"previous_answer"`
 	PreviousErrorType   *string `json:"previous_error_type"`
 	PreviousExplanation string  `json:"previous_explanation"`
@@ -448,50 +458,71 @@ func (s *Service) GetMistakeDetail(ctx context.Context, userID string, attemptID
 
 // MarkAsMastered raises the related concept mastery values in the student profile.
 func (s *Service) MarkAsMastered(ctx context.Context, userID string, attemptID string) (MarkAsMasteredResponse, error) {
-	attemptContent, ok, err := s.repo.GetAttemptContent(ctx, userID, attemptID)
-	if err != nil {
-		return MarkAsMasteredResponse{}, err
-	}
-	if !ok {
-		return MarkAsMasteredResponse{}, ErrNotFound
-	}
-	profile, ok, err := s.repo.GetProfile(ctx, userID)
-	if err != nil {
-		return MarkAsMasteredResponse{}, err
-	}
-	if !ok {
-		return MarkAsMasteredResponse{}, ErrProfileNotFound
-	}
-
-	mastery := maputil.CloneFloatMap(profile.MasteryVector)
-	update := map[string]float64{}
-	for _, conceptID := range attemptContent.Content.ConceptIDs {
-		current := mastery[conceptID]
-		if current == 0 {
-			current = 0.5
+	var response MarkAsMasteredResponse
+	err := s.repo.WithTx(ctx, func(txCtx context.Context, repo Repository) error {
+		if err := repo.LockStudentTracking(txCtx, userID); err != nil {
+			return err
 		}
-		next := math.Min(1.0, math.Max(0.8, current+0.2))
-		mastery[conceptID] = next
-		update[conceptID] = next
-	}
+		attemptContent, ok, err := repo.GetAttemptContent(txCtx, userID, attemptID)
+		if err != nil {
+			return err
+		}
+		if !ok {
+			return ErrNotFound
+		}
+		profile, ok, err := repo.GetProfile(txCtx, userID)
+		if err != nil {
+			return err
+		}
+		if !ok {
+			return ErrProfileNotFound
+		}
 
-	now := s.now()
-	updated, err := s.repo.UpdateProfileMastery(ctx, userID, mastery, now)
+		mastery := maputil.CloneFloatMap(profile.MasteryVector)
+		update := map[string]float64{}
+		for _, conceptID := range attemptContent.Content.ConceptIDs {
+			current := mastery[conceptID]
+			if current == 0 {
+				current = 0.5
+			}
+			next := math.Min(1.0, math.Max(0.8, current+0.2))
+			mastery[conceptID] = next
+			update[conceptID] = next
+		}
+
+		now := s.now()
+		updated, err := repo.UpdateProfileMastery(txCtx, userID, mastery, now)
+		if err != nil {
+			return err
+		}
+		if !updated {
+			return ErrProfileNotFound
+		}
+		response = MarkAsMasteredResponse{
+			Success:       true,
+			MasteredAt:    timefmt.DateTimeMicros(now),
+			MasteryUpdate: update,
+		}
+		return nil
+	})
 	if err != nil {
 		return MarkAsMasteredResponse{}, err
 	}
-	if !updated {
-		return MarkAsMasteredResponse{}, ErrProfileNotFound
-	}
-	return MarkAsMasteredResponse{
-		Success:       true,
-		MasteredAt:    timefmt.DateTimeMicros(now),
-		MasteryUpdate: update,
-	}, nil
+	return response, nil
 }
 
-// DeleteMistake deletes the attempt row; diagnosis reports are removed by database cascade.
+// DeleteMistake deletes only regular mistake attempts; daily completion evidence is immutable.
 func (s *Service) DeleteMistake(ctx context.Context, userID string, attemptID string) (DeleteResponse, error) {
+	row, ok, err := s.repo.GetMistakeByAttempt(ctx, userID, strings.TrimSpace(attemptID))
+	if err != nil {
+		return DeleteResponse{}, err
+	}
+	if !ok || row.Attempt.IsCorrect {
+		return DeleteResponse{}, ErrNotFound
+	}
+	if !row.Attempt.CanDelete {
+		return DeleteResponse{}, ErrDailyAttemptLocked
+	}
 	deleted, err := s.repo.DeleteAttempt(ctx, userID, attemptID)
 	if err != nil {
 		return DeleteResponse{}, err
@@ -534,6 +565,18 @@ func (s *Service) GetReviewExercise(ctx context.Context, userID string, focusCon
 		if avgMastery >= 0.5 || errorCount < 2 {
 			continue
 		}
+		canSubmit, err := s.reviewEligibility.CanSubmitReviewExercise(
+			ctx,
+			userID,
+			row.Content.ID,
+			row.Attempt.DailyAssignmentID,
+		)
+		if err != nil {
+			return ReviewExerciseResponse{}, err
+		}
+		if !canSubmit {
+			continue
+		}
 		candidate := reviewCandidate{
 			row:        row,
 			avgMastery: avgMastery,
@@ -560,7 +603,12 @@ func (s *Service) GetReviewExerciseByAttempt(ctx context.Context, userID string,
 	if !ok || row.Attempt.IsCorrect || row.Attempt.SubmittedAt == nil {
 		return ReviewExerciseResponse{}, ErrNotFound
 	}
-	canSubmit, err := s.reviewEligibility.CanSubmitExercise(ctx, userID, row.Content.ID)
+	canSubmit, err := s.reviewEligibility.CanSubmitReviewExercise(
+		ctx,
+		userID,
+		row.Content.ID,
+		row.Attempt.DailyAssignmentID,
+	)
 	if err != nil {
 		return ReviewExerciseResponse{}, err
 	}
@@ -674,6 +722,8 @@ func toMistakeItem(item listItemData) MistakeItem {
 			Trend:    masteryTrend(item.avgMastery),
 		},
 		ErrorCount: item.errorCount,
+		CanReview:  row.Attempt.CanReview,
+		CanDelete:  row.Attempt.CanDelete,
 	}
 }
 
@@ -759,6 +809,7 @@ func toReviewResponse(candidate reviewCandidate) ReviewExerciseResponse {
 		Context: ReviewContext{
 			IsReview:            true,
 			OriginalAttemptID:   row.Attempt.ID,
+			DailyAssignmentID:   row.Attempt.DailyAssignmentID,
 			PreviousAnswer:      row.Attempt.StudentAnswer,
 			PreviousErrorType:   ptrutil.Clone(row.Diagnosis.ErrorType),
 			PreviousExplanation: row.Diagnosis.Explanation,

@@ -52,6 +52,18 @@ func (r Repository) Exists(ctx context.Context, sql string, args ...any) (bool, 
 	return exists, nil
 }
 
+// lockStudentTracking serializes learning-profile and mastery writes for one
+// student without participating in unrelated user-row lock ordering.
+func lockStudentTracking(ctx context.Context, db Querier, userID string) error {
+	_, err := db.Exec(ctx, `
+		SELECT pg_advisory_xact_lock(
+			hashtextextended('student-learning-tracking:' || $1, 0)
+		)`,
+		userID,
+	)
+	return err
+}
+
 func withRepositoryTx[T any](
 	ctx context.Context,
 	scope string,

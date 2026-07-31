@@ -19,14 +19,10 @@ type NoticeRepository struct {
 }
 
 // NewNoticeRepository creates a PostgreSQL-backed notice repository.
-func NewNoticeRepository(db Querier, reminders ...WechatReminderEnqueuer) (NoticeRepository, error) {
+func NewNoticeRepository(db Querier, reminderEnqueuer WechatReminderEnqueuer) (NoticeRepository, error) {
 	base, err := NewRepository(db)
 	if err != nil {
 		return NoticeRepository{}, err
-	}
-	var reminderEnqueuer WechatReminderEnqueuer
-	if len(reminders) > 0 {
-		reminderEnqueuer = reminders[0]
 	}
 	return NoticeRepository{Repository: base, wechatReminders: reminderEnqueuer}, nil
 }

@@ -30,7 +30,6 @@ type Config struct {
 
 // Binding is the internal persistence model for an Official Account binding.
 type Binding struct {
-	UserID     string
 	OpenID     string
 	Subscribed bool
 	BoundAt    *time.Time
@@ -39,7 +38,7 @@ type Binding struct {
 // Repository persists subscriptions and user bindings.
 type Repository interface {
 	GetByUserID(context.Context, string, string) (Binding, bool, error)
-	Bind(context.Context, string, string, string, time.Time, time.Time) (Binding, error)
+	Bind(context.Context, string, string, string, time.Time, time.Time) error
 	SetSubscription(context.Context, string, string, bool, time.Time, time.Time) error
 	Unbind(context.Context, string, string, time.Time) error
 }
@@ -95,8 +94,7 @@ type IncomingMessage struct {
 
 // ProcessResult controls the passive response to an inbound callback.
 type ProcessResult struct {
-	Reply     string
-	Duplicate bool
+	Reply string
 }
 
 // EventClaim describes whether a callback is new, currently running, or done.

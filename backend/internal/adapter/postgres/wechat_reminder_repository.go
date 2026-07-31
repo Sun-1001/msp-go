@@ -156,6 +156,129 @@ func (e WechatReminderEnqueuer) EnqueueDailyQuestionRecipients(
 	return int(tag.RowsAffected()), nil
 }
 
+// ReconcileAutomaticDailyQuestionRecipients adds newly eligible students and
+// recovers skipped or dead jobs without sending an automatic reminder twice.
+func (e WechatReminderEnqueuer) ReconcileAutomaticDailyQuestionRecipients(
+	ctx context.Context,
+	db Querier,
+	eventID string,
+	classID string,
+	assignmentDate time.Time,
+) (int, error) {
+	return e.reconcileDailyQuestionRecipients(ctx, db, eventID, classID, assignmentDate)
+}
+
+func (e WechatReminderEnqueuer) reconcileDailyQuestionRecipients(
+	ctx context.Context,
+	db Querier,
+	eventID string,
+	classID string,
+	assignmentDate time.Time,
+) (int, error) {
+	if !e.enabled {
+		return 0, nil
+	}
+	if db == nil || !validWechatReminderText(eventID, maxWechatReminderIDBytes) ||
+		!validWechatReminderText(classID, maxWechatReminderIDBytes) || assignmentDate.IsZero() {
+		return 0, errors.New("invalid daily question wechat reminder requeue input")
+	}
+	var queued int
+	err := db.QueryRow(ctx, `
+		WITH recipients AS MATERIALIZED (
+			SELECT DISTINCT assignment.student_id
+			FROM public.daily_question_assignments assignment
+			JOIN public.class_enrollments enrollment
+			  ON enrollment.class_id = assignment.class_id
+			 AND enrollment.student_id = assignment.student_id
+			JOIN public.users student
+			  ON student.id = assignment.student_id
+			WHERE assignment.class_id = $4
+			  AND assignment.assignment_date = $5::date
+			  AND assignment.status = 'ready'
+			  AND assignment.content_id IS NOT NULL
+			  AND student.role = 'STUDENT'::public.userrole
+			  AND student.is_active = true
+			  AND student.status = 'ACTIVE'::public.userstatus
+		), reset_jobs AS (
+			UPDATE public.wechat_message_reminder_jobs job
+			SET status = 'pending',
+				attempt_count = 0,
+				next_attempt_at = CURRENT_TIMESTAMP AT TIME ZONE 'UTC',
+				lease_owner = NULL,
+				lease_expires_at = NULL,
+				last_error_code = NULL,
+				provider_error_code = NULL,
+				finished_at = NULL
+			FROM recipients
+			WHERE job.app_id = $1
+			  AND job.event_type = $2
+			  AND job.source_id = $3
+			  AND job.recipient_user_id = recipients.student_id
+				  AND job.status IN ('skipped', 'dead')
+			RETURNING job.id
+		), inserted_jobs AS (
+			INSERT INTO public.wechat_message_reminder_jobs (
+				app_id, event_type, source_id, recipient_user_id
+			)
+			SELECT $1, $2, $3, recipients.student_id
+			FROM recipients
+			ON CONFLICT (app_id, event_type, source_id, recipient_user_id) DO NOTHING
+			RETURNING id
+		)
+		SELECT (SELECT COUNT(*) FROM reset_jobs) + (SELECT COUNT(*) FROM inserted_jobs)`,
+		e.appID,
+		string(wechatreminder.EventDailyQuestion),
+		eventID,
+		classID,
+		assignmentDate,
+	).Scan(&queued)
+	if err != nil {
+		return 0, fmt.Errorf("reconcile daily question wechat reminders: %w", err)
+	}
+	return queued, nil
+}
+
+// RequeueDailyQuestionRecipient recovers one skipped or dead daily-question
+// job while preserving pending, processing, and already sent deliveries.
+func (e WechatReminderEnqueuer) RequeueDailyQuestionRecipient(
+	ctx context.Context,
+	db Querier,
+	eventID string,
+	recipientUserID string,
+) (int, error) {
+	if !e.enabled {
+		return 0, nil
+	}
+	if db == nil || !validWechatReminderText(eventID, maxWechatReminderIDBytes) ||
+		!validWechatReminderText(recipientUserID, maxWechatReminderIDBytes) {
+		return 0, errors.New("invalid daily question wechat reminder recipient requeue input")
+	}
+	tag, err := db.Exec(ctx, `
+		UPDATE public.wechat_message_reminder_jobs
+		SET status = 'pending',
+			attempt_count = 0,
+			next_attempt_at = CURRENT_TIMESTAMP AT TIME ZONE 'UTC',
+			lease_owner = NULL,
+			lease_expires_at = NULL,
+			last_error_code = NULL,
+			provider_error_code = NULL,
+			finished_at = NULL
+		WHERE app_id = $1
+		  AND event_type = $2
+		  AND source_id = $3
+		  AND recipient_user_id = $4
+		  AND status IN ('skipped', 'dead')`,
+		e.appID,
+		string(wechatreminder.EventDailyQuestion),
+		eventID,
+		recipientUserID,
+	)
+	if err != nil {
+		return 0, fmt.Errorf("requeue daily question wechat reminder recipient: %w", err)
+	}
+	return int(tag.RowsAffected()), nil
+}
+
 // RequeueUnconfirmedNoticeRecipients schedules another notice reminder without duplicating active jobs.
 func (e WechatReminderEnqueuer) RequeueUnconfirmedNoticeRecipients(ctx context.Context, db Querier, noticeID string) (int, error) {
 	if !e.enabled {
@@ -467,7 +590,7 @@ func (r WechatReminderRepository) resolveSourceDelivery(
 			              JOIN public.contents content ON content.id = selection.content_id
 			              WHERE selection.class_id = event.class_id
 			                AND selection.content_id = event.remaining_content_id
-			                AND selection.assignment_date >= event.assignment_date
+			                AND selection.assignment_date >= (CURRENT_TIMESTAMP AT TIME ZONE 'Asia/Shanghai')::date
 			                AND selection.source = 'teacher_bank'
 			                AND selection.selection_reason = 'teacher_uniform'
 			                AND content.type = 'PROBLEM'::public.contenttype
@@ -486,7 +609,7 @@ func (r WechatReminderRepository) resolveSourceDelivery(
 			              FROM public.daily_question_class_selections selection
 			              JOIN public.contents content ON content.id = selection.content_id
 			              WHERE selection.class_id = event.class_id
-			                AND selection.assignment_date >= event.assignment_date
+			                AND selection.assignment_date >= (CURRENT_TIMESTAMP AT TIME ZONE 'Asia/Shanghai')::date
 			                AND selection.source = 'teacher_bank'
 			                AND selection.selection_reason = 'teacher_uniform'
 			                AND content.type = 'PROBLEM'::public.contenttype

@@ -66,7 +66,7 @@ func (w *ReminderWorker) Run(ctx context.Context) error {
 	}
 }
 
-func (w *ReminderWorker) dispatch(ctx context.Context) bool {
+func (w *ReminderWorker) dispatch(ctx context.Context) {
 	now := w.now()
 	if err := w.dispatcher.DispatchScheduledReminders(ctx, now); err != nil && ctx.Err() == nil {
 		w.logger.Error(
@@ -74,9 +74,7 @@ func (w *ReminderWorker) dispatch(ctx context.Context) bool {
 			"assignment_date", dateString(shanghaiDay(now)),
 			"error_code", "repository_error",
 		)
-		return false
 	}
-	return ctx.Err() == nil
 }
 
 func nextShanghaiReminderRun(value time.Time) time.Time {

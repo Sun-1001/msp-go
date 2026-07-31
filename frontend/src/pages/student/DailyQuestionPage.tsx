@@ -97,6 +97,8 @@ function selectionReasonLabel(reason: string | null): string | null {
       return '未加入班级，使用 AI 兜底';
     case 'default_concept':
       return '按当前可用知识点安排';
+    case 'teacher_concept_fallback':
+      return '优先使用教师题库中的可用知识点';
     default:
       return null;
   }
@@ -134,6 +136,11 @@ export function DailyQuestionPage() {
   const loadedAssignmentKeyRef = useRef<string | null>(null);
   const handledResultRef = useRef<SubmitResult | null>(null);
   const autoPrepareKeyRef = useRef<string | null>(null);
+  const activeDateRef = useRef(activeDate);
+  const assignmentRequestRef = useRef(0);
+  const historyRequestRef = useRef(0);
+  const prepareRequestRef = useRef(0);
+  activeDateRef.current = activeDate;
 
   const {
     currentQuestion,
@@ -146,11 +153,19 @@ export function DailyQuestionPage() {
     error: exerciseError,
     errorType,
     loadQuestion,
+    clearQuestion,
     submitAnswer,
     loadSolution,
-  } = useExerciseViewModel({ dailyAssignmentId: assignment?.assignmentId ?? undefined });
+  } = useExerciseViewModel({
+    dailyAssignmentId: assignment?.assignmentDate === activeDate
+      ? assignment.assignmentId ?? undefined
+      : undefined,
+  });
 
   const loadAssignment = useCallback(async (signal?: AbortSignal, silent = false) => {
+    const requestDate = activeDate;
+    const requestID = assignmentRequestRef.current + 1;
+    assignmentRequestRef.current = requestID;
     if (!silent) {
       setIsLoadingAssignment(true);
     }
@@ -159,33 +174,47 @@ export function DailyQuestionPage() {
       const nextAssignment = selectedDate
         ? await dailyQuestionService.getByDate(selectedDate, signal)
         : await dailyQuestionService.getToday(signal);
-      if (signal?.aborted) return;
+      if (
+        signal?.aborted
+        || assignmentRequestRef.current !== requestID
+        || activeDateRef.current !== requestDate
+      ) return;
       setAssignment(nextAssignment);
     } catch (loadError) {
-      if (signal?.aborted) return;
+      if (
+        signal?.aborted
+        || assignmentRequestRef.current !== requestID
+        || activeDateRef.current !== requestDate
+      ) return;
       setAssignment(null);
       setAssignmentError(getApiErrorMessage(loadError, '读取每日一题失败，请稍后重试'));
     } finally {
-      if (!signal?.aborted && !silent) {
+      if (
+        !signal?.aborted
+        && assignmentRequestRef.current === requestID
+        && activeDateRef.current === requestDate
+      ) {
         setIsLoadingAssignment(false);
       }
     }
-  }, [selectedDate]);
+  }, [activeDate, selectedDate]);
 
   const loadHistory = useCallback(async (signal?: AbortSignal, silent = false) => {
+    const requestID = historyRequestRef.current + 1;
+    historyRequestRef.current = requestID;
     if (!silent) {
       setIsLoadingHistory(true);
     }
     setHistoryError(null);
     try {
       const nextHistory = await dailyQuestionService.getHistory(7, signal);
-      if (signal?.aborted) return;
+      if (signal?.aborted || historyRequestRef.current !== requestID) return;
       setHistory(nextHistory);
     } catch (loadError) {
-      if (signal?.aborted) return;
+      if (signal?.aborted || historyRequestRef.current !== requestID) return;
       setHistoryError(getApiErrorMessage(loadError, '读取近期完成记录失败，请稍后重试'));
     } finally {
-      if (!signal?.aborted && !silent) {
+      if (!signal?.aborted && historyRequestRef.current === requestID) {
         setIsLoadingHistory(false);
       }
     }
@@ -197,26 +226,41 @@ export function DailyQuestionPage() {
 
   useEffect(() => {
     const controller = new AbortController();
+    assignmentRequestRef.current += 1;
+    prepareRequestRef.current += 1;
+    setAssignment(null);
+    setIsPreparing(false);
+    setAssignmentError(null);
     setPanelDismissed(false);
     loadedAssignmentKeyRef.current = null;
     handledResultRef.current = null;
     autoPrepareKeyRef.current = null;
+    clearQuestion();
     void loadAssignment(controller.signal);
     void loadHistory(controller.signal);
     return () => controller.abort();
-  }, [loadAssignment, loadHistory]);
+  }, [activeDate, clearQuestion, loadAssignment, loadHistory, todayDate]);
 
   const pollPreparingAssignment = useCallback(async (signal: AbortSignal) => {
-    if (isHistorical || assignment?.status !== 'preparing') return;
-    const nextAssignment = await dailyQuestionService.prepareToday(signal);
-    if (!signal.aborted) {
+    if (assignment?.status !== 'preparing' || assignment.assignmentDate !== activeDate) return;
+    const requestDate = activeDate;
+    const requestID = assignmentRequestRef.current + 1;
+    assignmentRequestRef.current = requestID;
+    const nextAssignment = isHistorical
+      ? await dailyQuestionService.getByDate(activeDate, signal)
+      : await dailyQuestionService.prepareToday(signal);
+    if (
+      !signal.aborted
+      && assignmentRequestRef.current === requestID
+      && activeDateRef.current === requestDate
+    ) {
       setAssignment(nextAssignment);
     }
-  }, [assignment?.status, isHistorical]);
+  }, [activeDate, assignment?.assignmentDate, assignment?.status, isHistorical]);
 
   useSerialPolling(
     pollPreparingAssignment,
-    !isHistorical && assignment?.status === 'preparing' ? 2_000 : 0,
+    assignment?.status === 'preparing' ? 2_000 : 0,
   );
 
   useEffect(() => {
@@ -228,12 +272,19 @@ export function DailyQuestionPage() {
         && assignment.firstResult === 'incorrect'
         && !assignment.correctedAttemptId
       );
-    if (!question || !assignmentKey || !mayAnswer || loadedAssignmentKeyRef.current === assignmentKey) return;
+    if (!question || !assignmentKey || !mayAnswer) {
+      if (loadedAssignmentKeyRef.current !== null || currentQuestion) {
+        loadedAssignmentKeyRef.current = null;
+        clearQuestion();
+      }
+      return;
+    }
+    if (loadedAssignmentKeyRef.current === assignmentKey) return;
 
     loadedAssignmentKeyRef.current = assignmentKey;
     loadQuestion(question);
     setResetKey((value) => value + 1);
-  }, [assignment, loadQuestion]);
+  }, [assignment, clearQuestion, currentQuestion, loadQuestion]);
 
   useEffect(() => {
     if (!isRecordedDecision(submitResult) || handledResultRef.current === submitResult) return;
@@ -241,23 +292,55 @@ export function DailyQuestionPage() {
     void refreshDailyData();
   }, [refreshDailyData, submitResult]);
 
-  const prepareToday = useCallback(async () => {
-    if (isPreparing || isHistorical) return;
+  useEffect(() => {
+    if (errorType !== 'daily_assignment_stale') return;
+    loadedAssignmentKeyRef.current = null;
+    setAssignment(null);
+    setIsLoadingAssignment(true);
+    clearQuestion();
+    void refreshDailyData();
+  }, [clearQuestion, errorType, refreshDailyData]);
+
+  const prepareAssignment = useCallback(async () => {
+    if (isPreparing) return;
+    const requestDate = activeDate;
+    const requestID = assignmentRequestRef.current + 1;
+    const prepareID = prepareRequestRef.current + 1;
+    assignmentRequestRef.current = requestID;
+    prepareRequestRef.current = prepareID;
     setIsPreparing(true);
     setAssignmentError(null);
     try {
-      const nextAssignment = await dailyQuestionService.prepareToday();
+      const nextAssignment = isHistorical
+        ? await dailyQuestionService.getByDate(activeDate)
+        : await dailyQuestionService.prepareToday();
+      if (
+        assignmentRequestRef.current !== requestID
+        || prepareRequestRef.current !== prepareID
+        || activeDateRef.current !== requestDate
+      ) return;
       setAssignment(nextAssignment);
       void loadHistory(undefined, true);
     } catch (prepareError) {
-      setAssignmentError(getApiErrorMessage(prepareError, '准备今日题目失败，请稍后重试'));
+      if (
+        assignmentRequestRef.current !== requestID
+        || prepareRequestRef.current !== prepareID
+        || activeDateRef.current !== requestDate
+      ) return;
+      setAssignmentError(getApiErrorMessage(
+        prepareError,
+        isHistorical ? '恢复历史题目失败，请稍后重试' : '准备今日题目失败，请稍后重试',
+      ));
     } finally {
-      setIsPreparing(false);
+      if (prepareRequestRef.current === prepareID && activeDateRef.current === requestDate) {
+        setIsPreparing(false);
+      }
     }
-  }, [isHistorical, isPreparing, loadHistory]);
+  }, [activeDate, isHistorical, isPreparing, loadHistory]);
 
   useEffect(() => {
     if (isHistorical || isPreparing || !assignment) return;
+    if (assignment.assignmentDate !== activeDate) return;
     if (assignment.failureCode === 'teacher_not_assigned') return;
     const shouldPrepare = assignment.status === 'not_started'
       || (assignment.status === 'ready' && !assignment.openedAt);
@@ -265,8 +348,8 @@ export function DailyQuestionPage() {
     const key = `${assignment.status}:${assignment.assignmentId ?? assignment.assignmentDate}`;
     if (autoPrepareKeyRef.current === key) return;
     autoPrepareKeyRef.current = key;
-    void prepareToday();
-  }, [assignment, isHistorical, isPreparing, prepareToday]);
+    void prepareAssignment();
+  }, [activeDate, assignment, isHistorical, isPreparing, prepareAssignment]);
 
   const retryLoad = () => {
     void refreshDailyData();
@@ -300,18 +383,24 @@ export function DailyQuestionPage() {
   };
 
   const openTutor = () => {
-    const question = assignment?.question ?? currentQuestion;
+    const question = assignment?.assignmentDate === activeDate
+      && assignment.status === 'completed'
+      && assignment.firstResult === 'incorrect'
+      ? assignment.question
+      : null;
     if (!question) return;
     navigate('/session/new', { state: buildExerciseTutorLaunch(question) });
   };
 
   const presentation = getDailyQuestionPresentation(assignment);
+  const assignmentMatchesActiveDate = assignment?.assignmentDate === activeDate;
   const isTeacherNotAssigned = assignment?.failureCode === 'teacher_not_assigned';
   const historyByDate = toHistoryMap(history.items);
   const selectedHistoryItem = historyByDate.get(activeDate);
   const currentAssignmentKey = assignment?.assignmentId ?? assignment?.assignmentDate ?? null;
   const canRenderPanel = Boolean(
-    assignment?.question
+    assignmentMatchesActiveDate
+      && assignment?.question
       && currentQuestion?.id === assignment.question.id
       && loadedAssignmentKeyRef.current === currentAssignmentKey
       && !panelDismissed
@@ -355,7 +444,7 @@ export function DailyQuestionPage() {
           ) : null}
         </div>
 
-        {isLoadingAssignment ? (
+        {isLoadingAssignment || (assignment !== null && !assignmentMatchesActiveDate) ? (
           <div className="flex min-h-56 items-center justify-center gap-3 text-surface-500 dark:text-surface-400">
             <Loader2 className="h-7 w-7 animate-spin text-primary-500" aria-hidden="true" />
             正在读取每日任务
@@ -414,19 +503,19 @@ export function DailyQuestionPage() {
 
                 <div className="flex shrink-0 flex-wrap gap-2">
                   {assignment.status === 'not_started' && !isHistorical && !isTeacherNotAssigned ? (
-                    <Button onClick={() => void prepareToday()} isLoading={isPreparing}>
+                    <Button onClick={() => void prepareAssignment()} isLoading={isPreparing}>
                       开始今日一题
                       {!isPreparing ? <ArrowRight className="ml-2 h-4 w-4" aria-hidden="true" /> : null}
                     </Button>
                   ) : null}
-                  {assignment.status === 'unavailable' && !isHistorical && !isTeacherNotAssigned ? (
-                    <Button variant="outline" onClick={() => void prepareToday()} isLoading={isPreparing}>
+                  {assignment.status === 'unavailable' && !isTeacherNotAssigned ? (
+                    <Button variant="outline" onClick={() => void prepareAssignment()} isLoading={isPreparing}>
                       <RefreshCw className="mr-2 h-4 w-4" aria-hidden="true" />
-                      重试
+                      {isHistorical ? '恢复补做' : '重试'}
                     </Button>
                   ) : null}
-                  {assignment.status === 'preparing' && !isHistorical ? (
-                    <Button variant="outline" onClick={() => void prepareToday()} isLoading={isPreparing}>
+                  {assignment.status === 'preparing' ? (
+                    <Button variant="outline" onClick={() => void prepareAssignment()} isLoading={isPreparing}>
                       {!isPreparing ? <RefreshCw className="mr-2 h-4 w-4" aria-hidden="true" /> : null}
                       检查并恢复
                     </Button>
@@ -436,7 +525,9 @@ export function DailyQuestionPage() {
                       查看诊断
                     </Button>
                   ) : null}
-                  {assignment.question || currentQuestion ? (
+                  {assignment.question
+                    && assignment.status === 'completed'
+                    && assignment.firstResult === 'incorrect' ? (
                     <Button variant="outline" onClick={openTutor}>
                       <MessageCircle className="mr-2 h-4 w-4" aria-hidden="true" />
                       询问 AI 导师
@@ -449,12 +540,15 @@ export function DailyQuestionPage() {
             {assignment.status === 'preparing' && isHistorical ? (
               <Card className="border-surface-200 dark:border-surface-700">
                 <CardContent className="flex min-h-56 flex-col items-center justify-center gap-3 p-8 text-center">
-                  <CircleAlert className="h-10 w-10 text-amber-500" aria-hidden="true" />
-                  <h2 className="text-lg font-semibold text-surface-900 dark:text-surface-100">这一天的题目未准备成功</h2>
+                  <Loader2 className="h-10 w-10 animate-spin text-primary-500" aria-hidden="true" />
+                  <h2 className="text-lg font-semibold text-surface-900 dark:text-surface-100">正在恢复这一天的题目</h2>
                   <p className="max-w-md text-sm leading-6 text-surface-500 dark:text-surface-400">
-                    历史任务不会重新生成题目，可以进入智能刷题继续练习。
+                    恢复完成后可以继续补做，补做不会恢复连续完成天数。
                   </p>
-                  <Button variant="outline" onClick={() => navigate('/exercise')}>进入智能刷题</Button>
+                  <Button variant="outline" onClick={() => void prepareAssignment()} isLoading={isPreparing}>
+                    {!isPreparing ? <RefreshCw className="mr-2 h-4 w-4" aria-hidden="true" /> : null}
+                    检查恢复状态
+                  </Button>
                 </CardContent>
               </Card>
             ) : assignment.status === 'preparing' ? (
@@ -499,11 +593,19 @@ export function DailyQuestionPage() {
                 <CardContent className="flex flex-col items-center gap-4 p-8 text-center">
                   <XCircle className="h-10 w-10 text-surface-400" aria-hidden="true" />
                   <p className="max-w-md text-sm leading-6 text-surface-500 dark:text-surface-400">
-                    今天的题目暂时不可用。你可以重试，或先进入智能刷题继续学习。
+                    {isHistorical
+                      ? '这一天的题目暂时不可用。你可以恢复后补做，但不会恢复连续完成天数。'
+                      : '今天的题目暂时不可用。你可以重试，或先进入智能刷题继续学习。'}
                   </p>
-                  <Button variant="outline" onClick={() => navigate('/exercise')}>
-                    进入智能刷题
-                  </Button>
+                  <div className="flex flex-wrap justify-center gap-3">
+                    <Button variant="outline" onClick={() => void prepareAssignment()} isLoading={isPreparing}>
+                      {!isPreparing ? <RefreshCw className="mr-2 h-4 w-4" aria-hidden="true" /> : null}
+                      {isHistorical ? '恢复补做' : '重试'}
+                    </Button>
+                    <Button variant="outline" onClick={() => navigate('/exercise')}>
+                      进入智能刷题
+                    </Button>
+                  </div>
                 </CardContent>
               </Card>
             ) : null}
@@ -523,7 +625,7 @@ export function DailyQuestionPage() {
 
             {canRenderPanel ? (
               <div className="grid grid-cols-1 gap-6 lg:grid-cols-12">
-                <div className="min-w-0 lg:col-span-8">
+                <div className={`min-w-0 ${assignment.firstResult === 'incorrect' ? 'lg:col-span-8' : 'lg:col-span-12'}`}>
                   <ExercisePanel
                     currentQuestion={currentQuestion}
                     isLoading={false}
@@ -542,34 +644,36 @@ export function DailyQuestionPage() {
                     resetKey={resetKey}
                   />
                 </div>
-                <aside className="space-y-4 lg:col-span-4">
-                  <Card className="border-surface-200 dark:border-surface-700">
-                    <CardHeader className="border-b border-surface-100 dark:border-surface-800">
-                      <CardTitle className="flex items-center gap-2 text-lg">
-                        <Sparkles className="h-5 w-5 text-primary-500" aria-hidden="true" />
-                        今日辅导
-                      </CardTitle>
-                    </CardHeader>
-                    <CardContent className="space-y-4 p-5">
-                      <p className="text-sm leading-6 text-surface-500 dark:text-surface-400">
-                        围绕这道固定题梳理思路，再完成自己的作答。
-                      </p>
-                      <Button className="w-full" onClick={openTutor}>
-                        <MessageCircle className="mr-2 h-4 w-4" aria-hidden="true" />
-                        询问 AI 导师
-                      </Button>
-                      {assignment.firstResult === 'incorrect' && assignment.firstAttemptId ? (
-                        <Button
-                          className="w-full"
-                          variant="outline"
-                          onClick={() => navigate(`/diagnosis/${encodeURIComponent(assignment.firstAttemptId!)}`)}
-                        >
-                          查看错误诊断
+                {assignment.firstResult === 'incorrect' ? (
+                  <aside className="space-y-4 lg:col-span-4">
+                    <Card className="border-surface-200 dark:border-surface-700">
+                      <CardHeader className="border-b border-surface-100 dark:border-surface-800">
+                        <CardTitle className="flex items-center gap-2 text-lg">
+                          <Sparkles className="h-5 w-5 text-primary-500" aria-hidden="true" />
+                          今日辅导
+                        </CardTitle>
+                      </CardHeader>
+                      <CardContent className="space-y-4 p-5">
+                        <p className="text-sm leading-6 text-surface-500 dark:text-surface-400">
+                          围绕这道固定题梳理思路，再完成自己的作答。
+                        </p>
+                        <Button className="w-full" onClick={openTutor}>
+                          <MessageCircle className="mr-2 h-4 w-4" aria-hidden="true" />
+                          询问 AI 导师
                         </Button>
-                      ) : null}
-                    </CardContent>
-                  </Card>
-                </aside>
+                        {assignment.firstAttemptId ? (
+                          <Button
+                            className="w-full"
+                            variant="outline"
+                            onClick={() => navigate(`/diagnosis/${encodeURIComponent(assignment.firstAttemptId!)}`)}
+                          >
+                            查看错误诊断
+                          </Button>
+                        ) : null}
+                      </CardContent>
+                    </Card>
+                  </aside>
+                ) : null}
               </div>
             ) : null}
 

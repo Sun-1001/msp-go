@@ -39,6 +39,12 @@ func (r ExerciseRepository) WithTx(ctx context.Context, fn func(context.Context,
 	})
 }
 
+// LockStudentTracking serializes all exercise-state writes for one student
+// until the surrounding submission transaction ends.
+func (r ExerciseRepository) LockStudentTracking(ctx context.Context, userID string) error {
+	return lockStudentTracking(ctx, r.DB(), userID)
+}
+
 // GetTeacherIDForStudent returns the teacher for the student's current class.
 func (r ExerciseRepository) GetTeacherIDForStudent(ctx context.Context, userID string) (string, bool, error) {
 	var teacherID string
@@ -169,6 +175,38 @@ func (r ExerciseRepository) GetDailyAssignmentForUpdate(ctx context.Context, ass
 	return r.getDailyAssignment(ctx, assignmentID, studentID, true)
 }
 
+// GetDailySubmissionResponse returns the committed response for one idempotent daily submission.
+func (r ExerciseRepository) GetDailySubmissionResponse(
+	ctx context.Context,
+	assignmentID string,
+	studentID string,
+	submissionKey string,
+) (exerciseapp.SubmitResponse, bool, error) {
+	var raw []byte
+	err := r.DB().QueryRow(ctx, `
+		SELECT attempt.daily_submission_response
+		FROM public.content_attempts attempt
+		WHERE attempt.daily_assignment_id = $1
+		  AND attempt.student_id = $2
+		  AND attempt.daily_submission_key = $3
+		  AND attempt.daily_submission_response IS NOT NULL`,
+		assignmentID,
+		studentID,
+		submissionKey,
+	).Scan(&raw)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return exerciseapp.SubmitResponse{}, false, nil
+	}
+	if err != nil {
+		return exerciseapp.SubmitResponse{}, false, err
+	}
+	var response exerciseapp.SubmitResponse
+	if err := json.Unmarshal(raw, &response); err != nil {
+		return exerciseapp.SubmitResponse{}, false, fmt.Errorf("decode daily submission response: %w", err)
+	}
+	return response, true, nil
+}
+
 func (r ExerciseRepository) getDailyAssignment(
 	ctx context.Context,
 	assignmentID string,
@@ -184,8 +222,9 @@ func (r ExerciseRepository) getDailyAssignment(
 	return scanOptionalDailyAssignmentBinding(row)
 }
 
-// HasDailyAssignmentContent keeps a fixed task accessible after class membership changes.
-func (r ExerciseRepository) HasDailyAssignmentContent(ctx context.Context, studentID string, contentID string) (bool, error) {
+// HasReadyDailyAssignmentContent prevents the regular solution route from
+// bypassing a daily assignment's own first-attempt gate.
+func (r ExerciseRepository) HasReadyDailyAssignmentContent(ctx context.Context, studentID string, contentID string) (bool, error) {
 	var assigned bool
 	err := r.DB().QueryRow(ctx, `
 		SELECT EXISTS (
@@ -193,7 +232,7 @@ func (r ExerciseRepository) HasDailyAssignmentContent(ctx context.Context, stude
 			FROM public.daily_question_assignments assignment
 			WHERE assignment.student_id = $1
 			  AND assignment.content_id = $2
-			  AND assignment.status IN ('ready', 'completed')
+			  AND assignment.status = 'ready'
 		)`, studentID, contentID).Scan(&assigned)
 	return assigned, err
 }
@@ -247,6 +286,7 @@ func scanOptionalDailyAssignmentBinding(scanner rowScanner) (exerciseapp.DailyAs
 	var binding exerciseapp.DailyAssignmentBinding
 	var assignmentDate time.Time
 	var contentID pgtype.Text
+	var firstAttemptID pgtype.Text
 	var firstResult pgtype.Text
 	var correctedAttemptID pgtype.Text
 	var questionID pgtype.Text
@@ -262,6 +302,7 @@ func scanOptionalDailyAssignmentBinding(scanner rowScanner) (exerciseapp.DailyAs
 		&assignmentDate,
 		&contentID,
 		&binding.Status,
+		&firstAttemptID,
 		&firstResult,
 		&correctedAttemptID,
 		&questionID,
@@ -280,6 +321,9 @@ func scanOptionalDailyAssignmentBinding(scanner rowScanner) (exerciseapp.DailyAs
 	binding.AssignmentDate = assignmentDate.Format("2006-01-02")
 	if contentID.Valid {
 		binding.ContentID = contentID.String
+	}
+	if firstAttemptID.Valid {
+		binding.FirstAttemptID = firstAttemptID.String
 	}
 	if firstResult.Valid {
 		binding.FirstResult = firstResult.String
@@ -420,21 +464,29 @@ const recentClassContentIDsSQL = `
 func (r ExerciseRepository) ListCandidateExercises(ctx context.Context, filter exerciseapp.CandidateFilter) ([]exerciseapp.Exercise, error) {
 	rows, err := r.DB().Query(ctx, `
 		SELECT `+exerciseSelectColumns+`
-		FROM public.contents
+		FROM public.contents content
 		WHERE
-			type = 'PROBLEM' AND
-			status = 'PUBLISHED' AND
-			deleted_at IS NULL AND
-			owner_teacher_id = $1 AND
-			difficulty >= $2 AND
-			difficulty <= $3 AND
-			(coalesce(cardinality($4::varchar[]), 0) = 0 OR NOT (id = ANY($4::varchar[])))
-		ORDER BY difficulty ASC, id ASC
-		LIMIT $5`,
+			content.type = 'PROBLEM' AND
+			content.status = 'PUBLISHED' AND
+			content.deleted_at IS NULL AND
+			content.owner_teacher_id = $1 AND
+			content.difficulty >= $2 AND
+			content.difficulty <= $3 AND
+			(coalesce(cardinality($4::varchar[]), 0) = 0 OR NOT (content.id = ANY($4::varchar[]))) AND
+			NOT EXISTS (
+				SELECT 1
+				FROM public.daily_question_assignments assignment
+				WHERE assignment.student_id = $5
+				  AND assignment.content_id = content.id
+				  AND assignment.status = 'ready'
+			)
+		ORDER BY content.difficulty ASC, content.id ASC
+		LIMIT $6`,
 		filter.TeacherID,
 		filter.DifficultyMin,
 		filter.DifficultyMax,
 		filter.ExcludeContent,
+		filter.StudentID,
 		filter.Limit,
 	)
 	if err != nil {
@@ -581,23 +633,30 @@ func (r ExerciseRepository) ListDKTStates(ctx context.Context, userID string, co
 }
 
 // ListRecentInteractions returns recent submitted exercise events for sequence-based DKT.
-func (r ExerciseRepository) ListRecentInteractions(ctx context.Context, userID string, limit int) ([]exerciseapp.LearningInteraction, error) {
+func (r ExerciseRepository) ListRecentInteractions(ctx context.Context, userID string, excludeAttemptID string, limit int) ([]exerciseapp.LearningInteraction, error) {
 	if limit < 1 {
 		return []exerciseapp.LearningInteraction{}, nil
 	}
 	rows, err := r.DB().Query(ctx, `
 		SELECT
 			ca.content_id,
-			c.concept_ids,
+			coalesce(assignment.question_concept_ids, c.concept_ids),
 			ca.is_correct,
-			c.difficulty,
+			coalesce(assignment.question_difficulty, c.difficulty),
 			ca.submitted_at
 		FROM public.content_attempts ca
 		JOIN public.contents c ON c.id = ca.content_id
-		WHERE ca.student_id = $1 AND ca.submitted_at IS NOT NULL
+		LEFT JOIN public.daily_question_assignments assignment
+		  ON assignment.id = ca.daily_assignment_id
+		 AND assignment.student_id = ca.student_id
+		 AND assignment.content_id = ca.content_id
+		WHERE ca.student_id = $1
+		  AND ca.submitted_at IS NOT NULL
+		  AND ca.id <> $2
 		ORDER BY ca.submitted_at DESC, ca.id DESC
-		LIMIT $2`,
+		LIMIT $3`,
 		userID,
+		excludeAttemptID,
 		limit,
 	)
 	if err != nil {
@@ -634,11 +693,19 @@ func (r ExerciseRepository) InsertAttempt(ctx context.Context, record exerciseap
 	if err != nil {
 		return err
 	}
+	var dailyAssignmentID any
+	var dailySubmissionKey any
+	if record.DailyAssignmentID != "" {
+		dailyAssignmentID = record.DailyAssignmentID
+		dailySubmissionKey = record.DailySubmissionKey
+	}
 	_, err = r.DB().Exec(ctx, `
 		INSERT INTO public.content_attempts (
 			id,
 			content_id,
 			student_id,
+				daily_assignment_id,
+				daily_submission_key,
 			student_answer,
 			student_steps,
 			is_correct,
@@ -647,10 +714,12 @@ func (r ExerciseRepository) InsertAttempt(ctx context.Context, record exerciseap
 			submitted_at,
 			time_spent_seconds
 		)
-		VALUES ($1, $2, $3, $4, $5::json, $6, $7, $8, $9, $10)`,
+			VALUES ($1, $2, $3, $4, $5, $6, $7::json, $8, $9, $10, $11, $12)`,
 		record.ID,
 		record.ContentID,
 		record.StudentID,
+		dailyAssignmentID,
+		dailySubmissionKey,
 		record.StudentAnswer,
 		string(stepsRaw),
 		record.IsCorrect,
@@ -660,6 +729,39 @@ func (r ExerciseRepository) InsertAttempt(ctx context.Context, record exerciseap
 		record.TimeSpentSeconds,
 	)
 	return err
+}
+
+// SaveDailySubmissionResponse completes the idempotency record in the attempt transaction.
+func (r ExerciseRepository) SaveDailySubmissionResponse(
+	ctx context.Context,
+	attemptID string,
+	studentID string,
+	submissionKey string,
+	response exerciseapp.SubmitResponse,
+) error {
+	raw, err := json.Marshal(response)
+	if err != nil {
+		return err
+	}
+	tag, err := r.DB().Exec(ctx, `
+		UPDATE public.content_attempts
+		SET daily_submission_response = $4::json
+		WHERE id = $1
+		  AND student_id = $2
+		  AND daily_submission_key = $3
+		  AND daily_assignment_id IS NOT NULL`,
+		attemptID,
+		studentID,
+		submissionKey,
+		string(raw),
+	)
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() != 1 {
+		return exerciseapp.ErrDailyAssignmentClosed
+	}
+	return nil
 }
 
 // InsertDiagnosis inserts a lightweight diagnosis report.
@@ -805,6 +907,7 @@ const dailyAssignmentBindingSelect = `
 	       assignment.assignment_date,
 	       assignment.content_id,
 	       assignment.status,
+	       first_attempt.id,
 	       assignment.first_result,
 	       assignment.corrected_attempt_id,
 	       CASE WHEN assignment.question_body IS NOT NULL THEN assignment.content_id ELSE content.id END,
@@ -817,7 +920,15 @@ const dailyAssignmentBindingSelect = `
 	FROM public.daily_question_assignments assignment
 	LEFT JOIN public.contents content
 	  ON content.id = assignment.content_id
-	 AND content.type = 'PROBLEM'::public.contenttype`
+	 AND content.type = 'PROBLEM'::public.contenttype
+	LEFT JOIN public.content_attempts first_attempt
+	  ON first_attempt.id = assignment.first_attempt_id
+	 AND first_attempt.student_id = assignment.student_id
+	 AND first_attempt.content_id = assignment.content_id
+	 AND (
+		 first_attempt.daily_assignment_id = assignment.id
+		 OR first_attempt.daily_assignment_id IS NULL
+	 )`
 
 const exerciseProfileColumns = `
 	mastery_vector,

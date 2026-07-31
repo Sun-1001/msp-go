@@ -12,6 +12,7 @@ import { ArrowLeft, Save, Loader2, Plus, Trash2, Edit } from 'lucide-react';
 import { questionService } from '@/modules/question/services/questionService';
 import type { Question, QuestionCreateData, QuestionUpdateData } from '@/modules/question/types/question';
 import { useToast } from '../../components/ui/Toast';
+import { getApiErrorMessage } from '@/libs/http/apiClient';
 
 // 表单验证 Schema
 const questionSchema = z.object({
@@ -188,10 +189,7 @@ export const QuestionEditPage: React.FC = () => {
           : exitPath,
       );
     } catch (error: unknown) {
-      const errorMessage = error instanceof Error && 'response' in error
-        ? (error as { response?: { data?: { detail?: string } } }).response?.data?.detail || '保存失败'
-        : '保存失败';
-      toast({ type: 'error', title: errorMessage });
+      toast({ type: 'error', title: getApiErrorMessage(error, '保存失败') });
     } finally {
       setSaving(false);
     }

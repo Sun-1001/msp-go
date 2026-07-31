@@ -26,7 +26,7 @@ type Service interface {
 	GetClassSettings(context.Context, string, string) (dailyquestionapp.ClassSettings, error)
 	SetClassSettings(context.Context, string, string, *string, *bool) (dailyquestionapp.ClassSettings, error)
 	GetClassUniformSchedule(context.Context, string, string) (dailyquestionapp.ClassUniformSchedule, error)
-	ReplaceClassUniformSchedule(context.Context, string, string, []string) (dailyquestionapp.ClassUniformSchedule, error)
+	ReplaceClassUniformSchedule(context.Context, string, string, int64, []string) (dailyquestionapp.ClassUniformSchedule, error)
 	GetClassStatistics(context.Context, string, string, string) (dailyquestionapp.ClassStatistics, error)
 	SendClassReminder(context.Context, string, string, string) (dailyquestionapp.ReminderResult, error)
 }
@@ -82,7 +82,8 @@ type classReminderRequest struct {
 }
 
 type classUniformScheduleRequest struct {
-	ContentIDs []string `json:"content_ids"`
+	ScheduleVersion *int64   `json:"schedule_version"`
+	ContentIDs      []string `json:"content_ids"`
 }
 
 func (h *Handler) today(w http.ResponseWriter, r *http.Request) {
@@ -228,14 +229,15 @@ func (h *Handler) replaceClassUniformSchedule(w http.ResponseWriter, r *http.Req
 	if !httpjson.DecodeStrictOrDetailError(w, r, 1<<20, &request) {
 		return
 	}
-	if request.ContentIDs == nil || len(request.ContentIDs) > dailyquestionapp.MaxUniformScheduleItems {
-		writeDailyQuestionError(w, http.StatusUnprocessableEntity, "VALIDATION_ERROR", "content_ids 必须是最多 60 个题目 ID 的数组")
+	if request.ScheduleVersion == nil || *request.ScheduleVersion < 0 || request.ContentIDs == nil || len(request.ContentIDs) > dailyquestionapp.MaxUniformScheduleItems {
+		writeDailyQuestionError(w, http.StatusUnprocessableEntity, "VALIDATION_ERROR", "schedule_version 和 content_ids 无效")
 		return
 	}
 	response, err := h.service.ReplaceClassUniformSchedule(
 		r.Context(),
 		principal.UserID,
 		classID,
+		*request.ScheduleVersion,
 		request.ContentIDs,
 	)
 	if err != nil {
@@ -329,8 +331,11 @@ func (h *Handler) writeServiceError(w http.ResponseWriter, err error, fallback s
 	case errors.Is(err, dailyquestionapp.ErrSelectionLocked):
 		writeDailyQuestionError(w, http.StatusConflict, "UNIFORM_QUESTION_LOCKED", "已有学生获得对应日期题目，不能删除、移动或更换")
 		return
+	case errors.Is(err, dailyquestionapp.ErrUniformScheduleChanged):
+		writeDailyQuestionError(w, http.StatusConflict, "UNIFORM_SCHEDULE_CHANGED", "统一题日程已被其他页面修改，请刷新后重新操作")
+		return
 	case errors.Is(err, dailyquestionapp.ErrUniformQuestionNotAssigned):
-		writeDailyQuestionError(w, http.StatusConflict, "UNIFORM_QUESTION_NOT_ASSIGNED", "请先为统一题策略的生效日保存题目日程")
+		writeDailyQuestionError(w, http.StatusConflict, "UNIFORM_QUESTION_NOT_ASSIGNED", "今日没有可作答的班级统一题")
 		return
 	case errors.Is(err, dailyquestionapp.ErrStrategyChanged):
 		writeDailyQuestionError(w, http.StatusConflict, "DAILY_QUESTION_STRATEGY_CHANGED", "班级分配策略刚刚发生变化，请重试")

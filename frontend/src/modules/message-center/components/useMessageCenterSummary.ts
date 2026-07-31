@@ -143,21 +143,15 @@ function handleVisibilityChange(): void {
   if (document.visibilityState !== 'hidden') pollIfStale();
 }
 
-function handleLegacyRefresh(): void {
-  refreshWithoutUnhandledRejection();
-}
-
 function attachGlobalListeners(): void {
   if (globalListenersAttached || typeof document === 'undefined') return;
   document.addEventListener('visibilitychange', handleVisibilityChange);
-  window.addEventListener('message-center:refresh', handleLegacyRefresh);
   globalListenersAttached = true;
 }
 
 function detachGlobalListeners(): void {
   if (!globalListenersAttached || typeof document === 'undefined') return;
   document.removeEventListener('visibilitychange', handleVisibilityChange);
-  window.removeEventListener('message-center:refresh', handleLegacyRefresh);
   globalListenersAttached = false;
 }
 

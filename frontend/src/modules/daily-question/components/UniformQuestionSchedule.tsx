@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import axios from 'axios';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import {
   ArrowDown,
@@ -41,6 +42,11 @@ interface UniformQuestionScheduleProps {
 
 interface ScheduleDraftItem extends DailyQuestionUniformScheduleItem {
   status: Question['status'];
+}
+
+interface StoredScheduleDraft {
+  scheduleVersion: number;
+  items: ScheduleDraftItem[];
 }
 
 const maxScheduleItems = 60;
@@ -151,13 +157,21 @@ function storageKey(classId: string): string {
   return `daily-question-uniform-schedule:${classId}`;
 }
 
-function readStoredDraft(classId: string): ScheduleDraftItem[] | null {
+function readStoredDraft(classId: string): StoredScheduleDraft | null {
   try {
     const raw = window.sessionStorage.getItem(storageKey(classId));
     if (!raw) return null;
     const value: unknown = JSON.parse(raw);
-    if (!Array.isArray(value) || value.length > maxScheduleItems) return null;
-    const items = value.filter((item): item is ScheduleDraftItem => {
+    if (!value || typeof value !== 'object') return null;
+    const stored = value as Partial<StoredScheduleDraft>;
+    if (
+      typeof stored.scheduleVersion !== 'number'
+      || !Number.isSafeInteger(stored.scheduleVersion)
+      || stored.scheduleVersion < 0
+      || !Array.isArray(stored.items)
+      || stored.items.length > maxScheduleItems
+    ) return null;
+    const items = stored.items.filter((item): item is ScheduleDraftItem => {
       if (!item || typeof item !== 'object') return false;
       const candidate = item as Partial<ScheduleDraftItem>;
       return typeof candidate.contentId === 'string'
@@ -169,25 +183,35 @@ function readStoredDraft(classId: string): ScheduleDraftItem[] | null {
           || candidate.status === 'published'
           || candidate.status === 'archived');
     });
-    if (items.length !== value.length || new Set(items.map((item) => item.contentId)).size !== items.length) {
+    if (items.length !== stored.items.length || new Set(items.map((item) => item.contentId)).size !== items.length) {
       return null;
     }
-    return items;
+    return { scheduleVersion: stored.scheduleVersion, items };
   } catch {
     return null;
   }
 }
 
-function writeStoredDraft(classId: string, items: ScheduleDraftItem[] | null): void {
+function writeStoredDraft(
+  classId: string,
+  scheduleVersion: number,
+  items: ScheduleDraftItem[] | null,
+): void {
   try {
     if (items) {
-      window.sessionStorage.setItem(storageKey(classId), JSON.stringify(items));
+      window.sessionStorage.setItem(storageKey(classId), JSON.stringify({ scheduleVersion, items }));
     } else {
       window.sessionStorage.removeItem(storageKey(classId));
     }
   } catch {
     // The server remains the source of truth when session storage is unavailable.
   }
+}
+
+function getApiErrorCode(error: unknown): string {
+  if (!axios.isAxiosError(error)) return '';
+  const data = error.response?.data as { code?: unknown } | undefined;
+  return typeof data?.code === 'string' ? data.code.trim().toUpperCase() : '';
 }
 
 export function UniformQuestionSchedule({
@@ -200,6 +224,7 @@ export function UniformQuestionSchedule({
   const { toast } = useToast();
   const today = getShanghaiISODate();
   const [scheduleStartDate, setScheduleStartDate] = useState(today);
+  const [scheduleVersion, setScheduleVersion] = useState(0);
   const [persistedItems, setPersistedItems] = useState<ScheduleDraftItem[]>([]);
   const [draftItems, setDraftItems] = useState<ScheduleDraftItem[]>([]);
   const [questionOptions, setQuestionOptions] = useState<Question[]>([]);
@@ -215,9 +240,11 @@ export function UniformQuestionSchedule({
   const [isImportModalOpen, setIsImportModalOpen] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [questionBankError, setQuestionBankError] = useState<string | null>(null);
+  const [loadedScheduleClassId, setLoadedScheduleClassId] = useState<string | null>(null);
   const questionBankRequestRef = useRef(0);
   const draftItemsRef = useRef<ScheduleDraftItem[]>([]);
 
+  const isScheduleLoaded = loadedScheduleClassId === classId;
   const isDirty = !sameOrder(draftItems, persistedItems);
   const draftOrderKey = useMemo(
     () => draftItems.map((item) => item.contentId).join('|'),
@@ -236,6 +263,7 @@ export function UniformQuestionSchedule({
   const loadSchedule = useCallback(async (signal?: AbortSignal) => {
     setIsLoading(true);
     setError(null);
+    setLoadedScheduleClassId(null);
     try {
       const schedule = await dailyQuestionService.getUniformSchedule(classId, signal);
       if (signal?.aborted) return;
@@ -243,21 +271,24 @@ export function UniformQuestionSchedule({
       const nextStartDate = schedule.startDate || today;
       const nextPersisted = schedule.items.map(fromScheduleItem);
       const stored = readStoredDraft(classId);
-      const storedStartsOnDate = !stored?.length || stored[0].assignmentDate === nextStartDate;
-      const storedKeepsLocks = storedStartsOnDate && stored?.every((item, index) => (
+      const storedItems = stored?.scheduleVersion === schedule.scheduleVersion ? stored.items : null;
+      const storedStartsOnDate = !storedItems?.length || storedItems[0].assignmentDate === nextStartDate;
+      const storedKeepsLocks = storedStartsOnDate && storedItems?.every((item, index) => (
         !nextPersisted[index]?.locked || item.contentId === nextPersisted[index].contentId
       ));
-      const restored = stored?.map((item, index) => ({
+      const restored = storedItems?.map((item, index) => ({
         ...item,
         locked: nextPersisted[index]?.locked ?? false,
       }));
       setScheduleStartDate(nextStartDate);
+      setScheduleVersion(schedule.scheduleVersion);
       setPersistedItems(nextPersisted);
       setDraftItems(
         restored && storedKeepsLocks
           ? assignScheduleDates(restored, nextStartDate)
           : nextPersisted,
       );
+      setLoadedScheduleClassId(classId);
     } catch (loadError) {
       if (signal?.aborted) return;
       setError(getApiErrorMessage(loadError, '统一题日程加载失败'));
@@ -277,15 +308,14 @@ export function UniformQuestionSchedule({
           page: questionBankPage,
           pageSize: questionBankPageSize,
           group: selectedGroup || undefined,
+          status: 'active',
           sortBy: 'created_at',
           sortOrder: 'desc',
         }),
         questionService.getGroups(),
       ]);
       if (questionBankRequestRef.current !== requestID) return;
-      const availableQuestions = questionList.items.filter(
-        (question) => question.status !== 'archived',
-      );
+      const availableQuestions = questionList.items;
       setQuestionGroups(groups);
       setQuestionOptions(availableQuestions);
       setQuestionBankTotal(questionList.total);
@@ -318,30 +348,6 @@ export function UniformQuestionSchedule({
   }, [loadQuestionBank]);
 
   useEffect(() => {
-    if (isLoading || questionOptions.length === 0) return;
-    setDraftItems((current) => {
-      let changed = false;
-      const next = current.map((item) => {
-        const question = questionOptions.find((candidate) => candidate.id === item.contentId);
-        if (!question) return item;
-        const refreshed = fromQuestion(question, item.assignmentDate);
-        if (
-          item.title === refreshed.title
-          && item.body === refreshed.body
-          && item.difficulty === refreshed.difficulty
-          && item.targetConceptId === refreshed.targetConceptId
-          && item.status === refreshed.status
-        ) {
-          return item;
-        }
-        changed = true;
-        return { ...refreshed, locked: item.locked };
-      });
-      return changed ? next : current;
-    });
-  }, [isLoading, questionOptions]);
-
-  useEffect(() => {
     draftItemsRef.current = draftItems;
   }, [draftItems]);
 
@@ -364,17 +370,18 @@ export function UniformQuestionSchedule({
   }, [draftOrderKey]);
 
   useEffect(() => {
+    if (!isScheduleLoaded) return;
     onTodayAssignedChange?.(persistedTodayAssigned);
-  }, [onTodayAssignedChange, persistedTodayAssigned]);
+  }, [isScheduleLoaded, onTodayAssignedChange, persistedTodayAssigned]);
 
   useEffect(() => {
-    if (isLoading) return;
-    writeStoredDraft(classId, isDirty ? draftItems : null);
-  }, [classId, draftItems, isDirty, isLoading]);
+    if (isLoading || !isScheduleLoaded) return;
+    writeStoredDraft(classId, scheduleVersion, isDirty ? draftItems : null);
+  }, [classId, draftItems, isDirty, isLoading, isScheduleLoaded, scheduleVersion]);
 
   useEffect(() => {
     const contentId = searchParams.get('daily_question_content_id')?.trim();
-    if (!contentId || isLoading) return;
+    if (!contentId || isLoading || !isScheduleLoaded) return;
     let cancelled = false;
 
     const addCreatedQuestion = async () => {
@@ -431,7 +438,7 @@ export function UniformQuestionSchedule({
     return () => {
       cancelled = true;
     };
-  }, [isLoading, normalizeDraftDates, scheduleStartDate, searchParams, setSearchParams, toast]);
+  }, [isLoading, isScheduleLoaded, normalizeDraftDates, scheduleStartDate, searchParams, setSearchParams, toast]);
 
   const toggleQuestionSelection = (question: Question) => {
     if (draftItems.some((item) => item.contentId === question.id)) {
@@ -536,32 +543,55 @@ export function UniformQuestionSchedule({
   };
 
   const saveSchedule = async () => {
-    if (isSaving || !isDirty) return;
+    if (isSaving || !isDirty || !isScheduleLoaded) return;
     if (hasDuplicateContentIDs(draftItems)) {
       const message = '日程中存在重复题目，同一道题不能安排两次';
       setError(message);
       toast({ type: 'error', title: message });
       return;
     }
+    const submittedItems = draftItems;
+    draftItemsRef.current = submittedItems;
     setIsSaving(true);
     setError(null);
     try {
       const saved = await dailyQuestionService.setUniformSchedule(
         classId,
+        scheduleVersion,
         draftItems.map((item) => item.contentId),
       );
       const nextItems = saved.items.map(fromScheduleItem);
-      setScheduleStartDate(saved.startDate || scheduleStartDate);
+      const nextStartDate = saved.startDate || scheduleStartDate;
+      const currentDraft = draftItemsRef.current;
+      const draftUnchanged = sameOrder(currentDraft, submittedItems);
+      setScheduleStartDate(nextStartDate);
+      setScheduleVersion(saved.scheduleVersion);
       setPersistedItems(nextItems);
-      setDraftItems(nextItems);
-      writeStoredDraft(classId, null);
+      if (draftUnchanged) {
+        draftItemsRef.current = nextItems;
+        setDraftItems(nextItems);
+        writeStoredDraft(classId, saved.scheduleVersion, null);
+      } else {
+        const pendingItems = assignScheduleDates(currentDraft, nextStartDate);
+        draftItemsRef.current = pendingItems;
+        setDraftItems(pendingItems);
+        writeStoredDraft(classId, saved.scheduleVersion, pendingItems);
+      }
       toast({
         type: 'success',
-        title: nextItems.length > 0 ? '班级统一题日程已保存' : '统一题日程已清空',
+        title: draftUnchanged
+          ? nextItems.length > 0 ? '班级统一题日程已保存' : '统一题日程已清空'
+          : '已保存提交时的日程，后续修改仍待保存',
       });
       onSaved?.();
     } catch (saveError) {
       const message = getApiErrorMessage(saveError, '统一题日程保存失败');
+      if (getApiErrorCode(saveError) === 'UNIFORM_SCHEDULE_CHANGED') {
+        writeStoredDraft(classId, scheduleVersion, null);
+        await loadSchedule();
+        toast({ type: 'error', title: message });
+        return;
+      }
       setError(message);
       toast({ type: 'error', title: message });
     } finally {
@@ -628,6 +658,22 @@ export function UniformQuestionSchedule({
     );
   }
 
+  if (!isScheduleLoaded) {
+    return (
+      <section className="border-y border-surface-200 py-6 dark:border-surface-700">
+        <div className="flex min-h-32 flex-col items-center justify-center gap-4 text-center">
+          <p className="text-sm text-red-600 dark:text-red-400">
+            {error || '统一题日程尚未加载，请重试'}
+          </p>
+          <Button variant="outline" onClick={() => void loadSchedule()}>
+            <RefreshCw className="mr-2 h-4 w-4" aria-hidden="true" />
+            重新加载日程
+          </Button>
+        </div>
+      </section>
+    );
+  }
+
   return (
     <section className="space-y-5 border-y border-surface-200 py-5 dark:border-surface-700">
       <div className="flex flex-wrap items-start justify-between gap-3">
@@ -657,6 +703,11 @@ export function UniformQuestionSchedule({
         </div>
       ) : null}
 
+      <fieldset
+        disabled={isSaving}
+        aria-busy={isSaving}
+        className="min-w-0 space-y-5 border-0 p-0"
+      >
       <div className="space-y-3">
         <div className="flex flex-col gap-2 sm:flex-row sm:items-end sm:justify-between">
           <div>
@@ -928,7 +979,7 @@ export function UniformQuestionSchedule({
         </div>
       ) : (
         <div className="rounded-md border border-dashed border-amber-300 bg-amber-50/60 px-4 py-5 text-sm text-amber-800 dark:border-amber-800 dark:bg-amber-950/20 dark:text-amber-300">
-          尚未安排统一题。保存空日程后，学生端会显示“老师未布置”。
+          当前尚未布置统一题，学生端会显示“老师未布置”。
         </div>
       )}
 
@@ -946,6 +997,7 @@ export function UniformQuestionSchedule({
           保存日程
         </Button>
       </div>
+      </fieldset>
 
       <QuestionImportModal
         isOpen={isImportModalOpen}

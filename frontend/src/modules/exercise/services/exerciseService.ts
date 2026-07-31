@@ -107,6 +107,7 @@ export interface SubmitResult {
 export interface SubmitPayload {
   exerciseId: string;
   dailyAssignmentId?: string;
+  submissionId?: string;
   answerText?: string;
   answerImageUrl?: string;
   answerSteps?: string[];
@@ -240,6 +241,7 @@ export const exerciseService = {
     }>('/exercise/submit', {
       exercise_id: payload.exerciseId,
       ...(payload.dailyAssignmentId ? { daily_assignment_id: payload.dailyAssignmentId } : {}),
+      ...(payload.submissionId ? { submission_id: payload.submissionId } : {}),
       ...(payload.answerText ? { answer_text: payload.answerText } : {}),
       ...(payload.answerImageUrl ? { answer_image_url: payload.answerImageUrl } : {}),
       answer_steps: payload.answerSteps,

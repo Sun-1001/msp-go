@@ -141,6 +141,7 @@ func (h *Handler) Register(mux *http.ServeMux, prefix string) {
 type submitRequest struct {
 	ExerciseID        string   `json:"exercise_id"`
 	DailyAssignmentID string   `json:"daily_assignment_id"`
+	SubmissionID      string   `json:"submission_id"`
 	AnswerText        *string  `json:"answer_text"`
 	AnswerImageURL    *string  `json:"answer_image_url"`
 	AnswerSteps       []string `json:"answer_steps"`
@@ -252,6 +253,7 @@ func (h *Handler) submit(w http.ResponseWriter, r *http.Request) {
 	response, err := h.service.SubmitAnswer(r.Context(), principal.UserID, exerciseapp.SubmitRequest{
 		ExerciseID:        request.ExerciseID,
 		DailyAssignmentID: strings.TrimSpace(request.DailyAssignmentID),
+		SubmissionID:      strings.TrimSpace(request.SubmissionID),
 		AnswerText:        answerText,
 		AnswerImageURL:    answerImageURL,
 		AnswerSteps:       request.AnswerSteps,

@@ -17,6 +17,10 @@ import (
 	"mathstudy/backend/internal/platform/questiondedupe"
 )
 
+const dailyQuestionHistoryLimit = 200
+
+var dailyQuestionLocation = time.FixedZone("Asia/Shanghai", 8*60*60)
+
 // DailyQuestionRepository persists daily assignments, selection policy, and reminders.
 type DailyQuestionRepository struct {
 	Repository
@@ -24,14 +28,10 @@ type DailyQuestionRepository struct {
 }
 
 // NewDailyQuestionRepository creates a PostgreSQL-backed daily-question repository.
-func NewDailyQuestionRepository(db Querier, reminders ...WechatReminderEnqueuer) (DailyQuestionRepository, error) {
+func NewDailyQuestionRepository(db Querier, reminderEnqueuer WechatReminderEnqueuer) (DailyQuestionRepository, error) {
 	base, err := NewRepository(db)
 	if err != nil {
 		return DailyQuestionRepository{}, err
-	}
-	var reminderEnqueuer WechatReminderEnqueuer
-	if len(reminders) > 0 {
-		reminderEnqueuer = reminders[0]
 	}
 	return DailyQuestionRepository{Repository: base, wechatReminders: reminderEnqueuer}, nil
 }
@@ -122,34 +122,51 @@ func (r DailyQuestionRepository) ListActiveStudentIDs(ctx context.Context, after
 	return studentIDs, rows.Err()
 }
 
-// GetStudentContext returns a current enrollment and the strategy locked for the requested day.
+// GetStudentContext returns the assignment's original class for an existing day,
+// otherwise the student's current enrollment and the strategy locked for that day.
 func (r DailyQuestionRepository) GetStudentContext(ctx context.Context, studentID string, date time.Time) (dailyquestionapp.StudentContext, error) {
 	var classID pgtype.Text
 	var teacherID pgtype.Text
 	var strategy string
 	var difficulty float64
 	err := r.DB().QueryRow(ctx, `
-		SELECT ce.class_id,
+		SELECT CASE WHEN existing.has_assignment THEN existing.class_id ELSE ce.class_id END,
 		       c.teacher_id,
-		       coalesce(
-		           (
-		               SELECT CASE
-		                          WHEN assignment.selection_reason = 'teacher_uniform' THEN 'uniform'
-		                          ELSE 'personalized'
-		                      END
-		               FROM public.daily_question_assignments assignment
-		               WHERE assignment.class_id = ce.class_id
-		                 AND assignment.assignment_date = $2::date
-		               ORDER BY assignment.assigned_at, assignment.id
-		               LIMIT 1
-		           ),
-		           settings.strategy,
-		           'personalized'
-		       ),
+		       CASE
+		           WHEN existing.has_assignment THEN existing.strategy
+		           ELSE coalesce(
+		               (
+		                   SELECT CASE
+		                              WHEN assignment.selection_reason = 'teacher_uniform' THEN 'uniform'
+		                              ELSE 'personalized'
+		                          END
+		                   FROM public.daily_question_assignments assignment
+		                   WHERE assignment.class_id = ce.class_id
+		                     AND assignment.assignment_date = $2::date
+		                   ORDER BY assignment.assigned_at, assignment.id
+		                   LIMIT 1
+		               ),
+		               settings.strategy,
+		               'personalized'
+		           )
+		       END,
 		       coalesce(profile.preferred_difficulty, 0.5)::double precision
 		FROM (SELECT $1::varchar AS student_id) seed
+		LEFT JOIN LATERAL (
+		    SELECT true AS has_assignment,
+		           assignment.class_id,
+		           CASE
+		               WHEN assignment.selection_reason = 'teacher_uniform' THEN 'uniform'
+		               ELSE 'personalized'
+		           END AS strategy
+		    FROM public.daily_question_assignments assignment
+		    WHERE assignment.student_id = seed.student_id
+		      AND assignment.assignment_date = $2::date
+		    LIMIT 1
+		) existing ON true
 		LEFT JOIN public.class_enrollments ce ON ce.student_id = seed.student_id
-		LEFT JOIN public.classes c ON c.id = ce.class_id
+		LEFT JOIN public.classes c
+		  ON c.id = CASE WHEN existing.has_assignment THEN existing.class_id ELSE ce.class_id END
 		LEFT JOIN public.daily_question_class_settings settings ON settings.class_id = c.id
 		LEFT JOIN public.student_profiles profile ON profile.student_id = seed.student_id`, studentID, date).Scan(
 		&classID, &teacherID, &strategy, &difficulty,
@@ -176,10 +193,27 @@ func (r DailyQuestionRepository) SelectTargetConcept(ctx context.Context, studen
 		{
 			reason: dailyquestionapp.ReasonMistakeReview,
 			sql: `
-				SELECT concept.value
-				FROM public.content_attempts attempt
-				JOIN public.contents content ON content.id = attempt.content_id
-				CROSS JOIN LATERAL json_array_elements_text(content.concept_ids) concept(value)
+					SELECT concept.value
+					FROM public.content_attempts attempt
+					JOIN public.contents content ON content.id = attempt.content_id
+					LEFT JOIN LATERAL (
+					    SELECT assignment.question_concept_ids
+					    FROM public.daily_question_assignments assignment
+					    WHERE assignment.student_id = attempt.student_id
+					      AND assignment.content_id = attempt.content_id
+					      AND (
+					          assignment.id = attempt.daily_assignment_id
+					          OR (
+					              attempt.daily_assignment_id IS NULL
+					              AND assignment.first_attempt_id = attempt.id
+					          )
+					      )
+					    ORDER BY (assignment.id = attempt.daily_assignment_id) DESC NULLS LAST
+					    LIMIT 1
+					) daily_assignment ON true
+					CROSS JOIN LATERAL json_array_elements_text(
+					    coalesce(daily_assignment.question_concept_ids, content.concept_ids)
+					) concept(value)
 				JOIN public.knowledge_nodes node ON node.id = concept.value
 				WHERE attempt.student_id = $1
 				  AND attempt.submitted_at IS NOT NULL
@@ -238,17 +272,38 @@ func (r DailyQuestionRepository) SelectTargetConcept(ctx context.Context, studen
 }
 
 // ListHistoricalQuestionBodies returns the frozen stems assigned before the requested day.
-func (r DailyQuestionRepository) ListHistoricalQuestionBodies(ctx context.Context, studentID string, beforeDate time.Time) ([]string, error) {
+func (r DailyQuestionRepository) ListHistoricalQuestionBodies(ctx context.Context, studentID string, beforeDate time.Time, limit int) ([]string, error) {
+	if limit < 1 || limit > dailyQuestionHistoryLimit {
+		limit = dailyQuestionHistoryLimit
+	}
 	rows, err := r.DB().Query(ctx, `
-		SELECT coalesce(assignment.question_body, content.body)
-		FROM public.daily_question_assignments assignment
-		LEFT JOIN public.contents content
-		  ON content.id = assignment.content_id
-		 AND content.type = 'PROBLEM'::public.contenttype
-		WHERE assignment.student_id = $1
-		  AND assignment.assignment_date < $2::date
-		  AND BTRIM(coalesce(assignment.question_body, content.body, '')) <> ''
-		ORDER BY assignment.assignment_date DESC, assignment.id DESC`, studentID, beforeDate)
+		WITH history AS (
+		    SELECT coalesce(assignment.question_body, content.body) AS body,
+		           assignment.assigned_at AS occurred_at,
+		           assignment.id
+		    FROM public.daily_question_assignments assignment
+		    LEFT JOIN public.contents content
+		      ON content.id = assignment.content_id
+		     AND content.type = 'PROBLEM'::public.contenttype
+		    WHERE assignment.student_id = $1
+		      AND assignment.assignment_date < $2::date
+		    UNION ALL
+		    SELECT content.body,
+		           coalesce(attempt.submitted_at, attempt.started_at),
+		           attempt.id
+		    FROM public.content_attempts attempt
+		    JOIN public.contents content
+		      ON content.id = attempt.content_id
+		     AND content.type = 'PROBLEM'::public.contenttype
+		    WHERE attempt.student_id = $1
+		      AND attempt.submitted_at IS NOT NULL
+		      AND attempt.daily_assignment_id IS NULL
+		)
+		SELECT history.body
+		FROM history
+		WHERE BTRIM(coalesce(history.body, '')) <> ''
+		ORDER BY history.occurred_at DESC, history.id DESC
+		LIMIT $3`, studentID, beforeDate, limit)
 	if err != nil {
 		return nil, err
 	}
@@ -312,10 +367,6 @@ func (r DailyQuestionRepository) FindTeacherContent(
 		  AND content.deleted_at IS NULL
 		  AND $3::date IS NOT NULL
 		  AND (coalesce(cardinality($5::varchar[]), 0) = 0 OR NOT (content.id = ANY($5::varchar[])))
-		  AND ($4 = '' OR EXISTS (
-		      SELECT 1 FROM json_array_elements_text(content.concept_ids) concept(value)
-		      WHERE concept.value = $4
-		  ))
 		  AND NOT EXISTS (
 		      SELECT 1
 		      FROM public.daily_question_assignments previous
@@ -341,10 +392,6 @@ func (r DailyQuestionRepository) FindTeacherContent(
 			  AND content.status = 'PUBLISHED'::public.contentstatus
 			  AND content.deleted_at IS NULL
 			  AND (coalesce(cardinality($5::varchar[]), 0) = 0 OR NOT (content.id = ANY($5::varchar[])))
-			  AND ($4 = '' OR EXISTS (
-			      SELECT 1 FROM json_array_elements_text(content.concept_ids) concept(value)
-			      WHERE concept.value = $4
-			  ))
 			  AND NOT EXISTS (
 			      SELECT 1
 			      FROM public.daily_question_assignments previous
@@ -419,13 +466,23 @@ func (r DailyQuestionRepository) FindTeacherRepeatFallback(
 	excludedContentIDs []string,
 ) (dailyquestionapp.ContentChoice, bool, error) {
 	query := `
-		WITH historical AS (
-			SELECT assignment.content_id, max(assignment.assignment_date) AS last_assigned_date
+		WITH historical_events AS (
+			SELECT assignment.content_id,
+			       assignment.assigned_at AS attempted_at
 			FROM public.daily_question_assignments assignment
 			WHERE assignment.student_id = $2
 			  AND assignment.content_id IS NOT NULL
 			  AND assignment.assignment_date < $3::date
-			GROUP BY assignment.content_id
+			UNION ALL
+			SELECT attempt.content_id,
+			       coalesce(attempt.submitted_at, attempt.started_at)
+			FROM public.content_attempts attempt
+			WHERE attempt.student_id = $2
+			  AND attempt.submitted_at IS NOT NULL
+		), historical AS (
+			SELECT content_id, max(attempted_at) AS last_assigned_date
+			FROM historical_events
+			GROUP BY content_id
 		)
 		SELECT content.id, content.concept_ids
 		FROM historical
@@ -435,23 +492,33 @@ func (r DailyQuestionRepository) FindTeacherRepeatFallback(
 		  AND content.status = 'PUBLISHED'::public.contentstatus
 		  AND content.deleted_at IS NULL
 		  AND $3::date IS NOT NULL
-		  AND ($4 = '' OR EXISTS (
+		ORDER BY
+		  CASE WHEN $4 = '' OR EXISTS (
 		      SELECT 1 FROM json_array_elements_text(content.concept_ids) concept(value)
 		      WHERE concept.value = $4
-		  ))
-		ORDER BY
+		  ) THEN 0 ELSE 1 END,
 		  CASE WHEN coalesce(cardinality($5::varchar[]), 0) > 0 AND content.id = ANY($5::varchar[]) THEN 1 ELSE 0 END,
 		  historical.last_assigned_date ASC, content.difficulty ASC, content.id
 		LIMIT 1`
 	if dailyCandidateOnly {
 		query = `
-			WITH historical AS (
-				SELECT assignment.content_id, max(assignment.assignment_date) AS last_assigned_date
+			WITH historical_events AS (
+				SELECT assignment.content_id,
+				       assignment.assigned_at AS attempted_at
 				FROM public.daily_question_assignments assignment
 				WHERE assignment.student_id = $2
 				  AND assignment.content_id IS NOT NULL
 				  AND assignment.assignment_date < $3::date
-				GROUP BY assignment.content_id
+				UNION ALL
+				SELECT attempt.content_id,
+				       coalesce(attempt.submitted_at, attempt.started_at)
+				FROM public.content_attempts attempt
+				WHERE attempt.student_id = $2
+				  AND attempt.submitted_at IS NOT NULL
+			), historical AS (
+				SELECT content_id, max(attempted_at) AS last_assigned_date
+				FROM historical_events
+				GROUP BY content_id
 			)
 			SELECT content.id, content.concept_ids
 			FROM historical
@@ -465,11 +532,11 @@ func (r DailyQuestionRepository) FindTeacherRepeatFallback(
 			  AND content.type = 'PROBLEM'::public.contenttype
 			  AND content.status = 'PUBLISHED'::public.contentstatus
 			  AND content.deleted_at IS NULL
-			  AND ($4 = '' OR EXISTS (
-		      SELECT 1 FROM json_array_elements_text(content.concept_ids) concept(value)
-		      WHERE concept.value = $4
-		  ))
 			ORDER BY
+			  CASE WHEN $4 = '' OR EXISTS (
+			      SELECT 1 FROM json_array_elements_text(content.concept_ids) concept(value)
+			      WHERE concept.value = $4
+			  ) THEN 0 ELSE 1 END,
 			  CASE WHEN coalesce(cardinality($5::varchar[]), 0) > 0 AND content.id = ANY($5::varchar[]) THEN 1 ELSE 0 END,
 			  historical.last_assigned_date ASC, candidate.priority DESC, content.difficulty ASC, content.id
 			LIMIT 1`
@@ -497,7 +564,7 @@ func (r DailyQuestionRepository) FindTeacherRepeatFallback(
 	return dailyquestionapp.ContentChoice{ContentID: contentID, TargetConceptID: selectedConcept}, true, nil
 }
 
-// GetClassSelection returns a valid persisted uniform class-day question.
+// GetClassSelection returns the frozen uniform class-day question.
 func (r DailyQuestionRepository) GetClassSelection(ctx context.Context, classID string, date time.Time) (dailyquestionapp.ClassSelection, bool, error) {
 	row := r.DB().QueryRow(ctx, `
 		SELECT selection.class_id,
@@ -506,71 +573,93 @@ func (r DailyQuestionRepository) GetClassSelection(ctx context.Context, classID 
 		       selection.target_concept_id,
 		       selection.source,
 		       selection.selection_reason,
-		       content.body
+		       selection.question_body
 		FROM public.daily_question_class_selections selection
-		JOIN public.contents content ON content.id = selection.content_id
 		WHERE selection.class_id = $1
 		  AND selection.assignment_date = $2::date
 		  AND selection.source = 'teacher_bank'
 		  AND selection.selection_reason = 'teacher_uniform'
-		  AND content.type = 'PROBLEM'::public.contenttype
-		  AND content.status = 'PUBLISHED'::public.contentstatus
-		  AND content.deleted_at IS NULL`, classID, date)
+		  AND selection.content_id IS NOT NULL
+		  AND selection.question_body IS NOT NULL`, classID, date)
 	return scanOptionalClassSelection(row)
 }
 
-// GetClassUniformSchedule returns the explicit teacher schedule from start onward.
+type classUniformScheduleState struct {
+	startDate         time.Time
+	scheduleVersion   int64
+	effectiveStrategy string
+}
+
+// GetClassUniformSchedule returns a versioned teacher schedule from its authoritative start date.
 func (r DailyQuestionRepository) GetClassUniformSchedule(
 	ctx context.Context,
 	teacherID string,
 	classID string,
-	start time.Time,
+	today time.Time,
 	limit int,
 ) (dailyquestionapp.ClassUniformSchedule, bool, error) {
-	var ownedClassID string
-	if err := r.DB().QueryRow(ctx, `
-		SELECT id
-		FROM public.classes
-		WHERE id = $1 AND teacher_id = $2`, classID, teacherID).Scan(&ownedClassID); err != nil {
-		if errors.Is(err, pgx.ErrNoRows) {
-			return dailyquestionapp.ClassUniformSchedule{}, false, nil
+	var schedule dailyquestionapp.ClassUniformSchedule
+	found := false
+	err := withRepositoryTx(ctx, "get daily question uniform schedule", r.Repository, func(base Repository) DailyQuestionRepository {
+		return DailyQuestionRepository{Repository: base}
+	}, func(tx DailyQuestionRepository) error {
+		state, ok, err := tx.lockClassUniformScheduleState(ctx, teacherID, classID, today, false)
+		if err != nil || !ok {
+			return err
 		}
+		found = true
+		schedule, err = tx.readClassUniformSchedule(ctx, classID, state, limit)
+		return err
+	})
+	if err != nil {
 		return dailyquestionapp.ClassUniformSchedule{}, false, err
 	}
+	return schedule, found, nil
+}
+
+func (r DailyQuestionRepository) readClassUniformSchedule(
+	ctx context.Context,
+	classID string,
+	state classUniformScheduleState,
+	limit int,
+) (dailyquestionapp.ClassUniformSchedule, error) {
 	if limit < 1 || limit > dailyquestionapp.MaxUniformScheduleItems {
 		limit = dailyquestionapp.MaxUniformScheduleItems
 	}
-
 	rows, err := r.DB().Query(ctx, `
 		SELECT selection.assignment_date,
 		       selection.content_id,
 		       selection.target_concept_id,
-		       content.title,
-		       content.body,
-		       content.difficulty::double precision,
+		       selection.question_title,
+		       selection.question_body,
+		       selection.question_difficulty::double precision,
 		       EXISTS (
 		           SELECT 1
 		           FROM public.daily_question_assignments assignment
 		           WHERE assignment.class_id = selection.class_id
 		             AND assignment.assignment_date = selection.assignment_date
-		             AND (assignment.status <> 'unavailable' OR assignment.content_id IS NOT NULL)
 		       ) AS locked
 		FROM public.daily_question_class_selections selection
-		JOIN public.contents content ON content.id = selection.content_id
 		WHERE selection.class_id = $1
 		  AND selection.assignment_date >= $2::date
 		  AND selection.source = 'teacher_bank'
 		  AND selection.selection_reason = 'teacher_uniform'
+		  AND selection.content_id IS NOT NULL
+		  AND selection.question_title IS NOT NULL
+		  AND selection.question_body IS NOT NULL
+		  AND selection.question_difficulty IS NOT NULL
 		ORDER BY selection.assignment_date ASC
-		LIMIT $3`, classID, start, limit)
+		LIMIT $3`, classID, state.startDate, limit)
 	if err != nil {
-		return dailyquestionapp.ClassUniformSchedule{}, false, err
+		return dailyquestionapp.ClassUniformSchedule{}, err
 	}
 	defer rows.Close()
 
 	schedule := dailyquestionapp.ClassUniformSchedule{
-		ClassID: classID,
-		Items:   make([]dailyquestionapp.ClassUniformScheduleItem, 0),
+		ClassID:         classID,
+		StartDate:       state.startDate.Format("2006-01-02"),
+		ScheduleVersion: state.scheduleVersion,
+		Items:           make([]dailyquestionapp.ClassUniformScheduleItem, 0),
 	}
 	for rows.Next() {
 		var item dailyquestionapp.ClassUniformScheduleItem
@@ -585,26 +674,89 @@ func (r DailyQuestionRepository) GetClassUniformSchedule(
 			&item.Difficulty,
 			&item.Locked,
 		); err != nil {
-			return dailyquestionapp.ClassUniformSchedule{}, false, err
+			return dailyquestionapp.ClassUniformSchedule{}, err
 		}
 		item.AssignmentDate = assignmentDate.Format("2006-01-02")
 		item.TargetConceptID = textPointer(targetConceptID)
 		schedule.Items = append(schedule.Items, item)
 	}
 	if err := rows.Err(); err != nil {
-		return dailyquestionapp.ClassUniformSchedule{}, false, err
+		return dailyquestionapp.ClassUniformSchedule{}, err
 	}
-	return schedule, true, nil
+	return schedule, nil
+}
+
+func (r DailyQuestionRepository) lockClassUniformScheduleState(
+	ctx context.Context,
+	teacherID string,
+	classID string,
+	today time.Time,
+	exclusive bool,
+) (classUniformScheduleState, bool, error) {
+	lockClause := "FOR SHARE OF class"
+	if exclusive {
+		lockClause = "FOR UPDATE OF class"
+	}
+	var state classUniformScheduleState
+	var assignmentCount int
+	err := r.DB().QueryRow(ctx, `
+		SELECT coalesce(settings.schedule_version, 0)::bigint,
+		       coalesce(
+		           (
+		               SELECT CASE
+		                          WHEN assignment.selection_reason = 'teacher_uniform' THEN 'uniform'
+		                          ELSE 'personalized'
+		                      END
+		               FROM public.daily_question_assignments assignment
+		               WHERE assignment.class_id = class.id
+		                 AND assignment.assignment_date = $3::date
+		               ORDER BY assignment.assigned_at, assignment.id
+		               LIMIT 1
+		           ),
+		           settings.strategy,
+		           'personalized'
+		       ),
+		       (
+		           SELECT count(*)::int
+		           FROM public.daily_question_assignments assignment
+		           WHERE assignment.class_id = class.id
+		             AND assignment.assignment_date = $3::date
+		       )
+		FROM public.classes class
+		LEFT JOIN public.daily_question_class_settings settings ON settings.class_id = class.id
+		WHERE class.id = $1
+		  AND class.teacher_id = $2
+		`+lockClause, classID, teacherID, today).Scan(
+		&state.scheduleVersion,
+		&state.effectiveStrategy,
+		&assignmentCount,
+	)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return classUniformScheduleState{}, false, nil
+	}
+	if err != nil {
+		return classUniformScheduleState{}, false, err
+	}
+	state.startDate = today
+	if assignmentCount > 0 && state.effectiveStrategy == dailyquestionapp.StrategyPersonalized {
+		state.startDate = today.AddDate(0, 0, 1)
+	}
+	return state, true, nil
 }
 
 type uniformScheduleContent struct {
 	targetConceptID *string
 	status          string
+	title           string
 	body            string
+	difficulty      float64
+	conceptIDs      []byte
+	meta            []byte
 }
 
 type uniformScheduleSelection struct {
 	contentID *string
+	body      *string
 }
 
 type classQuestionHistory struct {
@@ -622,18 +774,15 @@ func (r DailyQuestionRepository) ReplaceClassUniformSchedule(
 	err := withRepositoryTx(ctx, "replace daily question uniform schedule", r.Repository, func(base Repository) DailyQuestionRepository {
 		return DailyQuestionRepository{Repository: base}
 	}, func(tx DailyQuestionRepository) error {
-		var classID string
-		if err := tx.DB().QueryRow(ctx, `
-			SELECT id
-			FROM public.classes
-			WHERE id = $1 AND teacher_id = $2
-			FOR UPDATE`, input.ClassID, input.TeacherID).Scan(&classID); err != nil {
-			if errors.Is(err, pgx.ErrNoRows) {
-				return nil
-			}
+		state, ok, err := tx.lockClassUniformScheduleState(ctx, input.TeacherID, input.ClassID, input.Today, true)
+		if err != nil || !ok {
 			return err
 		}
 		found = true
+		if state.scheduleVersion != input.ScheduleVersion {
+			return dailyquestionapp.ErrUniformScheduleChanged
+		}
+		start := state.startDate
 
 		contents, err := tx.loadUniformScheduleContents(ctx, input.TeacherID, input.ContentIDs)
 		if err != nil {
@@ -642,26 +791,19 @@ func (r DailyQuestionRepository) ReplaceClassUniformSchedule(
 		if len(contents) != len(input.ContentIDs) {
 			return dailyquestionapp.ErrInvalidContent
 		}
-		historical, err := tx.listClassHistoricalQuestionBodies(ctx, input.ClassID, input.StartDate)
-		if err != nil {
-			return err
-		}
-		if hasDuplicateUniformQuestionBodies(input.ContentIDs, contents, historical) {
-			return dailyquestionapp.ErrDuplicateQuestion
-		}
 
-		existing, err := tx.lockUniformScheduleSelections(ctx, input.ClassID, input.StartDate)
+		existing, err := tx.lockUniformScheduleSelections(ctx, input.ClassID, start)
 		if err != nil {
 			return err
 		}
-		lockedDates, err := tx.listLockedUniformScheduleDates(ctx, input.ClassID, input.StartDate)
+		lockedDates, err := tx.listLockedUniformScheduleDates(ctx, input.ClassID, start)
 		if err != nil {
 			return err
 		}
 
 		desired := make(map[string]string, len(input.ContentIDs))
 		for index, contentID := range input.ContentIDs {
-			date := input.StartDate.AddDate(0, 0, index).Format("2006-01-02")
+			date := start.AddDate(0, 0, index).Format("2006-01-02")
 			desired[date] = contentID
 		}
 		for date := range lockedDates {
@@ -670,6 +812,29 @@ func (r DailyQuestionRepository) ReplaceClassUniformSchedule(
 			if !selected || selection.contentID == nil || !scheduled || *selection.contentID != desiredContentID {
 				return dailyquestionapp.ErrSelectionLocked
 			}
+		}
+
+		validationContents := make(map[string]uniformScheduleContent, len(contents))
+		lockedContentIDs := make(map[string]struct{}, len(lockedDates))
+		for contentID, content := range contents {
+			validationContents[contentID] = content
+		}
+		for date := range lockedDates {
+			selection := existing[date]
+			if selection.contentID == nil || selection.body == nil {
+				return dailyquestionapp.ErrSelectionLocked
+			}
+			content := validationContents[*selection.contentID]
+			content.body = *selection.body
+			validationContents[*selection.contentID] = content
+			lockedContentIDs[*selection.contentID] = struct{}{}
+		}
+		historical, err := tx.listClassHistoricalQuestionBodies(ctx, input.ClassID, start)
+		if err != nil {
+			return err
+		}
+		if hasDuplicateUniformQuestionBodies(input.ContentIDs, validationContents, lockedContentIDs, historical) {
+			return dailyquestionapp.ErrDuplicateQuestion
 		}
 
 		draftIDs := make([]string, 0)
@@ -693,69 +858,76 @@ func (r DailyQuestionRepository) ReplaceClassUniformSchedule(
 			DELETE FROM public.daily_question_class_selections selection
 			WHERE selection.class_id = $1
 			  AND selection.assignment_date >= $2::date
-				  AND NOT EXISTS (
-				      SELECT 1
-				      FROM public.daily_question_assignments assignment
-				      WHERE assignment.class_id = selection.class_id
-				        AND assignment.assignment_date = selection.assignment_date
-				        AND (assignment.status <> 'unavailable' OR assignment.content_id IS NOT NULL)
-				  )`, input.ClassID, input.StartDate); err != nil {
+			  AND NOT EXISTS (
+			      SELECT 1
+			      FROM public.daily_question_assignments assignment
+			      WHERE assignment.class_id = selection.class_id
+			        AND assignment.assignment_date = selection.assignment_date
+			  )`, input.ClassID, start); err != nil {
 			return err
 		}
 
 		for index, contentID := range input.ContentIDs {
-			date := input.StartDate.AddDate(0, 0, index)
+			date := start.AddDate(0, 0, index)
+			if _, locked := lockedDates[date.Format("2006-01-02")]; locked {
+				continue
+			}
 			content := contents[contentID]
 			if _, err := tx.DB().Exec(ctx, `
 				INSERT INTO public.daily_question_class_selections (
 					class_id, assignment_date, content_id, target_concept_id,
-					source, selection_reason, created_at, updated_at
+					source, selection_reason, question_title, question_body,
+					question_difficulty, question_concept_ids, question_meta,
+					created_at, updated_at
 				)
-				VALUES ($1, $2::date, $3, $4, 'teacher_bank', 'teacher_uniform', $5, $5)
+				VALUES (
+					$1, $2::date, $3, $4, 'teacher_bank', 'teacher_uniform',
+					$5, $6, $7, $8::json, $9::json, $10, $10
+				)
 				ON CONFLICT (class_id, assignment_date) DO UPDATE SET
 					content_id = EXCLUDED.content_id,
 					target_concept_id = EXCLUDED.target_concept_id,
 					source = EXCLUDED.source,
 					selection_reason = EXCLUDED.selection_reason,
+					question_title = EXCLUDED.question_title,
+					question_body = EXCLUDED.question_body,
+					question_difficulty = EXCLUDED.question_difficulty,
+					question_concept_ids = EXCLUDED.question_concept_ids,
+					question_meta = EXCLUDED.question_meta,
 					updated_at = EXCLUDED.updated_at`,
 				input.ClassID,
 				date,
 				contentID,
 				content.targetConceptID,
+				content.title,
+				content.body,
+				content.difficulty,
+				string(content.conceptIDs),
+				string(content.meta),
 				input.Now,
 			); err != nil {
 				return err
 			}
 		}
 
-		var desiredStrategy string
 		if err := tx.DB().QueryRow(ctx, `
-			SELECT coalesce(settings.strategy, 'personalized')
-			FROM public.classes class
-			LEFT JOIN public.daily_question_class_settings settings ON settings.class_id = class.id
-			WHERE class.id = $1`, input.ClassID).Scan(&desiredStrategy); err != nil {
+			INSERT INTO public.daily_question_class_settings (
+				class_id, teacher_id, strategy, auto_reminder_enabled,
+				schedule_version, created_at, updated_at
+			)
+			VALUES ($1, $2, 'personalized', false, 1, $3, $3)
+			ON CONFLICT (class_id) DO UPDATE SET
+				teacher_id = EXCLUDED.teacher_id,
+				schedule_version = public.daily_question_class_settings.schedule_version + 1,
+				updated_at = EXCLUDED.updated_at
+			RETURNING schedule_version`, input.ClassID, input.TeacherID, input.Now).Scan(&state.scheduleVersion); err != nil {
 			return err
 		}
-		if desiredStrategy == dailyquestionapp.StrategyUniform {
-			if _, assigned, err := tx.GetClassSelection(ctx, input.ClassID, input.StartDate); err != nil {
-				return err
-			} else if !assigned {
-				return dailyquestionapp.ErrUniformQuestionNotAssigned
-			}
-		}
-
-		stored, ok, err := tx.GetClassUniformSchedule(
-			ctx,
-			input.TeacherID,
-			input.ClassID,
-			input.StartDate,
-			dailyquestionapp.MaxUniformScheduleItems,
+		stored, err := tx.readClassUniformSchedule(
+			ctx, input.ClassID, state, dailyquestionapp.MaxUniformScheduleItems,
 		)
 		if err != nil {
 			return err
-		}
-		if !ok {
-			return pgx.ErrNoRows
 		}
 		schedule = stored
 		return nil
@@ -778,7 +950,11 @@ func (r DailyQuestionRepository) loadUniformScheduleContents(
 	rows, err := r.DB().Query(ctx, `
 		SELECT content.id,
 		       content.status::text,
+		       content.title,
 		       content.body,
+		       content.difficulty::double precision,
+		       content.concept_ids,
+		       content.meta,
 		       (
 		           SELECT node.id
 		           FROM json_array_elements_text(content.concept_ids) WITH ORDINALITY concept(value, position)
@@ -802,14 +978,31 @@ func (r DailyQuestionRepository) loadUniformScheduleContents(
 		var contentID string
 		var status string
 		var targetConceptID pgtype.Text
+		var title string
 		var body string
-		if err := rows.Scan(&contentID, &status, &body, &targetConceptID); err != nil {
+		var difficulty float64
+		var conceptIDs []byte
+		var meta []byte
+		if err := rows.Scan(
+			&contentID,
+			&status,
+			&title,
+			&body,
+			&difficulty,
+			&conceptIDs,
+			&meta,
+			&targetConceptID,
+		); err != nil {
 			return nil, err
 		}
 		result[contentID] = uniformScheduleContent{
 			targetConceptID: textPointer(targetConceptID),
 			status:          status,
+			title:           title,
 			body:            body,
+			difficulty:      difficulty,
+			conceptIDs:      conceptIDs,
+			meta:            meta,
 		}
 	}
 	if err := rows.Err(); err != nil {
@@ -818,18 +1011,25 @@ func (r DailyQuestionRepository) loadUniformScheduleContents(
 	return result, nil
 }
 
-func hasDuplicateUniformQuestionBodies(contentIDs []string, contents map[string]uniformScheduleContent, history classQuestionHistory) bool {
+func hasDuplicateUniformQuestionBodies(
+	contentIDs []string,
+	contents map[string]uniformScheduleContent,
+	lockedContentIDs map[string]struct{},
+	history classQuestionHistory,
+) bool {
 	bodies := append([]string(nil), history.bodies...)
 	for _, contentID := range contentIDs {
 		content, ok := contents[contentID]
 		if !ok {
 			return false
 		}
-		if _, exists := history.contentIDs[contentID]; exists {
-			return true
-		}
-		if questiondedupe.IsDuplicate(content.body, bodies) {
-			return true
+		if _, locked := lockedContentIDs[contentID]; !locked {
+			if _, exists := history.contentIDs[contentID]; exists {
+				return true
+			}
+			if questiondedupe.IsDuplicate(content.body, bodies) {
+				return true
+			}
 		}
 		bodies = append(bodies, content.body)
 	}
@@ -884,7 +1084,8 @@ func (r DailyQuestionRepository) lockUniformScheduleSelections(
 ) (map[string]uniformScheduleSelection, error) {
 	rows, err := r.DB().Query(ctx, `
 		SELECT selection.assignment_date,
-		       selection.content_id
+		       selection.content_id,
+		       selection.question_body
 		FROM public.daily_question_class_selections selection
 		WHERE selection.class_id = $1
 		  AND selection.assignment_date >= $2::date
@@ -898,10 +1099,14 @@ func (r DailyQuestionRepository) lockUniformScheduleSelections(
 	for rows.Next() {
 		var date time.Time
 		var contentID pgtype.Text
-		if err := rows.Scan(&date, &contentID); err != nil {
+		var body pgtype.Text
+		if err := rows.Scan(&date, &contentID, &body); err != nil {
 			return nil, err
 		}
-		result[date.Format("2006-01-02")] = uniformScheduleSelection{contentID: textPointer(contentID)}
+		result[date.Format("2006-01-02")] = uniformScheduleSelection{
+			contentID: textPointer(contentID),
+			body:      textPointer(body),
+		}
 	}
 	if err := rows.Err(); err != nil {
 		return nil, err
@@ -919,7 +1124,6 @@ func (r DailyQuestionRepository) listLockedUniformScheduleDates(
 		FROM public.daily_question_assignments assignment
 		WHERE assignment.class_id = $1
 		  AND assignment.assignment_date >= $2::date
-		  AND (assignment.status <> 'unavailable' OR assignment.content_id IS NOT NULL)
 		ORDER BY assignment.assignment_date`, classID, start)
 	if err != nil {
 		return nil, err
@@ -1076,14 +1280,37 @@ func (r DailyQuestionRepository) FinishPreparation(
 		return DailyQuestionRepository{Repository: base}
 	}, func(tx DailyQuestionRepository) error {
 		var studentID string
-		var assignmentDate time.Time
 		err := tx.DB().QueryRow(ctx, `
-			SELECT student_id, assignment_date
+			SELECT student_id
+			FROM public.daily_question_assignments
+			WHERE id = $1
+			  AND generation_token = $2
+			  AND status = 'preparing'`, assignmentID, generationToken).Scan(&studentID)
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+		if err := lockStudentTracking(ctx, tx.DB(), studentID); err != nil {
+			return err
+		}
+
+		var assignmentDate time.Time
+		var classID pgtype.Text
+		var storedReason string
+		err = tx.DB().QueryRow(ctx, `
+			SELECT student_id, assignment_date, class_id, selection_reason
 			FROM public.daily_question_assignments
 			WHERE id = $1
 			  AND generation_token = $2
 			  AND status = 'preparing'
-			FOR UPDATE`, assignmentID, generationToken).Scan(&studentID, &assignmentDate)
+			FOR UPDATE`, assignmentID, generationToken).Scan(
+			&studentID,
+			&assignmentDate,
+			&classID,
+			&storedReason,
+		)
 		if errors.Is(err, pgx.ErrNoRows) {
 			return nil
 		}
@@ -1097,26 +1324,62 @@ func (r DailyQuestionRepository) FinishPreparation(
 		var snapshotConceptIDs []byte
 		var snapshotMeta []byte
 		var snapshotGeneratedBy pgtype.Text
-		err = tx.DB().QueryRow(ctx, `
-			SELECT title,
-			       body,
-			       difficulty,
-			       concept_ids,
-			       meta,
-			       generated_by_student_id
-			FROM public.contents
-			WHERE id = $1
-			  AND type = 'PROBLEM'::public.contenttype
-			  AND status = 'PUBLISHED'::public.contentstatus
-			  AND deleted_at IS NULL
-			FOR SHARE`, choice.ContentID).Scan(
-			&snapshotTitle,
-			&snapshotBody,
-			&snapshotDifficulty,
-			&snapshotConceptIDs,
-			&snapshotMeta,
-			&snapshotGeneratedBy,
-		)
+		snapshotTargetConceptID := choice.TargetConceptID
+		if storedReason == dailyquestionapp.ReasonTeacherUniform {
+			if !classID.Valid {
+				return nil
+			}
+			var targetConceptID pgtype.Text
+			err = tx.DB().QueryRow(ctx, `
+				SELECT selection.question_title,
+				       selection.question_body,
+				       selection.question_difficulty,
+				       selection.question_concept_ids,
+				       selection.question_meta,
+				       selection.target_concept_id
+				FROM public.daily_question_class_selections selection
+				WHERE selection.class_id = $1
+				  AND selection.assignment_date = $2::date
+				  AND selection.content_id = $3
+				  AND selection.source = 'teacher_bank'
+				  AND selection.selection_reason = 'teacher_uniform'
+				  AND selection.question_body IS NOT NULL
+				FOR SHARE`, classID.String, assignmentDate, choice.ContentID).Scan(
+				&snapshotTitle,
+				&snapshotBody,
+				&snapshotDifficulty,
+				&snapshotConceptIDs,
+				&snapshotMeta,
+				&targetConceptID,
+			)
+			snapshotTargetConceptID = ""
+			if targetConceptID.Valid {
+				snapshotTargetConceptID = targetConceptID.String
+			}
+			source = dailyquestionapp.SourceTeacherBank
+			reason = dailyquestionapp.ReasonTeacherUniform
+		} else {
+			err = tx.DB().QueryRow(ctx, `
+				SELECT title,
+				       body,
+				       difficulty,
+				       concept_ids,
+				       meta,
+				       generated_by_student_id
+				FROM public.contents
+				WHERE id = $1
+				  AND type = 'PROBLEM'::public.contenttype
+				  AND status = 'PUBLISHED'::public.contentstatus
+				  AND deleted_at IS NULL
+				FOR SHARE`, choice.ContentID).Scan(
+				&snapshotTitle,
+				&snapshotBody,
+				&snapshotDifficulty,
+				&snapshotConceptIDs,
+				&snapshotMeta,
+				&snapshotGeneratedBy,
+			)
+		}
 		if errors.Is(err, pgx.ErrNoRows) {
 			return nil
 		}
@@ -1125,26 +1388,38 @@ func (r DailyQuestionRepository) FinishPreparation(
 		}
 
 		if reason != dailyquestionapp.ReasonRepeatFallback {
-			var lockedStudentID string
-			if err := tx.DB().QueryRow(ctx, `
-				SELECT id
-				FROM public.users
-				WHERE id = $1
-				FOR UPDATE`, studentID).Scan(&lockedStudentID); err != nil {
-				return err
-			}
 			rows, err := tx.DB().Query(ctx, `
-				SELECT previous.content_id,
-				       coalesce(previous.question_body, content.body)
-				FROM public.daily_question_assignments previous
-				LEFT JOIN public.contents content
-				  ON content.id = previous.content_id
-				 AND content.type = 'PROBLEM'::public.contenttype
-				WHERE previous.student_id = $1
-				  AND previous.id <> $2
-				  AND previous.assignment_date <> $3::date
-				  AND previous.content_id IS NOT NULL
-				  AND BTRIM(coalesce(previous.question_body, content.body, '')) <> ''`, studentID, assignmentID, assignmentDate)
+				WITH history AS (
+				    SELECT previous.content_id,
+				           coalesce(previous.question_body, content.body) AS body,
+				           previous.assigned_at AS occurred_at,
+				           previous.id
+				    FROM public.daily_question_assignments previous
+				    LEFT JOIN public.contents content
+				      ON content.id = previous.content_id
+				     AND content.type = 'PROBLEM'::public.contenttype
+				    WHERE previous.student_id = $1
+				      AND previous.id <> $2
+				      AND previous.assignment_date <> $3::date
+				      AND previous.content_id IS NOT NULL
+				    UNION ALL
+				    SELECT attempt.content_id,
+				           content.body,
+				           coalesce(attempt.submitted_at, attempt.started_at),
+				           attempt.id
+				    FROM public.content_attempts attempt
+				    JOIN public.contents content
+				      ON content.id = attempt.content_id
+				     AND content.type = 'PROBLEM'::public.contenttype
+				    WHERE attempt.student_id = $1
+				      AND attempt.submitted_at IS NOT NULL
+				      AND attempt.daily_assignment_id IS NULL
+				)
+				SELECT history.content_id, history.body
+				FROM history
+				WHERE BTRIM(coalesce(history.body, '')) <> ''
+				ORDER BY history.occurred_at DESC, history.id DESC
+				LIMIT $4`, studentID, assignmentID, assignmentDate, dailyQuestionHistoryLimit)
 			if err != nil {
 				return err
 			}
@@ -1194,7 +1469,7 @@ func (r DailyQuestionRepository) FinishPreparation(
 			assignmentID,
 			generationToken,
 			choice.ContentID,
-			nullableString(choice.TargetConceptID),
+			nullableString(snapshotTargetConceptID),
 			source,
 			reason,
 			snapshotTitle,
@@ -1291,7 +1566,6 @@ func (r DailyQuestionRepository) GetClassSettings(ctx context.Context, teacherID
 		       EXISTS (
 		           SELECT 1
 		           FROM public.daily_question_class_selections selection
-		           JOIN public.contents content ON content.id = selection.content_id
 		           WHERE selection.class_id = state.id
 		             AND selection.assignment_date = CASE
 		                 WHEN state.assignment_count > 0
@@ -1301,9 +1575,8 @@ func (r DailyQuestionRepository) GetClassSettings(ctx context.Context, teacherID
 		             END
 		             AND selection.source = 'teacher_bank'
 		             AND selection.selection_reason = 'teacher_uniform'
-		             AND content.type = 'PROBLEM'::public.contenttype
-		             AND content.status = 'PUBLISHED'::public.contentstatus
-		             AND content.deleted_at IS NULL
+		             AND selection.content_id IS NOT NULL
+		             AND selection.question_body IS NOT NULL
 		       ) OR EXISTS (
 		           SELECT 1
 		           FROM public.daily_question_assignments assignment
@@ -1327,13 +1600,11 @@ func (r DailyQuestionRepository) GetClassSettings(ctx context.Context, teacherID
 		             AND event.kind IN ('manual_student_reminder', 'automatic_student_reminder')
 		       ) AS today_reminder_sent,
 		       coalesce((
-		           SELECT event.recipient_count
+		           SELECT sum(event.recipient_count)
 		           FROM public.daily_question_wechat_events event
 		           WHERE event.class_id = state.id
 		             AND event.assignment_date = $3::date
 		             AND event.kind IN ('manual_student_reminder', 'automatic_student_reminder')
-		           ORDER BY event.created_at DESC, event.id DESC
-		           LIMIT 1
 		       ), 0)::int AS today_reminder_recipient_count
 		FROM state`, classID, teacherID, date).Scan(
 		&settings.ClassID,
@@ -1357,11 +1628,11 @@ func (r DailyQuestionRepository) GetClassSettings(ctx context.Context, teacherID
 // UpsertClassSettings serializes teacher changes with student reservations.
 func (r DailyQuestionRepository) UpsertClassSettings(
 	ctx context.Context,
-	settings dailyquestionapp.ClassSettings,
+	update dailyquestionapp.ClassSettingsUpdate,
 	date time.Time,
 	now time.Time,
-) (dailyquestionapp.ClassSettings, bool, error) {
-	var result dailyquestionapp.ClassSettings
+) (dailyquestionapp.ClassSettingsUpdateResult, bool, error) {
+	var result dailyquestionapp.ClassSettingsUpdateResult
 	found := false
 	err := withRepositoryTx(ctx, "update daily question class strategy", r.Repository, func(base Repository) DailyQuestionRepository {
 		return DailyQuestionRepository{Repository: base}
@@ -1371,7 +1642,7 @@ func (r DailyQuestionRepository) UpsertClassSettings(
 			SELECT id
 			FROM public.classes
 			WHERE id = $1 AND teacher_id = $2
-			FOR UPDATE`, settings.ClassID, settings.TeacherID).Scan(&classID); err != nil {
+			FOR UPDATE`, update.ClassID, update.TeacherID).Scan(&classID); err != nil {
 			if errors.Is(err, pgx.ErrNoRows) {
 				return nil
 			}
@@ -1379,31 +1650,24 @@ func (r DailyQuestionRepository) UpsertClassSettings(
 		}
 		found = true
 
-		current, ok, err := tx.GetClassSettings(ctx, settings.TeacherID, settings.ClassID, date)
+		current, ok, err := tx.GetClassSettings(ctx, update.TeacherID, update.ClassID, date)
 		if err != nil {
 			return err
 		}
 		if !ok {
 			return pgx.ErrNoRows
 		}
-		if current.Strategy == settings.Strategy && current.AutoReminderEnabled == settings.AutoReminderEnabled {
-			result = current
-			return nil
+		nextStrategy := current.Strategy
+		if update.Strategy != nil {
+			nextStrategy = *update.Strategy
 		}
-
-		// A uniform schedule is required only when switching into uniform mode.
-		// An exhausted schedule must not prevent the teacher from disabling an
-		// unrelated automatic-reminder setting.
-		if settings.Strategy == dailyquestionapp.StrategyUniform && current.Strategy != dailyquestionapp.StrategyUniform {
-			activationDate := date
-			if current.TodayAssignmentCount > 0 && current.EffectiveStrategy != dailyquestionapp.StrategyUniform {
-				activationDate = activationDate.AddDate(0, 0, 1)
-			}
-			if _, assigned, err := tx.GetClassSelection(ctx, settings.ClassID, activationDate); err != nil {
-				return err
-			} else if !assigned {
-				return dailyquestionapp.ErrUniformQuestionNotAssigned
-			}
+		nextAutoReminderEnabled := current.AutoReminderEnabled
+		if update.AutoReminderEnabled != nil {
+			nextAutoReminderEnabled = *update.AutoReminderEnabled
+		}
+		if current.Strategy == nextStrategy && current.AutoReminderEnabled == nextAutoReminderEnabled {
+			result.Settings = current
+			return nil
 		}
 
 		if _, err := tx.DB().Exec(ctx, `
@@ -1416,27 +1680,28 @@ func (r DailyQuestionRepository) UpsertClassSettings(
 				strategy = EXCLUDED.strategy,
 				auto_reminder_enabled = EXCLUDED.auto_reminder_enabled,
 				updated_at = EXCLUDED.updated_at`,
-			settings.ClassID,
-			settings.TeacherID,
-			settings.Strategy,
-			settings.AutoReminderEnabled,
+			update.ClassID,
+			update.TeacherID,
+			nextStrategy,
+			nextAutoReminderEnabled,
 			now,
 		); err != nil {
 			return err
 		}
 
-		stored, ok, err := tx.GetClassSettings(ctx, settings.TeacherID, settings.ClassID, date)
+		stored, ok, err := tx.GetClassSettings(ctx, update.TeacherID, update.ClassID, date)
 		if err != nil {
 			return err
 		}
 		if !ok {
 			return pgx.ErrNoRows
 		}
-		result = stored
+		result.Settings = stored
+		result.AutoReminderJustEnabled = !current.AutoReminderEnabled && nextAutoReminderEnabled
 		return nil
 	})
 	if err != nil {
-		return dailyquestionapp.ClassSettings{}, false, err
+		return dailyquestionapp.ClassSettingsUpdateResult{}, false, err
 	}
 	return result, found, nil
 }
@@ -1446,21 +1711,34 @@ func (r DailyQuestionRepository) GetClassStatistics(ctx context.Context, teacher
 	var result dailyquestionapp.ClassStatistics
 	var firstIncorrectCount int
 	err := r.DB().QueryRow(ctx, `
-		WITH owned_class AS (
+		WITH report_day AS (
+			SELECT (($3::date::timestamp AT TIME ZONE 'Asia/Shanghai') AT TIME ZONE 'UTC') AS start_utc
+		), owned_class AS (
 			SELECT id FROM public.classes WHERE id = $1 AND teacher_id = $2
-		), current_enrolled AS (
-			SELECT enrollment.student_id
-			FROM public.class_enrollments enrollment
-			JOIN owned_class ON owned_class.id = enrollment.class_id
-		), assigned_students AS (
+		), start_of_day_roster AS (
+			SELECT history.student_id
+			FROM public.class_enrollment_history history
+			JOIN owned_class ON owned_class.id = history.class_id
+			CROSS JOIN report_day
+				WHERE history.joined_at <= report_day.start_utc
+				  AND (history.left_at IS NULL OR history.left_at > report_day.start_utc)
+			), current_roster_fallback AS (
+				SELECT enrollment.student_id
+				FROM public.class_enrollments enrollment
+				JOIN owned_class ON owned_class.id = enrollment.class_id
+				CROSS JOIN report_day
+				WHERE enrollment.joined_at <= report_day.start_utc
+			), assigned_students AS (
 			SELECT assignment.student_id
 			FROM public.daily_question_assignments assignment
 			JOIN owned_class ON owned_class.id = assignment.class_id
 			WHERE assignment.assignment_date = $3::date
-		), roster AS (
-			SELECT student_id FROM current_enrolled
-			UNION
-			SELECT student_id FROM assigned_students
+			), roster AS (
+				SELECT student_id FROM start_of_day_roster
+				UNION
+				SELECT student_id FROM current_roster_fallback
+				UNION
+				SELECT student_id FROM assigned_students
 		)
 		SELECT owned_class.id,
 		       count(roster.student_id)::int,
@@ -1555,33 +1833,20 @@ func (r DailyQuestionRepository) CreateClassReminder(ctx context.Context, input 
 		}
 		found = true
 
-		var existingID string
-		var recipientCount int
-		var hasActiveOrSentDelivery bool
-		err := tx.DB().QueryRow(ctx, `
-			SELECT event.id,
-			       event.recipient_count,
-			       EXISTS (
-			           SELECT 1
-			           FROM public.wechat_message_reminder_jobs job
-			           WHERE job.event_type = $3
-			             AND job.source_id = event.id
-			             AND job.status IN ('pending', 'processing', 'sent')
-			       )
-			FROM public.daily_question_wechat_events event
-			WHERE event.class_id = $1
-			  AND event.assignment_date = $2::date
-			  AND event.kind IN ('manual_student_reminder', 'automatic_student_reminder')
-			ORDER BY event.created_at DESC, event.id DESC
-			LIMIT 1
-			FOR UPDATE`,
-			input.ClassID,
-			input.AssignmentDate,
-			string(wechatreminder.EventDailyQuestion),
-		).Scan(&existingID, &recipientCount, &hasActiveOrSentDelivery)
-		if err == nil {
-			if hasActiveOrSentDelivery {
-				added, err := tx.wechatReminders.EnqueueDailyQuestionRecipients(
+		if input.Kind == dailyquestionapp.ReminderKindAutomaticStudent {
+			var existingID string
+			err := tx.DB().QueryRow(ctx, `
+				SELECT event.id
+				FROM public.daily_question_wechat_events event
+				WHERE event.class_id = $1
+				  AND event.assignment_date = $2::date
+				  AND event.kind = 'automatic_student_reminder'
+				FOR UPDATE`,
+				input.ClassID,
+				input.AssignmentDate,
+			).Scan(&existingID)
+			if err == nil {
+				queued, err := tx.wechatReminders.ReconcileAutomaticDailyQuestionRecipients(
 					ctx,
 					tx.DB(),
 					existingID,
@@ -1591,33 +1856,36 @@ func (r DailyQuestionRepository) CreateClassReminder(ctx context.Context, input 
 				if err != nil {
 					return err
 				}
-				if added > 0 {
-					if _, err := tx.DB().Exec(ctx, `
-						UPDATE public.daily_question_wechat_events
-						SET recipient_count = recipient_count + $2
-						WHERE id = $1`, existingID, added); err != nil {
-						return err
-					}
-					recipientCount += added
+				if _, err := tx.DB().Exec(ctx, `
+					UPDATE public.daily_question_wechat_events
+					SET recipient_count = recipient_count + $2
+					WHERE id = $1`, existingID, queued); err != nil {
+					return err
 				}
 				result = dailyquestionapp.ReminderResult{
 					ReminderID:     existingID,
-					RecipientCount: recipientCount,
+					RecipientCount: queued,
 					Created:        false,
 				}
 				return nil
 			}
-
-			// Terminal jobs use the event ID as their semantic source. Remove
-			// that source before retrying so a later binding or recovered queue
-			// can receive a fresh job without duplicating a sent reminder.
-			if _, err := tx.DB().Exec(ctx, `
-				DELETE FROM public.daily_question_wechat_events
-				WHERE id = $1`, existingID); err != nil {
+			if !errors.Is(err, pgx.ErrNoRows) {
 				return err
 			}
-		} else if !errors.Is(err, pgx.ErrNoRows) {
-			return err
+			var manuallyReminded bool
+			if err := tx.DB().QueryRow(ctx, `
+					SELECT EXISTS (
+						SELECT 1
+						FROM public.daily_question_wechat_events event
+						WHERE event.class_id = $1
+						  AND event.assignment_date = $2::date
+						  AND event.kind = 'manual_student_reminder'
+					)`, input.ClassID, input.AssignmentDate).Scan(&manuallyReminded); err != nil {
+				return err
+			}
+			if manuallyReminded {
+				return nil
+			}
 		}
 
 		if _, err := tx.DB().Exec(ctx, `
@@ -1635,7 +1903,7 @@ func (r DailyQuestionRepository) CreateClassReminder(ctx context.Context, input 
 			return err
 		}
 
-		recipientCount, err = tx.wechatReminders.EnqueueDailyQuestionRecipients(
+		recipientCount, err := tx.wechatReminders.EnqueueDailyQuestionRecipients(
 			ctx,
 			tx.DB(),
 			input.ReminderID,
@@ -1816,20 +2084,17 @@ func (r DailyQuestionRepository) enqueueUniformLowStockAlert(
 	rows, err := r.DB().Query(ctx, `
 		SELECT selection.content_id
 		FROM public.daily_question_class_selections selection
-		JOIN public.contents content ON content.id = selection.content_id
 		WHERE selection.class_id = $1
 		  AND selection.assignment_date >= $2::date
 		  AND selection.source = 'teacher_bank'
 		  AND selection.selection_reason = 'teacher_uniform'
-		  AND content.type = 'PROBLEM'::public.contenttype
-		  AND content.status = 'PUBLISHED'::public.contentstatus
-		  AND content.deleted_at IS NULL
+		  AND selection.content_id IS NOT NULL
+		  AND selection.question_body IS NOT NULL
 		  AND NOT EXISTS (
 		      SELECT 1
 		      FROM public.daily_question_assignments assignment
 		      WHERE assignment.class_id = selection.class_id
 		        AND assignment.assignment_date = selection.assignment_date
-		        AND (assignment.status <> 'unavailable' OR assignment.content_id IS NOT NULL)
 		  )
 		ORDER BY selection.assignment_date
 		LIMIT 2`, classID, date)
@@ -1864,16 +2129,8 @@ func (r DailyQuestionRepository) enqueueUniformLowStockAlert(
 	}
 
 	var existingID string
-	var hasActiveOrSentDelivery bool
 	err = r.DB().QueryRow(ctx, `
-		SELECT event.id,
-		       EXISTS (
-		           SELECT 1
-		           FROM public.wechat_message_reminder_jobs job
-		           WHERE job.event_type = $3
-		             AND job.source_id = event.id
-		             AND job.status IN ('pending', 'processing', 'sent')
-		       )
+		SELECT event.id
 		FROM public.daily_question_wechat_events event
 		WHERE event.class_id = $1
 		  AND event.remaining_content_id = $2
@@ -1881,17 +2138,28 @@ func (r DailyQuestionRepository) enqueueUniformLowStockAlert(
 		FOR UPDATE`,
 		classID,
 		remaining[0],
-		string(wechatreminder.EventDailyQuestion),
-	).Scan(&existingID, &hasActiveOrSentDelivery)
+	).Scan(&existingID)
 	if err == nil {
-		if hasActiveOrSentDelivery {
-			return nil
-		}
-		if _, err := r.DB().Exec(ctx, `
-			DELETE FROM public.daily_question_wechat_events
-			WHERE id = $1`, existingID); err != nil {
+		requeued, err := r.wechatReminders.RequeueDailyQuestionRecipient(
+			ctx,
+			r.DB(),
+			existingID,
+			teacherID,
+		)
+		if err != nil {
 			return err
 		}
+		if requeued > 0 {
+			if _, err := r.DB().Exec(ctx, `
+				UPDATE public.daily_question_wechat_events
+				SET recipient_count = recipient_count + $2
+				WHERE id = $1`, existingID, requeued); err != nil {
+				return err
+			}
+		}
+		// A sent event records that this exact one-question threshold was already
+		// observed, even after terminal delivery jobs are cleaned up.
+		return nil
 	} else if !errors.Is(err, pgx.ErrNoRows) {
 		return err
 	}
@@ -2023,8 +2291,10 @@ func scanDailyAssignment(scanner rowScanner) (dailyquestionapp.Assignment, error
 	assignment.FirstResult = textPointer(firstResult)
 	assignment.GenerationToken = textPointer(generationToken)
 	assignment.FailureCode = textPointer(failureCode)
+	assignment.AssignedAt = dailyQuestionWallTime(assignment.AssignedAt)
 	assignment.OpenedAt = timestampPointer(openedAt)
 	assignment.CompletedAt = timestampPointer(completedAt)
+	assignment.UpdatedAt = dailyQuestionWallTime(assignment.UpdatedAt)
 	if !questionID.Valid {
 		return assignment, nil
 	}
@@ -2098,8 +2368,19 @@ func timestampPointer(value pgtype.Timestamp) *time.Time {
 	if !value.Valid {
 		return nil
 	}
-	copy := value.Time
+	copy := dailyQuestionWallTime(value.Time)
 	return &copy
+}
+
+func dailyQuestionWallTime(value time.Time) time.Time {
+	if value.IsZero() {
+		return value
+	}
+	return time.Date(
+		value.Year(), value.Month(), value.Day(),
+		value.Hour(), value.Minute(), value.Second(), value.Nanosecond(),
+		dailyQuestionLocation,
+	)
 }
 
 func stringPtr(value string) *string {
