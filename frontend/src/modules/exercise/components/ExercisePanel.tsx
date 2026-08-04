@@ -2,8 +2,6 @@ import React, { useCallback, useState } from 'react';
 import { Card, CardContent, CardFooter, CardHeader, CardTitle } from '@/components/ui/Card';
 import { Button } from '@/components/ui/Button';
 import { Input } from '@/components/ui/Input';
-import { MathRenderer } from '@/libs/math/MathRenderer';
-import { MathText } from '@/libs/math/MathText';
 import {
   AlertCircle,
   BookOpen,
@@ -15,6 +13,7 @@ import {
 } from 'lucide-react';
 import { EmptyExerciseState } from './EmptyExerciseState';
 import { AnswerImageInput } from './AnswerImageInput';
+import { ExerciseMathContent } from './ExerciseMathContent';
 import type {
   ExerciseSolution,
   Question,
@@ -26,48 +25,23 @@ import type {
   SubmitPhase,
 } from '../hooks/exerciseViewModel';
 
-const inlineOrBlockMathRegex = /\$\$?[\s\S]+?\$\$?/;
-const latexHintRegex = /\\[a-zA-Z]+|[_^]/;
-
-const normalizeExerciseMathDelimiters = (value: string) =>
-  value
-    .replace(/\\\[\s*([\s\S]*?)\s*\\\]/g, (_match, expression: string) => `$$${expression}$$`)
-    .replace(/\\\(\s*([\s\S]*?)\s*\\\)/g, (_match, expression: string) => `$${expression}$`);
-
 const questionTypeLabels: Record<Question['type'], string> = {
   multiple_choice: '选择题',
   short_answer: '简答题',
   proof: '证明题',
 };
+const uuidPattern = /^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i;
 
 const renderMathContent = (
   value: string,
-  options: { className?: string; block?: boolean } = {}
-) => {
-  if (!value) return null;
-
-  const normalizedValue = normalizeExerciseMathDelimiters(value);
-  const safeContentClassName = [
-    'min-w-0 max-w-full overflow-x-auto overflow-y-hidden [overflow-wrap:anywhere]',
-    options.className,
-  ].filter(Boolean).join(' ');
-
-  if (inlineOrBlockMathRegex.test(normalizedValue)) {
-    return <MathText className={safeContentClassName}>{normalizedValue}</MathText>;
-  }
-
-  if (latexHintRegex.test(normalizedValue)) {
-    return (
-      <MathRenderer
-        expression={normalizedValue}
-        block={options.block}
-        className={`inline-block ${safeContentClassName}`}
-      />
-    );
-  }
-
-  return <span className={safeContentClassName}>{normalizedValue}</span>;
-};
+  options: { className?: string; block?: boolean } = {},
+) => (
+  <ExerciseMathContent
+    value={value}
+    className={options.className}
+    block={options.block}
+  />
+);
 
 export interface ExercisePanelProps {
   currentQuestion: Question | null;
@@ -211,6 +185,15 @@ const ExercisePanelContent: React.FC<ExercisePanelProps> = ({
       : isIndeterminate || error
         ? '重试提交'
         : '提交答案';
+  const knowledgePointLabels = new Map(
+    currentQuestion.knowledgePoints.map((conceptId, index) => [
+      conceptId,
+      (() => {
+        const name = currentQuestion.knowledgePointNames[index]?.trim();
+        return name && !uuidPattern.test(name) ? name : '当前知识点';
+      })(),
+    ]),
+  );
 
   return (
     <div className="min-w-0 max-w-full space-y-6 animate-fade-in">
@@ -423,7 +406,7 @@ const ExercisePanelContent: React.FC<ExercisePanelProps> = ({
                     key={concept}
                     className="text-xs px-2 py-1 rounded-full bg-primary-100 dark:bg-primary-900 text-primary-700 dark:text-primary-300"
                   >
-                    {concept}: {Math.round(mastery * 100)}%
+                    {knowledgePointLabels.get(concept) || '当前知识点'}: {Math.round(mastery * 100)}%
                   </span>
                 ))}
               </div>

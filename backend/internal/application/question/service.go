@@ -9,6 +9,7 @@ import (
 	"time"
 	"unicode"
 
+	"mathstudy/backend/internal/platform/learningconcept"
 	"mathstudy/backend/internal/platform/metautil"
 	"mathstudy/backend/internal/platform/numutil"
 	"mathstudy/backend/internal/platform/sliceutil"
@@ -44,6 +45,7 @@ const (
 type Repository interface {
 	MatchConceptIDs(context.Context, string) ([]string, error)
 	MatchConceptIDsBatch(context.Context, []string) ([][]string, error)
+	ConceptIDsExist(context.Context, []string) (bool, error)
 	ListQuestions(context.Context, string, ListFilter) ([]Question, int, error)
 	GetQuestion(context.Context, string, string) (Question, bool, error)
 	CreateQuestion(context.Context, string, QuestionInput, time.Time) (Question, error)
@@ -280,6 +282,10 @@ func (s *Service) CreateQuestion(ctx context.Context, ownerID string, input Ques
 		}
 		input.ConceptIDs = conceptIDs
 	}
+	input.ConceptIDs = conceptIDsOrUncategorized(input.ConceptIDs)
+	if err := s.requireConceptIDs(ctx, input.ConceptIDs); err != nil {
+		return Question{}, err
+	}
 	return s.repo.CreateQuestion(ctx, ownerID, input, s.now())
 }
 
@@ -304,6 +310,13 @@ func (s *Service) UpdateQuestion(ctx context.Context, ownerID string, questionID
 		if len(conceptIDs) > 0 {
 			update.ConceptIDs = &conceptIDs
 		}
+	}
+	if update.ConceptIDs != nil {
+		conceptIDs := conceptIDsOrUncategorized(*update.ConceptIDs)
+		if err := s.requireConceptIDs(ctx, conceptIDs); err != nil {
+			return Question{}, err
+		}
+		update.ConceptIDs = &conceptIDs
 	}
 	question, ok, err := s.repo.UpdateQuestion(ctx, ownerID, questionID, update, s.now())
 	if err != nil {
@@ -435,6 +448,16 @@ func (s *Service) BatchImport(ctx context.Context, ownerID string, questions []Q
 				normalized[index].ConceptIDs = matches[matchIndex-1]
 			}
 		}
+	}
+	for index := range normalized {
+		normalized[index].ConceptIDs = conceptIDsOrUncategorized(normalized[index].ConceptIDs)
+	}
+	conceptIDs := []string{}
+	for _, input := range normalized {
+		conceptIDs = sliceutil.AppendUniqueNonEmptyStrings(conceptIDs, input.ConceptIDs...)
+	}
+	if err := s.requireConceptIDs(ctx, conceptIDs); err != nil {
+		return BatchOperationResponse{}, err
 	}
 	return s.repo.BatchImport(ctx, ownerID, normalized, s.now())
 }
@@ -605,6 +628,25 @@ func normalizeQuestionInput(input QuestionInput) QuestionInput {
 		}
 	}
 	return input
+}
+
+func conceptIDsOrUncategorized(conceptIDs []string) []string {
+	conceptIDs = sliceutil.AppendUniqueNonEmptyStrings(nil, conceptIDs...)
+	if len(conceptIDs) == 0 {
+		return []string{learningconcept.UncategorizedID}
+	}
+	return conceptIDs
+}
+
+func (s *Service) requireConceptIDs(ctx context.Context, conceptIDs []string) error {
+	exist, err := s.repo.ConceptIDsExist(ctx, conceptIDs)
+	if err != nil {
+		return err
+	}
+	if !exist {
+		return ErrBadRequest
+	}
+	return nil
 }
 
 func normalizeQuestionUpdate(update QuestionUpdate) QuestionUpdate {

@@ -45,6 +45,10 @@ var (
 	ErrGeneratedContentInvalid = errors.New("generated exercise content is invalid")
 	ErrDailyAssignmentInvalid  = errors.New("daily question assignment is invalid")
 	ErrDailyAssignmentClosed   = errors.New("daily question assignment no longer accepts linked attempts")
+	ErrReviewTaskStale         = errors.New("mistake review task changed")
+	ErrReviewNotDue            = errors.New("mistake review is not due")
+	ErrMistakeRecordArchived   = errors.New("mistake record was archived")
+	ErrSubmissionConflict      = errors.New("submission id was reused with a different payload")
 )
 
 const (
@@ -53,6 +57,8 @@ const (
 	QuestionTypeMultipleChoice = "multiple_choice"
 	QuestionTypeShortAnswer    = "short_answer"
 	QuestionBlankMarker        = "＿＿＿＿"
+	fullMasteryWeight          = 1.0
+	informalRedoMasteryWeight  = 0.35
 )
 
 // Repository is the persistence surface required by exercise use cases.
@@ -82,9 +88,22 @@ type Repository interface {
 	GetDailyAssignment(context.Context, string, string) (DailyAssignmentBinding, bool, error)
 	GetDailyAssignmentForUpdate(context.Context, string, string) (DailyAssignmentBinding, bool, error)
 	GetDailySubmissionResponse(context.Context, string, string, string) (SubmitResponse, bool, error)
+	GetRegularSubmissionResponse(context.Context, string, string, string) (SubmitResponse, bool, error)
 	HasReadyDailyAssignmentContent(context.Context, string, string) (bool, error)
 	ApplyDailyAttempt(context.Context, DailyAttemptUpdate) error
 	SaveDailySubmissionResponse(context.Context, string, string, string, SubmitResponse) error
+	SaveRegularSubmissionResponse(context.Context, string, string, string, string, SubmitResponse) error
+	GetMistakeReviewTask(context.Context, string, string) (MistakeReviewTask, bool, error)
+	GetMistakeReviewTaskForUpdate(context.Context, string, string) (MistakeReviewTask, bool, error)
+	GetMistakeReviewTaskByContentForUpdate(context.Context, string, string) (MistakeReviewTask, bool, error)
+	CountIncorrectAttempts(context.Context, string, string) (int, error)
+	InsertMistakeReviewTask(context.Context, MistakeReviewTask) error
+	UpdateMistakeReviewTask(context.Context, MistakeReviewTask) error
+	GetReviewSubmissionResponse(context.Context, string, string, string, string) (SubmitResponse, bool, error)
+	SaveReviewSubmissionResponse(context.Context, string, string, string, string, SubmitResponse) error
+	GetMistakeRedoSubmissionResponse(context.Context, string, string, string, string) (SubmitResponse, bool, error)
+	SaveMistakeRedoSubmissionResponse(context.Context, string, string, string, string, SubmitResponse) error
+	GetMistakeRedoAttemptBinding(context.Context, string, string) (MistakeRedoAttemptBinding, bool, error)
 }
 
 // AnswerChecker compares student and correct answers.
@@ -182,27 +201,39 @@ type DKTState struct {
 
 // LearningInteraction stores one historical input event for DKT sequence updates.
 type LearningInteraction struct {
-	ExerciseID  string
-	ConceptIDs  []string
-	IsCorrect   bool
-	Difficulty  float64
-	SubmittedAt time.Time
+	AttemptID     string
+	ExerciseID    string
+	ConceptIDs    []string
+	IsCorrect     bool
+	Difficulty    float64
+	MasteryWeight float64
+	SubmittedAt   time.Time
 }
 
 // AttemptRecord stores data inserted into content_attempts.
 type AttemptRecord struct {
-	ID                 string
-	ContentID          string
-	StudentID          string
-	DailyAssignmentID  string
-	DailySubmissionKey string
-	StudentAnswer      string
-	StudentSteps       []string
-	IsCorrect          bool
-	Score              float64
-	StartedAt          time.Time
-	SubmittedAt        time.Time
-	TimeSpentSeconds   int
+	ID                      string
+	ContentID               string
+	StudentID               string
+	DailyAssignmentID       string
+	DailySubmissionKey      string
+	ReviewTaskID            string
+	ReviewSubmissionKey     string
+	ReviewSubmissionDigest  string
+	RedoOriginalAttemptID   string
+	RedoSubmissionKey       string
+	RedoSubmissionDigest    string
+	RegularSubmissionKey    string
+	RegularSubmissionDigest string
+	QuestionSnapshot        *Exercise
+	MasteryWeight           float64
+	StudentAnswer           string
+	StudentSteps            []string
+	IsCorrect               bool
+	Score                   float64
+	StartedAt               time.Time
+	SubmittedAt             time.Time
+	TimeSpentSeconds        int
 }
 
 // DailyAssignmentBinding carries the immutable question snapshot bound to a daily task.
@@ -259,13 +290,27 @@ type NextQuery struct {
 
 // SubmitRequest stores /exercise/submit request data.
 type SubmitRequest struct {
-	ExerciseID        string
-	DailyAssignmentID string
-	SubmissionID      string
-	AnswerText        string
-	AnswerImageURL    string
-	AnswerSteps       []string
-	TimeSpentSeconds  int
+	ExerciseID         string
+	DailyAssignmentID  string
+	ReviewTaskID       string
+	ReviewTaskRevision *int64
+	OriginalAttemptID  string
+	SubmissionID       string
+	AnswerText         string
+	AnswerImageURL     string
+	AnswerSteps        []string
+	TimeSpentSeconds   int
+}
+
+// MistakeRedoAttemptBinding keeps an exact redo page bound to its original error evidence.
+type MistakeRedoAttemptBinding struct {
+	ContentID             string
+	RedoOriginalAttemptID string
+	IsCorrect             bool
+	IsSubmitted           bool
+	HasDiagnosis          bool
+	IsArchived            bool
+	Exercise              Exercise
 }
 
 // GenerateExerciseRequest stores a student's AI self-practice selection.
@@ -406,6 +451,8 @@ type SubmitResponse struct {
 	MasteryUpdate      map[string]float64 `json:"mastery_update"`
 	MasteryModel       string             `json:"mastery_model"`
 	NextRecommendation string             `json:"next_recommendation"`
+	MasteryWeight      float64            `json:"mastery_weight"`
+	ReviewTaskRevision *int64             `json:"review_task_revision,omitempty"`
 }
 
 // EvaluationDetail explains how an answer was graded without exposing provider internals.
@@ -864,36 +911,83 @@ func (s *Service) GenerateExercise(ctx context.Context, userID string, request G
 	return toExerciseResponse(exercise), nil
 }
 
+// PreflightSubmit returns a committed idempotent response before the HTTP layer
+// consumes AI concurrency or OCR rate-limit capacity.
+func (s *Service) PreflightSubmit(ctx context.Context, userID string, request SubmitRequest) (SubmitResponse, bool, error) {
+	request, err := normalizeSubmitRequest(request)
+	if err != nil {
+		return SubmitResponse{}, false, err
+	}
+	return getSubmissionResponse(ctx, s.repo, userID, request)
+}
+
 // SubmitAnswer records an answer, performs lightweight grading, and updates tracking state.
 func (s *Service) SubmitAnswer(ctx context.Context, userID string, request SubmitRequest) (SubmitResponse, error) {
-	request.DailyAssignmentID = strings.TrimSpace(request.DailyAssignmentID)
-	request.SubmissionID = strings.TrimSpace(request.SubmissionID)
-	request.AnswerText = strings.TrimSpace(request.AnswerText)
-	request.AnswerImageURL = strings.TrimSpace(request.AnswerImageURL)
-	if request.ExerciseID == "" || len(request.SubmissionID) > 128 || (request.AnswerText == "" && request.AnswerImageURL == "") {
-		return SubmitResponse{}, ErrBadRequest
+	request, err := normalizeSubmitRequest(request)
+	if err != nil {
+		return SubmitResponse{}, err
 	}
+	cached, found, err := getSubmissionResponse(ctx, s.repo, userID, request)
+	if err != nil {
+		return SubmitResponse{}, err
+	}
+	if found {
+		return cached, nil
+	}
+
 	dailySubmissionKey := ""
-	if request.DailyAssignmentID != "" {
+	reviewSubmissionKey := ""
+	reviewSubmissionDigest := ""
+	redoSubmissionKey := ""
+	redoSubmissionDigest := ""
+	regularSubmissionKey := ""
+	regularSubmissionDigest := ""
+	if request.ReviewTaskID != "" {
+		reviewSubmissionKey = makeReviewSubmissionKey(request)
+		reviewSubmissionDigest = makeReviewSubmissionDigest(request)
+	} else if request.OriginalAttemptID != "" {
+		redoSubmissionKey = makeMistakeRedoSubmissionKey(request)
+		redoSubmissionDigest = makeMistakeRedoSubmissionDigest(request)
+	} else if request.DailyAssignmentID != "" {
 		dailySubmissionKey = makeDailySubmissionKey(request)
-		cached, found, err := s.repo.GetDailySubmissionResponse(
-			ctx,
-			request.DailyAssignmentID,
-			userID,
-			dailySubmissionKey,
-		)
-		if err != nil {
-			return SubmitResponse{}, err
-		}
-		if found {
-			return cached, nil
-		}
+	} else {
+		regularSubmissionKey = makeRegularSubmissionKey(request)
+		regularSubmissionDigest = makeRegularSubmissionDigest(request)
 	}
 
 	var exercise Exercise
 	var correctAnswer string
-	var err error
-	if request.DailyAssignmentID == "" {
+	if request.ReviewTaskID != "" {
+		var task MistakeReviewTask
+		var ok bool
+		task, ok, err = s.repo.GetMistakeReviewTask(ctx, userID, request.ReviewTaskID)
+		if err == nil && (!ok || task.ContentID != request.ExerciseID) {
+			err = ErrBadRequest
+		}
+		if err == nil && request.DailyAssignmentID != "" && request.DailyAssignmentID != task.DailyAssignmentID {
+			err = ErrBadRequest
+		}
+		if err == nil && task.SourceAttemptID != request.OriginalAttemptID {
+			err = ErrBadRequest
+		}
+		if err == nil {
+			_, err = classifyMistakeReviewSubmission(task, *request.ReviewTaskRevision, s.now().UTC())
+		}
+		if err == nil {
+			exercise = task.Exercise
+			correctAnswer = strings.TrimSpace(metautil.String(exercise.Meta, "answer"))
+			if correctAnswer == "" {
+				err = ErrBadRequest
+			}
+		}
+	} else if request.OriginalAttemptID != "" {
+		var binding MistakeRedoAttemptBinding
+		var ok bool
+		binding, ok, err = s.repo.GetMistakeRedoAttemptBinding(ctx, userID, request.OriginalAttemptID)
+		if err == nil {
+			exercise, correctAnswer, err = mistakeRedoSubmissionExerciseFromBinding(binding, ok, request.ExerciseID)
+		}
+	} else if request.DailyAssignmentID == "" {
 		exercise, correctAnswer, err = submissionExercise(ctx, s.repo, userID, request.ExerciseID)
 	} else {
 		exercise, correctAnswer, _, err = dailySubmissionExercise(
@@ -971,12 +1065,86 @@ func (s *Service) SubmitAnswer(ctx context.Context, userID string, request Submi
 		if err := repo.LockStudentTracking(txCtx, userID); err != nil {
 			return err
 		}
-		now := s.now().UTC()
+		now := s.now().UTC().Truncate(time.Microsecond)
 		var currentExercise Exercise
 		var currentCorrectAnswer string
 		var dailyBinding DailyAssignmentBinding
+		var reviewTask MistakeReviewTask
+		var redoBinding MistakeRedoAttemptBinding
+		var hasRedoBinding bool
+		var scheduledReview bool
 		var readErr error
-		if request.DailyAssignmentID == "" {
+		if request.ReviewTaskID != "" {
+			var found bool
+			var cached SubmitResponse
+			cached, found, readErr = repo.GetReviewSubmissionResponse(
+				txCtx,
+				request.ReviewTaskID,
+				userID,
+				reviewSubmissionKey,
+				reviewSubmissionDigest,
+			)
+			if readErr == nil && found {
+				response = cached
+				return nil
+			}
+			if readErr == nil {
+				reviewTask, found, readErr = repo.GetMistakeReviewTaskForUpdate(txCtx, userID, request.ReviewTaskID)
+				if readErr == nil && (!found || reviewTask.ContentID != request.ExerciseID) {
+					readErr = ErrBadRequest
+				}
+			}
+			if readErr == nil {
+				scheduledReview, readErr = classifyMistakeReviewSubmission(reviewTask, *request.ReviewTaskRevision, now)
+			}
+			if readErr == nil {
+				currentExercise = reviewTask.Exercise
+				currentCorrectAnswer = strings.TrimSpace(metautil.String(currentExercise.Meta, "answer"))
+				if currentCorrectAnswer == "" {
+					readErr = ErrBadRequest
+				}
+			}
+		} else if request.OriginalAttemptID != "" {
+			var cached SubmitResponse
+			var found bool
+			cached, found, readErr = repo.GetMistakeRedoSubmissionResponse(
+				txCtx,
+				userID,
+				request.OriginalAttemptID,
+				redoSubmissionKey,
+				redoSubmissionDigest,
+			)
+			if readErr == nil && found {
+				response = cached
+				return nil
+			}
+			if readErr != nil {
+				return readErr
+			}
+			redoBinding, hasRedoBinding, readErr = repo.GetMistakeRedoAttemptBinding(txCtx, userID, request.OriginalAttemptID)
+			if readErr == nil {
+				currentExercise, currentCorrectAnswer, readErr = mistakeRedoSubmissionExerciseFromBinding(
+					redoBinding,
+					hasRedoBinding,
+					request.ExerciseID,
+				)
+			}
+		} else if request.DailyAssignmentID == "" {
+			var cached SubmitResponse
+			var found bool
+			cached, found, readErr = repo.GetRegularSubmissionResponse(
+				txCtx,
+				userID,
+				regularSubmissionKey,
+				regularSubmissionDigest,
+			)
+			if readErr == nil && found {
+				response = cached
+				return nil
+			}
+			if readErr != nil {
+				return readErr
+			}
 			currentExercise, currentCorrectAnswer, readErr = submissionExerciseForUpdate(
 				txCtx,
 				repo,
@@ -1015,27 +1183,70 @@ func (s *Service) SubmitAnswer(ctx context.Context, userID string, request Submi
 		if readErr != nil {
 			return readErr
 		}
+		if request.ReviewTaskID != "" && reviewTask.SourceAttemptID != request.OriginalAttemptID {
+			return ErrBadRequest
+		}
+		if request.ReviewTaskID != "" {
+			binding, found, bindingErr := repo.GetMistakeRedoAttemptBinding(txCtx, userID, request.OriginalAttemptID)
+			if bindingErr != nil {
+				return bindingErr
+			}
+			if !found || binding.ContentID != request.ExerciseID || binding.IsCorrect || !binding.IsSubmitted || !binding.HasDiagnosis || binding.IsArchived {
+				return ErrMistakeRecordArchived
+			}
+		}
 		if currentCorrectAnswer != correctAnswer || !sameSubmissionExercise(exercise, currentExercise) {
 			return ErrExerciseChanged
 		}
+		attemptDailyAssignmentID := dailyBinding.ID
+		if request.ReviewTaskID != "" && reviewTask.DailyCorrectionAvailable {
+			attemptDailyAssignmentID = reviewTask.DailyAssignmentID
+		} else if request.ReviewTaskID != "" {
+			attemptDailyAssignmentID = ""
+		}
 		attempt := AttemptRecord{
-			ID:                 attemptID,
-			ContentID:          currentExercise.ID,
-			StudentID:          userID,
-			DailyAssignmentID:  dailyBinding.ID,
-			DailySubmissionKey: dailySubmissionKey,
-			StudentAnswer:      studentAnswer,
-			StudentSteps:       request.AnswerSteps,
-			IsCorrect:          check.Decision == mathsolverapp.DecisionCorrect,
-			Score:              boolScore(check.Decision == mathsolverapp.DecisionCorrect),
-			StartedAt:          now,
-			SubmittedAt:        now,
-			TimeSpentSeconds:   request.TimeSpentSeconds,
+			ID:                      attemptID,
+			ContentID:               currentExercise.ID,
+			StudentID:               userID,
+			DailyAssignmentID:       attemptDailyAssignmentID,
+			DailySubmissionKey:      dailySubmissionKey,
+			ReviewTaskID:            request.ReviewTaskID,
+			ReviewSubmissionKey:     reviewSubmissionKey,
+			ReviewSubmissionDigest:  reviewSubmissionDigest,
+			RegularSubmissionKey:    regularSubmissionKey,
+			RegularSubmissionDigest: regularSubmissionDigest,
+			MasteryWeight:           submissionMasteryWeight(request, scheduledReview, isDailyCorrection(dailyBinding, reviewTask)),
+			StudentAnswer:           studentAnswer,
+			StudentSteps:            request.AnswerSteps,
+			IsCorrect:               check.Decision == mathsolverapp.DecisionCorrect,
+			Score:                   boolScore(check.Decision == mathsolverapp.DecisionCorrect),
+			StartedAt:               now,
+			SubmittedAt:             now,
+			TimeSpentSeconds:        request.TimeSpentSeconds,
+		}
+		questionSnapshot := cloneReviewExercise(currentExercise)
+		attempt.QuestionSnapshot = &questionSnapshot
+		if request.ReviewTaskID == "" && request.OriginalAttemptID != "" {
+			attempt.RedoOriginalAttemptID = request.OriginalAttemptID
+			attempt.RedoSubmissionKey = redoSubmissionKey
+			attempt.RedoSubmissionDigest = redoSubmissionDigest
 		}
 		if err := repo.InsertAttempt(txCtx, attempt); err != nil {
 			return err
 		}
-		if request.DailyAssignmentID != "" {
+		if request.ReviewTaskID != "" && reviewTask.DailyCorrectionAvailable {
+			if err := repo.ApplyDailyAttempt(txCtx, DailyAttemptUpdate{
+				AssignmentID: reviewTask.DailyAssignmentID,
+				StudentID:    userID,
+				ContentID:    currentExercise.ID,
+				AttemptID:    attempt.ID,
+				IsCorrect:    attempt.IsCorrect,
+				SubmittedAt:  shanghaiTime(now),
+				OnTime:       false,
+			}); err != nil {
+				return err
+			}
+		} else if request.ReviewTaskID == "" && request.DailyAssignmentID != "" {
 			if err := repo.ApplyDailyAttempt(txCtx, DailyAttemptUpdate{
 				AssignmentID: dailyBinding.ID,
 				StudentID:    userID,
@@ -1075,7 +1286,11 @@ func (s *Service) SubmitAnswer(ctx context.Context, userID string, request Submi
 		}
 
 		isCorrect := check.Decision == mathsolverapp.DecisionCorrect
-		masteryUpdate, err := s.updateTracking(txCtx, repo, userID, attempt.ID, currentExercise, isCorrect, errorType, now)
+		masteryUpdate, err := s.updateTracking(txCtx, repo, userID, attempt.ID, currentExercise, isCorrect, errorType, attempt.MasteryWeight, now)
+		if err != nil {
+			return err
+		}
+		resultingReviewTaskRevision, err := s.updateMistakeReviewTask(txCtx, repo, reviewTask, attempt, currentExercise, scheduledReview, now)
 		if err != nil {
 			return err
 		}
@@ -1099,13 +1314,48 @@ func (s *Service) SubmitAnswer(ctx context.Context, userID string, request Submi
 			MasteryUpdate:      masteryUpdate,
 			MasteryModel:       dktModelName,
 			NextRecommendation: nextRecommendation(isCorrect, masteryUpdate),
+			MasteryWeight:      attempt.MasteryWeight,
 		}
-		if request.DailyAssignmentID != "" {
+		if request.ReviewTaskID != "" {
+			response.ReviewTaskRevision = &resultingReviewTaskRevision
+			if err := repo.SaveReviewSubmissionResponse(
+				txCtx,
+				attempt.ID,
+				userID,
+				reviewSubmissionKey,
+				reviewSubmissionDigest,
+				response,
+			); err != nil {
+				return err
+			}
+		} else if request.OriginalAttemptID != "" {
+			if err := repo.SaveMistakeRedoSubmissionResponse(
+				txCtx,
+				attempt.ID,
+				userID,
+				redoSubmissionKey,
+				redoSubmissionDigest,
+				response,
+			); err != nil {
+				return err
+			}
+		} else if request.DailyAssignmentID != "" {
 			if err := repo.SaveDailySubmissionResponse(
 				txCtx,
 				attempt.ID,
 				userID,
 				dailySubmissionKey,
+				response,
+			); err != nil {
+				return err
+			}
+		} else {
+			if err := repo.SaveRegularSubmissionResponse(
+				txCtx,
+				attempt.ID,
+				userID,
+				regularSubmissionKey,
+				regularSubmissionDigest,
 				response,
 			); err != nil {
 				return err
@@ -1186,6 +1436,86 @@ func dailySubmissionExerciseFromBinding(
 	return *binding.Question, correctAnswer, binding, nil
 }
 
+func mistakeRedoSubmissionExerciseFromBinding(
+	binding MistakeRedoAttemptBinding,
+	ok bool,
+	exerciseID string,
+) (Exercise, string, error) {
+	if !ok || binding.ContentID != exerciseID || binding.Exercise.ID != exerciseID || binding.IsCorrect || !binding.IsSubmitted || !binding.HasDiagnosis || binding.IsArchived {
+		return Exercise{}, "", ErrMistakeRecordArchived
+	}
+	correctAnswer := strings.TrimSpace(metautil.String(binding.Exercise.Meta, "answer"))
+	if correctAnswer == "" {
+		return Exercise{}, "", ErrBadRequest
+	}
+	return cloneReviewExercise(binding.Exercise), correctAnswer, nil
+}
+
+func normalizeSubmitRequest(request SubmitRequest) (SubmitRequest, error) {
+	request.DailyAssignmentID = strings.TrimSpace(request.DailyAssignmentID)
+	request.ReviewTaskID = strings.TrimSpace(request.ReviewTaskID)
+	request.OriginalAttemptID = strings.TrimSpace(request.OriginalAttemptID)
+	request.SubmissionID = strings.TrimSpace(request.SubmissionID)
+	request.AnswerText = strings.TrimSpace(request.AnswerText)
+	request.AnswerImageURL = strings.TrimSpace(request.AnswerImageURL)
+	if request.ExerciseID == "" || len(request.ReviewTaskID) > 36 || len(request.OriginalAttemptID) > 36 || len(request.SubmissionID) > 128 || (request.AnswerText == "" && request.AnswerImageURL == "") {
+		return SubmitRequest{}, ErrBadRequest
+	}
+	if request.SubmissionID != "" && !isUUID(request.SubmissionID) {
+		return SubmitRequest{}, ErrBadRequest
+	}
+	if request.SubmissionID == "" && (request.ReviewTaskID != "" || request.OriginalAttemptID != "" || request.DailyAssignmentID == "") {
+		return SubmitRequest{}, ErrBadRequest
+	}
+	if request.ReviewTaskID != "" && (request.ReviewTaskRevision == nil || request.OriginalAttemptID == "") {
+		return SubmitRequest{}, ErrBadRequest
+	}
+	if request.ReviewTaskID == "" && request.OriginalAttemptID != "" && request.DailyAssignmentID != "" {
+		return SubmitRequest{}, ErrBadRequest
+	}
+	return request, nil
+}
+
+func getSubmissionResponse(
+	ctx context.Context,
+	repo Repository,
+	userID string,
+	request SubmitRequest,
+) (SubmitResponse, bool, error) {
+	if request.ReviewTaskID != "" {
+		return repo.GetReviewSubmissionResponse(
+			ctx,
+			request.ReviewTaskID,
+			userID,
+			makeReviewSubmissionKey(request),
+			makeReviewSubmissionDigest(request),
+		)
+	}
+	if request.OriginalAttemptID != "" {
+		return repo.GetMistakeRedoSubmissionResponse(
+			ctx,
+			userID,
+			request.OriginalAttemptID,
+			makeMistakeRedoSubmissionKey(request),
+			makeMistakeRedoSubmissionDigest(request),
+		)
+	}
+	if request.DailyAssignmentID != "" {
+		return repo.GetDailySubmissionResponse(
+			ctx,
+			request.DailyAssignmentID,
+			userID,
+			makeDailySubmissionKey(request),
+		)
+	}
+	return repo.GetRegularSubmissionResponse(
+		ctx,
+		userID,
+		makeRegularSubmissionKey(request),
+		makeRegularSubmissionDigest(request),
+	)
+}
+
 func makeDailySubmissionKey(request SubmitRequest) string {
 	if request.SubmissionID != "" {
 		return "client:" + request.SubmissionID
@@ -1203,6 +1533,134 @@ func makeDailySubmissionKey(request SubmitRequest) string {
 	})
 	sum := sha256.Sum256(payload)
 	return "legacy:" + hex.EncodeToString(sum[:])
+}
+
+func makeReviewSubmissionKey(request SubmitRequest) string {
+	if request.SubmissionID != "" {
+		return "client:" + request.SubmissionID
+	}
+	payload, _ := json.Marshal(struct {
+		ExerciseID     string   `json:"exercise_id"`
+		ReviewTaskID   string   `json:"review_task_id"`
+		AnswerText     string   `json:"answer_text"`
+		AnswerImageURL string   `json:"answer_image_url"`
+		AnswerSteps    []string `json:"answer_steps"`
+	}{
+		ExerciseID:     request.ExerciseID,
+		ReviewTaskID:   request.ReviewTaskID,
+		AnswerText:     request.AnswerText,
+		AnswerImageURL: request.AnswerImageURL,
+		AnswerSteps:    request.AnswerSteps,
+	})
+	sum := sha256.Sum256(payload)
+	return "legacy:" + hex.EncodeToString(sum[:])
+}
+
+func makeReviewSubmissionDigest(request SubmitRequest) string {
+	payload, _ := json.Marshal(struct {
+		ExerciseID         string   `json:"exercise_id"`
+		DailyAssignmentID  string   `json:"daily_assignment_id"`
+		ReviewTaskID       string   `json:"review_task_id"`
+		ReviewTaskRevision *int64   `json:"review_task_revision"`
+		OriginalAttemptID  string   `json:"original_attempt_id"`
+		AnswerText         string   `json:"answer_text"`
+		AnswerImageURL     string   `json:"answer_image_url"`
+		AnswerSteps        []string `json:"answer_steps"`
+		TimeSpentSeconds   int      `json:"time_spent_seconds"`
+	}{
+		ExerciseID:         request.ExerciseID,
+		DailyAssignmentID:  request.DailyAssignmentID,
+		ReviewTaskID:       request.ReviewTaskID,
+		ReviewTaskRevision: request.ReviewTaskRevision,
+		OriginalAttemptID:  request.OriginalAttemptID,
+		AnswerText:         request.AnswerText,
+		AnswerImageURL:     request.AnswerImageURL,
+		AnswerSteps:        request.AnswerSteps,
+		TimeSpentSeconds:   request.TimeSpentSeconds,
+	})
+	sum := sha256.Sum256(payload)
+	return hex.EncodeToString(sum[:])
+}
+
+func makeMistakeRedoSubmissionKey(request SubmitRequest) string { return request.SubmissionID }
+
+func makeMistakeRedoSubmissionDigest(request SubmitRequest) string {
+	payload, _ := json.Marshal(struct {
+		ExerciseID        string   `json:"exercise_id"`
+		OriginalAttemptID string   `json:"original_attempt_id"`
+		AnswerText        string   `json:"answer_text"`
+		AnswerImageURL    string   `json:"answer_image_url"`
+		AnswerSteps       []string `json:"answer_steps"`
+		TimeSpentSeconds  int      `json:"time_spent_seconds"`
+	}{
+		ExerciseID:        request.ExerciseID,
+		OriginalAttemptID: request.OriginalAttemptID,
+		AnswerText:        request.AnswerText,
+		AnswerImageURL:    request.AnswerImageURL,
+		AnswerSteps:       request.AnswerSteps,
+		TimeSpentSeconds:  request.TimeSpentSeconds,
+	})
+	sum := sha256.Sum256(payload)
+	return hex.EncodeToString(sum[:])
+}
+
+func makeRegularSubmissionKey(request SubmitRequest) string { return request.SubmissionID }
+
+func makeRegularSubmissionDigest(request SubmitRequest) string {
+	payload, _ := json.Marshal(struct {
+		ExerciseID       string   `json:"exercise_id"`
+		AnswerText       string   `json:"answer_text"`
+		AnswerImageURL   string   `json:"answer_image_url"`
+		AnswerSteps      []string `json:"answer_steps"`
+		TimeSpentSeconds int      `json:"time_spent_seconds"`
+	}{
+		ExerciseID:       request.ExerciseID,
+		AnswerText:       request.AnswerText,
+		AnswerImageURL:   request.AnswerImageURL,
+		AnswerSteps:      request.AnswerSteps,
+		TimeSpentSeconds: request.TimeSpentSeconds,
+	})
+	sum := sha256.Sum256(payload)
+	return hex.EncodeToString(sum[:])
+}
+
+func isUUID(value string) bool {
+	if len(value) != 36 {
+		return false
+	}
+	for index, char := range value {
+		switch index {
+		case 8, 13, 18, 23:
+			if char != '-' {
+				return false
+			}
+		default:
+			if !((char >= '0' && char <= '9') || (char >= 'a' && char <= 'f') || (char >= 'A' && char <= 'F')) {
+				return false
+			}
+		}
+	}
+	return value[14] == '4' && (value[19] == '8' || value[19] == '9' || value[19] == 'a' || value[19] == 'A' || value[19] == 'b' || value[19] == 'B')
+}
+
+func submissionMasteryWeight(request SubmitRequest, scheduledReview bool, dailyCorrection bool) float64 {
+	if scheduledReview {
+		return fullMasteryWeight
+	}
+	if dailyCorrection || request.ReviewTaskID != "" || request.OriginalAttemptID != "" {
+		return informalRedoMasteryWeight
+	}
+	return fullMasteryWeight
+}
+
+func isDailyCorrection(dailyBinding DailyAssignmentBinding, reviewTask MistakeReviewTask) bool {
+	if reviewTask.ID != "" {
+		return reviewTask.DailyCorrectionAvailable
+	}
+	return dailyBinding.Status == "completed" &&
+		dailyBinding.FirstAttemptID != "" &&
+		dailyBinding.FirstResult == "incorrect" &&
+		dailyBinding.CorrectedAttemptID == ""
 }
 
 func dailySolutionExercise(
@@ -1475,11 +1933,33 @@ func (s *Service) GetExercise(ctx context.Context, userID string, exerciseID str
 }
 
 // GetSolution returns cached steps or a solver candidate verified against the trusted answer.
-func (s *Service) GetSolution(ctx context.Context, userID string, exerciseID string, dailyAssignmentID string) (SolutionResponse, error) {
+func (s *Service) GetSolution(ctx context.Context, userID string, exerciseID string, dailyAssignmentID string, reviewTaskID string, reviewTaskRevision *int64, originalAttemptID string, solutionAttemptID string) (SolutionResponse, error) {
 	dailyAssignmentID = strings.TrimSpace(dailyAssignmentID)
+	reviewTaskID = strings.TrimSpace(reviewTaskID)
+	originalAttemptID = strings.TrimSpace(originalAttemptID)
+	solutionAttemptID = strings.TrimSpace(solutionAttemptID)
+	if len(originalAttemptID) > 36 || len(solutionAttemptID) > 36 || boolInt(dailyAssignmentID != "")+boolInt(reviewTaskID != "")+boolInt(originalAttemptID != "") > 1 {
+		return SolutionResponse{}, ErrBadRequest
+	}
+	if (reviewTaskID == "") != (reviewTaskRevision == nil) {
+		return SolutionResponse{}, ErrBadRequest
+	}
+	if reviewTaskID != "" && solutionAttemptID == "" {
+		return SolutionResponse{}, ErrBadRequest
+	}
+	if reviewTaskID == "" && originalAttemptID == "" && solutionAttemptID != "" {
+		return SolutionResponse{}, ErrBadRequest
+	}
+	if solutionAttemptID != "" && !isUUID(solutionAttemptID) {
+		return SolutionResponse{}, ErrBadRequest
+	}
 	var exercise Exercise
 	var err error
-	if dailyAssignmentID == "" {
+	if reviewTaskID != "" {
+		exercise, err = reviewSolutionExercise(ctx, s.repo, userID, reviewTaskID, *reviewTaskRevision, exerciseID, solutionAttemptID, s.now().UTC())
+	} else if originalAttemptID != "" {
+		exercise, err = mistakeRedoSolutionExercise(ctx, s.repo, userID, originalAttemptID, solutionAttemptID, exerciseID)
+	} else if dailyAssignmentID == "" {
 		exercise, err = regularSolutionExercise(ctx, s.repo, userID, exerciseID)
 	} else {
 		exercise, err = eligibleDailySolutionExercise(ctx, s.repo, userID, dailyAssignmentID, exerciseID)
@@ -1493,6 +1973,10 @@ func (s *Service) GetSolution(ctx context.Context, userID string, exerciseID str
 			userID,
 			exerciseID,
 			dailyAssignmentID,
+			reviewTaskID,
+			reviewTaskRevision,
+			originalAttemptID,
+			solutionAttemptID,
 			exercise,
 			response,
 		)
@@ -1671,11 +2155,70 @@ func eligibleDailySolutionExercise(
 	return exercise, nil
 }
 
+func reviewSolutionExercise(
+	ctx context.Context,
+	repo Repository,
+	userID string,
+	reviewTaskID string,
+	reviewTaskRevision int64,
+	exerciseID string,
+	solutionAttemptID string,
+	now time.Time,
+) (Exercise, error) {
+	task, ok, err := repo.GetMistakeReviewTask(ctx, userID, reviewTaskID)
+	if err != nil {
+		return Exercise{}, err
+	}
+	if !ok || task.ContentID != exerciseID {
+		return Exercise{}, ErrNotFound
+	}
+	if task.Revision != reviewTaskRevision {
+		return Exercise{}, ErrReviewTaskStale
+	}
+	if task.Status == MistakeReviewArchived || task.LastReviewAttemptID == "" || task.LastReviewAttemptID != solutionAttemptID {
+		return Exercise{}, ErrNotFound
+	}
+	if task.Status != MistakeReviewMastered && (task.DueAt == nil || !now.Before(*task.DueAt)) {
+		return Exercise{}, ErrNotFound
+	}
+	return task.Exercise, nil
+}
+
+func mistakeRedoSolutionExercise(
+	ctx context.Context,
+	repo Repository,
+	userID string,
+	originalAttemptID string,
+	solutionAttemptID string,
+	exerciseID string,
+) (Exercise, error) {
+	attemptID := originalAttemptID
+	if solutionAttemptID != "" {
+		attemptID = solutionAttemptID
+	}
+	binding, ok, err := repo.GetMistakeRedoAttemptBinding(ctx, userID, attemptID)
+	if err != nil {
+		return Exercise{}, err
+	}
+	if solutionAttemptID != "" && (!ok || binding.RedoOriginalAttemptID != originalAttemptID) {
+		return Exercise{}, ErrNotFound
+	}
+	exercise, _, err := mistakeRedoSubmissionExerciseFromBinding(binding, ok, exerciseID)
+	if errors.Is(err, ErrMistakeRecordArchived) {
+		return Exercise{}, ErrNotFound
+	}
+	return exercise, err
+}
+
 func (s *Service) finalizeSolutionResponse(
 	ctx context.Context,
 	userID string,
 	exerciseID string,
 	dailyAssignmentID string,
+	reviewTaskID string,
+	reviewTaskRevision *int64,
+	originalAttemptID string,
+	solutionAttemptID string,
 	expected Exercise,
 	response SolutionResponse,
 ) (SolutionResponse, error) {
@@ -1685,7 +2228,11 @@ func (s *Service) finalizeSolutionResponse(
 			return lockErr
 		}
 		var loadErr error
-		if dailyAssignmentID == "" {
+		if reviewTaskID != "" {
+			current, loadErr = reviewSolutionExercise(txCtx, repo, userID, reviewTaskID, *reviewTaskRevision, exerciseID, solutionAttemptID, s.now().UTC())
+		} else if originalAttemptID != "" {
+			current, loadErr = mistakeRedoSolutionExercise(txCtx, repo, userID, originalAttemptID, solutionAttemptID, exerciseID)
+		} else if dailyAssignmentID == "" {
 			current, loadErr = regularSolutionExercise(txCtx, repo, userID, exerciseID)
 		} else {
 			current, loadErr = eligibleDailySolutionExercise(
@@ -1855,7 +2402,18 @@ func (s *Service) getOrCreateSessionWithRepo(ctx context.Context, repo Repositor
 	return repo.CreateSession(ctx, userID, s.now())
 }
 
-func (s *Service) updateTracking(ctx context.Context, repo Repository, userID string, attemptID string, exercise Exercise, isCorrect bool, errorType *string, now time.Time) (map[string]float64, error) {
+func (s *Service) updateTracking(
+	ctx context.Context,
+	repo Repository,
+	userID string,
+	attemptID string,
+	exercise Exercise,
+	isCorrect bool,
+	errorType *string,
+	masteryWeight float64,
+	now time.Time,
+) (map[string]float64, error) {
+	masteryWeight = normalizeMasteryWeight(masteryWeight)
 	profile, ok, err := repo.GetProfile(ctx, userID)
 	if err != nil {
 		return nil, err
@@ -1866,16 +2424,7 @@ func (s *Service) updateTracking(ctx context.Context, repo Repository, userID st
 			return nil, err
 		}
 	}
-	concepts := uniqueNonEmpty(exercise.ConceptIDs)
-	if len(concepts) == 0 {
-		return map[string]float64{}, repo.UpdateProfileTracking(ctx, userID, ProfileTrackingUpdate{
-			MasteryVector:  maputil.CloneFloatMap(profile.MasteryVector),
-			ErrorTendency:  maputil.CloneFloatMap(profile.ErrorTendency),
-			TotalExercises: profile.TotalExercises + 1,
-			CorrectCount:   profile.CorrectCount + boolInt(isCorrect),
-			UpdatedAt:      now,
-		})
-	}
+	concepts := trackedConceptIDs(exercise.ConceptIDs)
 
 	states, err := repo.ListDKTStates(ctx, userID, concepts)
 	if err != nil {
@@ -1886,27 +2435,34 @@ func (s *Service) updateTracking(ctx context.Context, repo Repository, userID st
 		return nil, err
 	}
 	current := LearningInteraction{
-		ExerciseID:  exercise.ID,
-		ConceptIDs:  concepts,
-		IsCorrect:   isCorrect,
-		Difficulty:  exercise.Difficulty,
-		SubmittedAt: now,
+		AttemptID:     attemptID,
+		ExerciseID:    exercise.ID,
+		ConceptIDs:    concepts,
+		IsCorrect:     isCorrect,
+		Difficulty:    exercise.Difficulty,
+		MasteryWeight: masteryWeight,
+		SubmittedAt:   now,
 	}
 	sequence := buildDKTSequence(history, current)
 
 	mastery := maputil.CloneFloatMap(profile.MasteryVector)
 	tendency := maputil.CloneFloatMap(profile.ErrorTendency)
 	if errorType != nil && !isCorrect {
-		tendency[*errorType] += 1
+		tendency[*errorType] += masteryWeight
 	}
 	masteryUpdate := map[string]float64{}
 	upserts := make([]DKTState, 0, len(concepts))
 	for _, conceptID := range concepts {
 		state, hasState := states[conceptID]
-		prior := mastery[conceptID]
-		if prior == 0 {
-			prior = dktColdStartMastery(profile.PreferredDifficulty, profile.LearningPace, exercise.Difficulty)
-		}
+		prior, hasPrior := mastery[conceptID]
+		prior = dktProfilePrior(
+			conceptID,
+			prior,
+			hasPrior,
+			profile.PreferredDifficulty,
+			profile.LearningPace,
+			exercise.Difficulty,
+		)
 		if hasState {
 			prior = state.MasteryProb
 			if state.LastAttemptAt != nil {

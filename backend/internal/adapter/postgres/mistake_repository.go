@@ -60,11 +60,11 @@ func (r MistakeRepository) ListMistakes(ctx context.Context, userID string, filt
 			($2 = '' OR dr.error_type::text = $2) AND
 			($3 = '' OR EXISTS (
 				SELECT 1
-				FROM json_array_elements_text(coalesce(daily_assignment.question_concept_ids, c.concept_ids)) AS concept(value)
+				FROM json_array_elements_text(`+mistakeQuestionConceptIDs+`) AS concept(value)
 				WHERE concept.value = $3
 			)) AND
-			coalesce(daily_assignment.question_difficulty, c.difficulty) >= $4 AND
-			coalesce(daily_assignment.question_difficulty, c.difficulty) <= $5 AND
+			coalesce(ca.review_question_difficulty, daily_assignment.question_difficulty, c.difficulty) >= $4 AND
+			coalesce(ca.review_question_difficulty, daily_assignment.question_difficulty, c.difficulty) <= $5 AND
 			($6::timestamp IS NULL OR ca.submitted_at >= $6) AND
 			($7::timestamp IS NULL OR ca.submitted_at <= $7)
 		ORDER BY ca.submitted_at DESC, ca.id DESC`,
@@ -113,12 +113,29 @@ func (r MistakeRepository) ListMistakePage(ctx context.Context, userID string, q
 	if total == 0 {
 		return []mistakeapp.MistakeListRow{}, 0, nil
 	}
-	pageArgs := append(args, query.PageSize, (query.Page-1)*query.PageSize)
+	pageArgs := append(args, query.Now, query.PageSize, (query.Page-1)*query.PageSize)
 	rows, err := r.DB().Query(ctx, `
-		SELECT `+mistakeSelectColumns+`, coalesce(ec.error_count, 1)::int AS error_count, mastery.avg_mastery::double precision AS avg_mastery`+mistakeListFromWhere+`
+		SELECT `+mistakeSelectColumns+`,
+		       coalesce(ec.error_count, 1)::int AS error_count,
+		       mastery.avg_mastery::double precision AS avg_mastery,
+		       (
+		           SELECT review_task.last_reviewed_at
+		           FROM public.mistake_review_tasks review_task
+		           WHERE review_task.student_id = ca.student_id
+		             AND review_task.content_id = ca.content_id
+		       ) AS last_reviewed_at,
+		       EXISTS (
+		           SELECT 1
+		           FROM public.mistake_review_tasks review_task
+		           WHERE review_task.student_id = ca.student_id
+		             AND review_task.content_id = ca.content_id
+		             AND review_task.source_attempt_id = ca.id
+		             AND review_task.status IN ('pending', 'verification_due')
+		             AND review_task.due_at > $8
+		       ) AS is_early_practice`+mistakeListFromWhere+`
 			AND `+whereMastery+`
 		ORDER BY `+mistakeListOrderBy(query.SortBy, query.SortOrder)+`
-		LIMIT $8 OFFSET $9`, pageArgs...)
+		LIMIT $9 OFFSET $10`, pageArgs...)
 	if err != nil {
 		return nil, 0, err
 	}
@@ -143,7 +160,15 @@ func (r MistakeRepository) GetMistakeByAttempt(ctx context.Context, userID strin
 		JOIN public.diagnosis_reports dr ON ca.id = dr.attempt_id
 		JOIN public.contents c ON ca.content_id = c.id
 		`+mistakeDailyAssignmentJoin+`
-		WHERE ca.id = $1 AND ca.student_id = $2`,
+		LEFT JOIN public.mistake_record_archives archive
+		  ON archive.attempt_id = ca.id
+		 AND archive.student_id = ca.student_id
+		WHERE ca.id = $1
+		  AND ca.student_id = $2
+		  AND ca.is_correct = false
+		  AND ca.submitted_at IS NOT NULL
+		  AND `+mistakeRepresentativeAttemptPredicate+`
+		  AND archive.attempt_id IS NULL`,
 		attemptID,
 		userID,
 	)
@@ -173,7 +198,11 @@ func (r MistakeRepository) GetAttemptContent(ctx context.Context, userID string,
 			coalesce(daily_assignment.question_title, c.title),
 			coalesce(daily_assignment.question_body, c.body),
 			coalesce(daily_assignment.question_difficulty, c.difficulty),
-			coalesce(daily_assignment.question_concept_ids, c.concept_ids),
+			CASE
+				WHEN json_typeof(coalesce(daily_assignment.question_concept_ids, c.concept_ids)) = 'array'
+					THEN coalesce(daily_assignment.question_concept_ids, c.concept_ids)
+				ELSE '[]'::json
+			END,
 			coalesce(daily_assignment.question_meta, c.meta)
 		FROM public.content_attempts ca
 		JOIN public.contents c ON ca.content_id = c.id
@@ -275,6 +304,33 @@ func (r MistakeRepository) ErrorCountsByContent(ctx context.Context, userID stri
 	return counts, rows.Err()
 }
 
+// KnowledgeNames resolves concept IDs for student-facing mistake projections.
+func (r MistakeRepository) KnowledgeNames(ctx context.Context, conceptIDs []string) (map[string]string, error) {
+	names := map[string]string{}
+	if len(conceptIDs) == 0 {
+		return names, nil
+	}
+	rows, err := r.DB().Query(ctx, `
+		SELECT id, name
+		FROM public.knowledge_nodes
+		WHERE id = ANY($1::varchar[])`,
+		conceptIDs,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var id string
+		var name string
+		if err := rows.Scan(&id, &name); err != nil {
+			return nil, err
+		}
+		names[id] = name
+	}
+	return names, rows.Err()
+}
+
 // CountSubmittedAttempts counts submitted attempts in an optional time window.
 func (r MistakeRepository) CountSubmittedAttempts(ctx context.Context, userID string, start *time.Time, end *time.Time) (int, error) {
 	var count int
@@ -339,40 +395,82 @@ func (r MistakeRepository) DeleteAttempt(ctx context.Context, userID string, att
 }
 
 const mistakeDailyAssignmentJoin = `
-		LEFT JOIN LATERAL (
-			SELECT
+			LEFT JOIN LATERAL (
+				SELECT
 					assignment.id,
 					assignment.status = 'completed'
 						AND assignment.first_attempt_id IS NOT NULL
 						AND assignment.first_result = 'incorrect'
 						AND assignment.corrected_attempt_id IS NULL AS reviewable,
-				assignment.question_title,
-				assignment.question_body,
-				assignment.question_difficulty,
-				assignment.question_concept_ids,
-				assignment.question_meta
-			FROM public.daily_question_assignments assignment
-			WHERE assignment.student_id = ca.student_id
-			  AND assignment.content_id = ca.content_id
-			  AND (
-				  assignment.id = ca.daily_assignment_id
-					  OR (
-						  ca.daily_assignment_id IS NULL
-						  AND (
-							  assignment.first_attempt_id = ca.id
-							  OR assignment.corrected_attempt_id = ca.id
-						  )
-					  )
+					assignment.question_title,
+					assignment.question_body,
+					assignment.question_difficulty,
+					assignment.question_concept_ids,
+					assignment.question_meta,
+					assignment.question_generated_by_student_id
+				FROM public.daily_question_assignments assignment
+				WHERE assignment.student_id = ca.student_id
+				  AND assignment.content_id = ca.content_id
+				  AND (
+					assignment.id = ca.daily_assignment_id
+					OR (
+						ca.daily_assignment_id IS NULL
+						AND (
+							assignment.first_attempt_id = ca.id
+							OR assignment.corrected_attempt_id = ca.id
+						)
+					)
 				  )
 				ORDER BY (assignment.id = ca.daily_assignment_id) DESC NULLS LAST
-			LIMIT 1
-		) daily_assignment ON true`
+				LIMIT 1
+			) daily_assignment ON true`
+
+const mistakeQuestionConceptIDs = `CASE
+	WHEN json_typeof(coalesce(ca.review_question_concept_ids, daily_assignment.question_concept_ids, c.concept_ids)) = 'array'
+		THEN coalesce(ca.review_question_concept_ids, daily_assignment.question_concept_ids, c.concept_ids)
+	ELSE '[]'::json
+END`
+
+const mistakeRepresentativeAttemptPredicate = `NOT EXISTS (
+	SELECT 1
+	FROM public.content_attempts newer_attempt
+	JOIN public.diagnosis_reports newer_diagnosis
+	  ON newer_diagnosis.attempt_id = newer_attempt.id
+	LEFT JOIN public.mistake_record_archives newer_archive
+	  ON newer_archive.attempt_id = newer_attempt.id
+	 AND newer_archive.student_id = newer_attempt.student_id
+	WHERE newer_attempt.student_id = ca.student_id
+	  AND newer_attempt.content_id = ca.content_id
+	  AND newer_attempt.is_correct = false
+	  AND newer_attempt.submitted_at IS NOT NULL
+	  AND newer_archive.attempt_id IS NULL
+	  AND (
+	      newer_attempt.submitted_at > ca.submitted_at
+	      OR (
+	          newer_attempt.submitted_at = ca.submitted_at
+	          AND newer_attempt.id > ca.id
+	      )
+	  )
+)`
 
 const mistakeListFromWhere = `
-		FROM public.content_attempts ca
-		JOIN public.diagnosis_reports dr ON ca.id = dr.attempt_id
-		JOIN public.contents c ON ca.content_id = c.id` + mistakeDailyAssignmentJoin + `
-		LEFT JOIN public.student_profiles sp ON sp.student_id = ca.student_id
+			FROM (
+				SELECT DISTINCT ON (candidate.content_id) candidate.id
+				FROM public.content_attempts candidate
+				JOIN public.diagnosis_reports candidate_diagnosis ON candidate_diagnosis.attempt_id = candidate.id
+				LEFT JOIN public.mistake_record_archives candidate_archive
+				  ON candidate_archive.attempt_id = candidate.id
+				 AND candidate_archive.student_id = candidate.student_id
+				WHERE candidate.student_id = $1
+				  AND candidate.is_correct = false
+				  AND candidate.submitted_at IS NOT NULL
+				  AND candidate_archive.attempt_id IS NULL
+				ORDER BY candidate.content_id, candidate.submitted_at DESC, candidate.id DESC
+			) latest_mistake
+			JOIN public.content_attempts ca ON ca.id = latest_mistake.id
+			JOIN public.diagnosis_reports dr ON ca.id = dr.attempt_id
+			JOIN public.contents c ON ca.content_id = c.id` + mistakeDailyAssignmentJoin + `
+			LEFT JOIN public.student_profiles sp ON sp.student_id = ca.student_id
 		LEFT JOIN (
 			SELECT content_id, count(id)::int AS error_count
 			FROM public.content_attempts
@@ -381,23 +479,20 @@ const mistakeListFromWhere = `
 		) ec ON ec.content_id = ca.content_id
 		LEFT JOIN LATERAL (
 			SELECT CASE
-				WHEN coalesce(json_array_length(coalesce(daily_assignment.question_concept_ids, c.concept_ids)), 0) = 0 THEN 0.5
+				WHEN coalesce(json_array_length(` + mistakeQuestionConceptIDs + `), 0) = 0 THEN 0.5
 				ELSE coalesce(avg(coalesce((sp.mastery_vector ->> concept.value)::double precision, 0.5)), 0.5)
 			END AS avg_mastery
-			FROM json_array_elements_text(coalesce(daily_assignment.question_concept_ids, c.concept_ids)) AS concept(value)
-		) mastery ON true
-		WHERE
-			ca.student_id = $1 AND
-			ca.is_correct = false AND
-			ca.submitted_at IS NOT NULL AND
-			($2 = '' OR dr.error_type::text = $2) AND
+			FROM json_array_elements_text(` + mistakeQuestionConceptIDs + `) AS concept(value)
+			) mastery ON true
+			WHERE
+				($2 = '' OR dr.error_type::text = $2) AND
 			($3 = '' OR EXISTS (
 				SELECT 1
-				FROM json_array_elements_text(coalesce(daily_assignment.question_concept_ids, c.concept_ids)) AS concept(value)
+				FROM json_array_elements_text(` + mistakeQuestionConceptIDs + `) AS concept(value)
 				WHERE concept.value = $3
 			)) AND
-			coalesce(daily_assignment.question_difficulty, c.difficulty) >= $4 AND
-			coalesce(daily_assignment.question_difficulty, c.difficulty) <= $5 AND
+			coalesce(ca.review_question_difficulty, daily_assignment.question_difficulty, c.difficulty) >= $4 AND
+			coalesce(ca.review_question_difficulty, daily_assignment.question_difficulty, c.difficulty) <= $5 AND
 			($6::timestamp IS NULL OR ca.submitted_at >= $6) AND
 			($7::timestamp IS NULL OR ca.submitted_at <= $7)`
 
@@ -411,18 +506,15 @@ const mistakeSelectColumns = `
 	ca.submitted_at,
 	ca.time_spent_seconds,
 	daily_assignment.id,
-	CASE
-		WHEN daily_assignment.id IS NULL THEN c.status = 'PUBLISHED'::public.contentstatus AND c.deleted_at IS NULL
-		ELSE daily_assignment.reviewable
-	END,
+	true,
 	daily_assignment.id IS NULL,
 	c.id,
 	c.type::text,
-	coalesce(daily_assignment.question_title, c.title),
-	coalesce(daily_assignment.question_body, c.body),
-	coalesce(daily_assignment.question_difficulty, c.difficulty),
-	coalesce(daily_assignment.question_concept_ids, c.concept_ids),
-	coalesce(daily_assignment.question_meta, c.meta),
+	coalesce(ca.review_question_title, daily_assignment.question_title, c.title),
+	coalesce(ca.review_question_body, daily_assignment.question_body, c.body),
+	coalesce(ca.review_question_difficulty, daily_assignment.question_difficulty, c.difficulty),
+	` + mistakeQuestionConceptIDs + `,
+	coalesce(ca.review_question_meta, daily_assignment.question_meta, c.meta),
 	dr.error_type::text,
 	dr.error_subtype,
 	dr.severity,
@@ -495,6 +587,8 @@ func scanMistakeListRow(rows pgx.Rows) (mistakeapp.MistakeListRow, error) {
 	var errorStepIndex pgtype.Int4
 	var errorCount int
 	var avgMastery float64
+	var lastReviewedAt pgtype.Timestamp
+	var isEarlyPractice bool
 
 	if err := rows.Scan(
 		&attempt.ID,
@@ -524,6 +618,8 @@ func scanMistakeListRow(rows pgx.Rows) (mistakeapp.MistakeListRow, error) {
 		&errorStepIndex,
 		&errorCount,
 		&avgMastery,
+		&lastReviewedAt,
+		&isEarlyPractice,
 	); err != nil {
 		return mistakeapp.MistakeListRow{}, err
 	}
@@ -557,9 +653,11 @@ func scanMistakeListRow(rows pgx.Rows) (mistakeapp.MistakeListRow, error) {
 	content.Meta = meta
 	diagnosis.RelatedConceptIDs = relatedConceptIDs
 	return mistakeapp.MistakeListRow{
-		Row:        mistakeapp.MistakeRow{Attempt: attempt, Content: content, Diagnosis: diagnosis},
-		AvgMastery: avgMastery,
-		ErrorCount: errorCount,
+		Row:             mistakeapp.MistakeRow{Attempt: attempt, Content: content, Diagnosis: diagnosis},
+		AvgMastery:      avgMastery,
+		ErrorCount:      errorCount,
+		LastReviewedAt:  timestampPtr(lastReviewedAt),
+		IsEarlyPractice: isEarlyPractice,
 	}, nil
 }
 

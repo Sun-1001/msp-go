@@ -291,10 +291,67 @@ func (r KnowledgeRepository) UpdateNode(ctx context.Context, nodeID string, upda
 	return node, true, nil
 }
 
-// DeleteNode deletes a node and all adjacent relations.
+// DeleteNode deletes an unreferenced node and all adjacent graph relations.
 func (r KnowledgeRepository) DeleteNode(ctx context.Context, nodeID string) (bool, error) {
 	deleted := false
 	err := r.withTx(ctx, func(tx KnowledgeRepository) error {
+		var candidateExists bool
+		if err := tx.DB().QueryRow(ctx, `
+			SELECT EXISTS (
+				SELECT 1
+				FROM public.knowledge_nodes
+				WHERE id = $1
+			)`,
+			nodeID,
+		).Scan(&candidateExists); err != nil {
+			return err
+		}
+		if !candidateExists {
+			return nil
+		}
+
+		// These tables carry concept IDs in JSON without foreign keys. Blocking
+		// their writers closes the validation/delete race for this rare admin operation.
+		if _, err := tx.DB().Exec(ctx, `
+			LOCK TABLE
+				public.contents,
+				public.daily_question_assignments,
+				public.daily_question_class_selections,
+				public.mistake_review_tasks,
+				public.content_attempts,
+				public.diagnosis_reports,
+				public.session_messages,
+				public.learning_sessions,
+				public.student_concept_dkt_states,
+				public.student_learning_goals,
+				public.student_portrait_actions,
+				public.student_profiles
+			IN SHARE ROW EXCLUSIVE MODE`); err != nil {
+			return err
+		}
+
+		var exists bool
+		if err := tx.DB().QueryRow(ctx, `
+			SELECT true
+			FROM public.knowledge_nodes
+			WHERE id = $1
+			FOR UPDATE`,
+			nodeID,
+		).Scan(&exists); err != nil {
+			if err == pgx.ErrNoRows {
+				return nil
+			}
+			return err
+		}
+
+		inUse, err := tx.knowledgeNodeInUse(ctx, nodeID)
+		if err != nil {
+			return err
+		}
+		if inUse {
+			return knowledgeapp.ErrConflict
+		}
+
 		if _, err := tx.DB().Exec(ctx, `
 			DELETE FROM public.knowledge_relations
 			WHERE source_id = $1 OR target_id = $1`,
@@ -314,6 +371,96 @@ func (r KnowledgeRepository) DeleteNode(ctx context.Context, nodeID string) (boo
 		return nil
 	})
 	return deleted, err
+}
+
+func (r KnowledgeRepository) knowledgeNodeInUse(ctx context.Context, nodeID string) (bool, error) {
+	return r.Exists(ctx, `
+		SELECT
+			EXISTS (
+				SELECT 1
+				FROM public.contents content
+				WHERE json_typeof(content.concept_ids) = 'array'
+				  AND content.concept_ids::jsonb ? $1
+			)
+			OR EXISTS (
+				SELECT 1
+				FROM public.daily_question_assignments assignment
+				WHERE assignment.target_concept_id = $1
+				   OR (
+					assignment.question_concept_ids IS NOT NULL
+					AND json_typeof(assignment.question_concept_ids) = 'array'
+					AND assignment.question_concept_ids::jsonb ? $1
+				   )
+			)
+			OR EXISTS (
+				SELECT 1
+				FROM public.daily_question_class_selections selection
+				WHERE selection.target_concept_id = $1
+				   OR (
+					selection.question_concept_ids IS NOT NULL
+					AND json_typeof(selection.question_concept_ids) = 'array'
+					AND selection.question_concept_ids::jsonb ? $1
+				   )
+			)
+			OR EXISTS (
+				SELECT 1
+				FROM public.mistake_review_tasks task
+				WHERE json_typeof(task.question_concept_ids) = 'array'
+				  AND task.question_concept_ids::jsonb ? $1
+			)
+			OR EXISTS (
+				SELECT 1
+				FROM public.content_attempts attempt
+				WHERE attempt.review_question_concept_ids IS NOT NULL
+				  AND json_typeof(attempt.review_question_concept_ids) = 'array'
+				  AND attempt.review_question_concept_ids::jsonb ? $1
+			)
+			OR EXISTS (
+				SELECT 1
+				FROM public.diagnosis_reports diagnosis
+				WHERE json_typeof(diagnosis.related_concept_ids) = 'array'
+				  AND diagnosis.related_concept_ids::jsonb ? $1
+			)
+			OR EXISTS (
+				SELECT 1
+				FROM public.session_messages message
+				WHERE json_typeof(message.related_concept_ids) = 'array'
+				  AND message.related_concept_ids::jsonb ? $1
+			)
+			OR EXISTS (
+				SELECT 1
+				FROM public.learning_sessions session
+				WHERE json_typeof(session.concepts_discussed) = 'array'
+				  AND session.concepts_discussed::jsonb ? $1
+			)
+			OR EXISTS (
+				SELECT 1
+				FROM public.student_concept_dkt_states state
+				WHERE state.concept_id = $1
+			)
+			OR EXISTS (
+				SELECT 1
+				FROM public.student_learning_goals goal
+				WHERE goal.target_node_id = $1
+			)
+			OR EXISTS (
+				SELECT 1
+				FROM public.student_portrait_actions action
+				WHERE action.concept_id = $1
+			)
+			OR EXISTS (
+				SELECT 1
+				FROM public.student_profiles profile
+				WHERE (
+					json_typeof(profile.mastery_vector) = 'object'
+					AND profile.mastery_vector::jsonb ? $1
+				) OR (
+					json_typeof(profile.recent_concepts) = 'array'
+					AND profile.recent_concepts::jsonb ? $1
+				)
+			)`,
+		nodeID,
+	)
 }
 
 // NodeExists reports whether a node exists.

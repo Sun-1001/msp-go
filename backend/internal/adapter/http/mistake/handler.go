@@ -24,6 +24,7 @@ type Service interface {
 	DeleteMistake(context.Context, string, string) (mistakeapp.DeleteResponse, error)
 	GetReviewExercise(context.Context, string, string, string) (mistakeapp.ReviewExerciseResponse, error)
 	GetReviewExerciseByAttempt(context.Context, string, string) (mistakeapp.ReviewExerciseResponse, error)
+	GetReviewTasks(context.Context, string, mistakeapp.ReviewTaskQuery) (mistakeapp.ReviewTaskListResponse, error)
 }
 
 // Authenticator decodes Go/Python-compatible access tokens.
@@ -57,6 +58,7 @@ func (h *Handler) Register(mux *http.ServeMux, prefix string) {
 	mux.HandleFunc("GET "+prefix, h.list)
 	mux.HandleFunc("GET "+prefix+"/statistics", h.statistics)
 	mux.HandleFunc("GET "+prefix+"/review/next", h.reviewNext)
+	mux.HandleFunc("GET "+prefix+"/review-tasks", h.reviewTasks)
 	mux.HandleFunc("GET "+prefix+"/{attempt_id}/review", h.reviewByAttempt)
 	mux.HandleFunc("GET "+prefix+"/{attempt_id}", h.detail)
 	mux.HandleFunc("POST "+prefix+"/{attempt_id}/master", h.markAsMastered)
@@ -132,6 +134,10 @@ func (h *Handler) markAsMastered(w http.ResponseWriter, r *http.Request) {
 			writeMistakeError(w, http.StatusNotFound, "NOT_FOUND", "学生画像不存在")
 			return
 		}
+		if errors.Is(err, mistakeapp.ErrMasteryVerificationRequired) {
+			writeMistakeError(w, http.StatusConflict, "VERIFICATION_REQUIRED", "请先完成复习验证，掌握度只由真实作答更新")
+			return
+		}
 		h.logMistakeError("mark mistake as mastered failed", err)
 		writeMistakeError(w, http.StatusInternalServerError, "INTERNAL_ERROR", "标记已掌握失败")
 		return
@@ -187,6 +193,10 @@ func (h *Handler) reviewByAttempt(w http.ResponseWriter, r *http.Request) {
 	}
 	response, err := h.service.GetReviewExerciseByAttempt(r.Context(), principal.UserID, r.PathValue("attempt_id"))
 	if err != nil {
+		if errors.Is(err, mistakeapp.ErrReviewNotDue) {
+			writeMistakeError(w, http.StatusConflict, "REVIEW_NOT_DUE", "这道题还未到复习时间")
+			return
+		}
 		if errors.Is(err, mistakeapp.ErrNotFound) {
 			writeMistakeError(w, http.StatusNotFound, "NOT_FOUND", "错题记录不存在或不可重做")
 			return
@@ -198,8 +208,37 @@ func (h *Handler) reviewByAttempt(w http.ResponseWriter, r *http.Request) {
 	httpjson.Write(w, http.StatusOK, response)
 }
 
+func (h *Handler) reviewTasks(w http.ResponseWriter, r *http.Request) {
+	principal, ok := h.requirePrincipal(w, r)
+	if !ok {
+		return
+	}
+	pagination, err := httpquery.Pagination(r.URL.Query(), 20, 100)
+	if err != nil {
+		writeMistakePaginationError(w, err)
+		return
+	}
+	response, err := h.service.GetReviewTasks(r.Context(), principal.UserID, mistakeapp.ReviewTaskQuery{
+		View:      r.URL.Query().Get("view"),
+		Page:      pagination.Page,
+		PageSize:  pagination.PageSize,
+		ConceptID: r.URL.Query().Get("concept_id"),
+		ErrorType: r.URL.Query().Get("error_type"),
+		TaskID:    r.URL.Query().Get("task_id"),
+	})
+	if err != nil {
+		h.logMistakeError("get mistake review tasks failed", err)
+		writeMistakeError(w, http.StatusInternalServerError, "INTERNAL_ERROR", "查询复习任务失败")
+		return
+	}
+	httpjson.Write(w, http.StatusOK, response)
+}
+
 func (h *Handler) requirePrincipal(w http.ResponseWriter, r *http.Request) (authapp.Principal, bool) {
-	return httpauth.RequireBearerAccess(w, r, h.auth.DecodeAccessToken, nil, "", writeMistakeError)
+	return httpauth.RequireBearerAccess(
+		w, r, h.auth.DecodeAccessToken, authapp.IsStudent,
+		"权限不足，需要学生身份", writeMistakeError,
+	)
 }
 
 func (h *Handler) logMistakeError(message string, err error) {
