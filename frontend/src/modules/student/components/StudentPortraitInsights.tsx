@@ -144,7 +144,9 @@ export function StudentPortraitInsights({ range, insights, loading, error, onRet
       navigate(`/exercise?mode=ai&concept_id=${encodeURIComponent(action.concept_id)}&autostart=1`);
       return;
     }
-    navigate(action.concept_id ? `/mistake-book?concept_id=${encodeURIComponent(action.concept_id)}` : '/mistake-book');
+    navigate(action.concept_id
+      ? `/mistake-book?view=library&concept_id=${encodeURIComponent(action.concept_id)}`
+      : '/mistake-book?view=library');
   };
 
   const updateAIReport = async () => {

@@ -3,7 +3,6 @@ package mistake
 import (
 	"context"
 	"errors"
-	"math"
 	"sort"
 	"strings"
 	"time"
@@ -24,6 +23,10 @@ var (
 	ErrProfileNotFound = errors.New("student profile not found")
 	// ErrDailyAttemptLocked protects the immutable evidence behind a daily completion.
 	ErrDailyAttemptLocked = errors.New("daily question attempts cannot be deleted")
+	// ErrMasteryVerificationRequired prevents self-reported mastery from changing learning state.
+	ErrMasteryVerificationRequired = errors.New("mastery verification required")
+	// ErrReviewNotDue remains for compatibility with older review clients and handlers.
+	ErrReviewNotDue = errors.New("mistake review is not due")
 )
 
 // Repository is the persistence surface required by mistake book use cases.
@@ -37,9 +40,14 @@ type Repository interface {
 	ListAttemptHistory(context.Context, string, string, string) ([]AttemptHistoryRow, error)
 	GetProfile(context.Context, string) (StudentProfile, bool, error)
 	ErrorCountsByContent(context.Context, string) (map[string]int, error)
+	KnowledgeNames(context.Context, []string) (map[string]string, error)
 	CountSubmittedAttempts(context.Context, string, *time.Time, *time.Time) (int, error)
 	UpdateProfileMastery(context.Context, string, map[string]float64, time.Time) (bool, error)
 	DeleteAttempt(context.Context, string, string) (bool, error)
+	ListReviewTasks(context.Context, string, ReviewTaskQuery) ([]ReviewTaskRow, int, error)
+	CountReviewTasks(context.Context, string, time.Time) (ReviewTaskCounts, error)
+	GetReviewTaskByAttempt(context.Context, string, string) (ReviewTaskAssociation, bool, error)
+	ArchiveMistakeRecord(context.Context, string, string, time.Time) (bool, error)
 }
 
 // ReviewEligibility checks whether an owned mistake's exercise remains submittable.
@@ -61,6 +69,7 @@ type ListFilter struct {
 type ListQuery struct {
 	Page          int
 	PageSize      int
+	Now           time.Time
 	ErrorType     string
 	ConceptID     string
 	DifficultyMin float64
@@ -81,9 +90,11 @@ type MistakeRow struct {
 
 // MistakeListRow stores one SQL-paginated mistake row with list aggregates.
 type MistakeListRow struct {
-	Row        MistakeRow
-	AvgMastery float64
-	ErrorCount int
+	Row             MistakeRow
+	AvgMastery      float64
+	ErrorCount      int
+	LastReviewedAt  *time.Time
+	IsEarlyPractice bool
 }
 
 // AttemptContent combines an attempt and content row for write use cases.
@@ -151,24 +162,27 @@ type MistakeListResponse struct {
 
 // MistakeItem stores one list row.
 type MistakeItem struct {
-	ID             string           `json:"id"`
-	Exercise       MistakeExercise  `json:"exercise"`
-	Attempt        MistakeAttempt   `json:"attempt"`
-	Diagnosis      MistakeDiagnosis `json:"diagnosis"`
-	Mastery        MistakeMastery   `json:"mastery"`
-	ErrorCount     int              `json:"error_count"`
-	LastReviewedAt *string          `json:"last_reviewed_at"`
-	CanReview      bool             `json:"can_review"`
-	CanDelete      bool             `json:"can_delete"`
+	ID              string           `json:"id"`
+	Exercise        MistakeExercise  `json:"exercise"`
+	Attempt         MistakeAttempt   `json:"attempt"`
+	Diagnosis       MistakeDiagnosis `json:"diagnosis"`
+	Mastery         MistakeMastery   `json:"mastery"`
+	ErrorCount      int              `json:"error_count"`
+	LastReviewedAt  *string          `json:"last_reviewed_at"`
+	CanReview       bool             `json:"can_review"`
+	CanDelete       bool             `json:"can_delete"`
+	CanArchive      bool             `json:"can_archive"`
+	IsEarlyPractice bool             `json:"is_early_practice"`
 }
 
 // MistakeExercise stores exercise summary data for a mistake row.
 type MistakeExercise struct {
-	ID              string   `json:"id"`
-	Title           string   `json:"title"`
-	Content         string   `json:"content"`
-	Difficulty      float64  `json:"difficulty"`
-	KnowledgePoints []string `json:"knowledge_points"`
+	ID                  string   `json:"id"`
+	Title               string   `json:"title"`
+	Content             string   `json:"content"`
+	Difficulty          float64  `json:"difficulty"`
+	KnowledgePoints     []string `json:"knowledge_points"`
+	KnowledgePointNames []string `json:"knowledge_point_names"`
 }
 
 // MistakeAttempt stores answer summary data for a mistake row.
@@ -328,6 +342,8 @@ type ReviewExercise struct {
 type ReviewContext struct {
 	IsReview            bool    `json:"is_review"`
 	OriginalAttemptID   string  `json:"original_attempt_id"`
+	ReviewTaskID        string  `json:"review_task_id,omitempty"`
+	ReviewTaskRevision  *int64  `json:"review_task_revision,omitempty"`
 	DailyAssignmentID   string  `json:"daily_assignment_id,omitempty"`
 	PreviousAnswer      string  `json:"previous_answer"`
 	PreviousErrorType   *string `json:"previous_error_type"`
@@ -364,6 +380,7 @@ func NewService(repo Repository, reviewEligibility ReviewEligibility) (*Service,
 // GetMistakes returns paginated mistakes with filtering and sorting.
 func (s *Service) GetMistakes(ctx context.Context, userID string, query ListQuery) (MistakeListResponse, error) {
 	query = normalizeListQuery(query)
+	query.Now = s.now().UTC()
 	rows, total, err := s.repo.ListMistakePage(ctx, userID, query)
 	if err != nil {
 		return MistakeListResponse{}, err
@@ -375,11 +392,18 @@ func (s *Service) GetMistakes(ctx context.Context, userID string, query ListQuer
 	mastery := maputil.CloneFloatMap(profile.MasteryVector)
 
 	responseItems := make([]MistakeItem, 0, len(rows))
+	knowledgeNames, err := s.knowledgeNames(ctx, contentsFromMistakeListRows(rows))
+	if err != nil {
+		return MistakeListResponse{}, err
+	}
 	for _, row := range rows {
 		responseItems = append(responseItems, toMistakeItem(listItemData{
-			row:        row.Row,
-			avgMastery: row.AvgMastery,
-			errorCount: row.ErrorCount,
+			row:             row.Row,
+			avgMastery:      row.AvgMastery,
+			errorCount:      row.ErrorCount,
+			lastReviewedAt:  row.LastReviewedAt,
+			isEarlyPractice: row.IsEarlyPractice,
+			knowledgeNames:  knowledgeNames,
 		}))
 	}
 
@@ -456,164 +480,119 @@ func (s *Service) GetMistakeDetail(ctx context.Context, userID string, attemptID
 	return toDetailResponse(row, history), nil
 }
 
-// MarkAsMastered raises the related concept mastery values in the student profile.
+// MarkAsMastered is a compatibility endpoint that only confirms already verified mastery.
 func (s *Service) MarkAsMastered(ctx context.Context, userID string, attemptID string) (MarkAsMasteredResponse, error) {
-	var response MarkAsMasteredResponse
+	task, ok, err := s.repo.GetReviewTaskByAttempt(ctx, userID, strings.TrimSpace(attemptID))
+	if err != nil {
+		return MarkAsMasteredResponse{}, err
+	}
+	if !ok {
+		return MarkAsMasteredResponse{}, ErrNotFound
+	}
+	if task.Status != ReviewTaskMastered || task.MasteredAt == nil {
+		return MarkAsMasteredResponse{}, ErrMasteryVerificationRequired
+	}
+	masteredAt := optionalAttemptTimestamp(task.MasteredAt)
+	if masteredAt == nil {
+		return MarkAsMasteredResponse{}, ErrMasteryVerificationRequired
+	}
+	return MarkAsMasteredResponse{
+		Success:       true,
+		MasteredAt:    *masteredAt,
+		MasteryUpdate: map[string]float64{},
+	}, nil
+}
+
+// DeleteMistake archives a list record while preserving its immutable answer evidence.
+func (s *Service) DeleteMistake(ctx context.Context, userID string, attemptID string) (DeleteResponse, error) {
+	attemptID = strings.TrimSpace(attemptID)
+	if attemptID == "" {
+		return DeleteResponse{}, ErrNotFound
+	}
 	err := s.repo.WithTx(ctx, func(txCtx context.Context, repo Repository) error {
 		if err := repo.LockStudentTracking(txCtx, userID); err != nil {
 			return err
 		}
-		attemptContent, ok, err := repo.GetAttemptContent(txCtx, userID, attemptID)
+		archived, err := repo.ArchiveMistakeRecord(txCtx, userID, attemptID, s.now().UTC())
 		if err != nil {
 			return err
 		}
-		if !ok {
+		if !archived {
 			return ErrNotFound
-		}
-		profile, ok, err := repo.GetProfile(txCtx, userID)
-		if err != nil {
-			return err
-		}
-		if !ok {
-			return ErrProfileNotFound
-		}
-
-		mastery := maputil.CloneFloatMap(profile.MasteryVector)
-		update := map[string]float64{}
-		for _, conceptID := range attemptContent.Content.ConceptIDs {
-			current := mastery[conceptID]
-			if current == 0 {
-				current = 0.5
-			}
-			next := math.Min(1.0, math.Max(0.8, current+0.2))
-			mastery[conceptID] = next
-			update[conceptID] = next
-		}
-
-		now := s.now()
-		updated, err := repo.UpdateProfileMastery(txCtx, userID, mastery, now)
-		if err != nil {
-			return err
-		}
-		if !updated {
-			return ErrProfileNotFound
-		}
-		response = MarkAsMasteredResponse{
-			Success:       true,
-			MasteredAt:    timefmt.DateTimeMicros(now),
-			MasteryUpdate: update,
 		}
 		return nil
 	})
 	if err != nil {
-		return MarkAsMasteredResponse{}, err
-	}
-	return response, nil
-}
-
-// DeleteMistake deletes only regular mistake attempts; daily completion evidence is immutable.
-func (s *Service) DeleteMistake(ctx context.Context, userID string, attemptID string) (DeleteResponse, error) {
-	row, ok, err := s.repo.GetMistakeByAttempt(ctx, userID, strings.TrimSpace(attemptID))
-	if err != nil {
 		return DeleteResponse{}, err
 	}
-	if !ok || row.Attempt.IsCorrect {
-		return DeleteResponse{}, ErrNotFound
-	}
-	if !row.Attempt.CanDelete {
-		return DeleteResponse{}, ErrDailyAttemptLocked
-	}
-	deleted, err := s.repo.DeleteAttempt(ctx, userID, attemptID)
-	if err != nil {
-		return DeleteResponse{}, err
-	}
-	if !deleted {
-		return DeleteResponse{}, ErrNotFound
-	}
-	return DeleteResponse{Success: true, Message: "错题记录已删除"}, nil
+	return DeleteResponse{Success: true, Message: "错题已归档，历史作答和诊断证据已保留"}, nil
 }
 
-// GetReviewExercise returns the highest-priority review candidate.
+// GetReviewExercise returns the earliest active review task that is currently due.
 func (s *Service) GetReviewExercise(ctx context.Context, userID string, focusConcept string, focusErrorType string) (ReviewExerciseResponse, error) {
-	profile, _, err := s.repo.GetProfile(ctx, userID)
-	if err != nil {
-		return ReviewExerciseResponse{}, err
-	}
-	mastery := maputil.CloneFloatMap(profile.MasteryVector)
-	rows, err := s.repo.ListMistakes(ctx, userID, ListFilter{
-		ErrorType:     focusErrorType,
-		ConceptID:     focusConcept,
-		DifficultyMin: 0,
-		DifficultyMax: 1,
+	query := normalizeReviewTaskQuery(ReviewTaskQuery{
+		View:      ReviewTaskViewDue,
+		Page:      1,
+		PageSize:  1,
+		Now:       s.now().UTC(),
+		ConceptID: focusConcept,
+		ErrorType: focusErrorType,
 	})
+	rows, _, err := s.repo.ListReviewTasks(ctx, userID, query)
 	if err != nil {
 		return ReviewExerciseResponse{}, err
 	}
-	errorCounts, err := s.repo.ErrorCountsByContent(ctx, userID)
-	if err != nil {
-		return ReviewExerciseResponse{}, err
-	}
-
-	var best reviewCandidate
-	hasCandidate := false
-	for _, row := range rows {
-		avgMastery := averageMastery(row.Content.ConceptIDs, mastery)
-		errorCount := errorCounts[row.Content.ID]
-		if errorCount == 0 {
-			errorCount = 1
-		}
-		if avgMastery >= 0.5 || errorCount < 2 {
-			continue
-		}
-		canSubmit, err := s.reviewEligibility.CanSubmitReviewExercise(
-			ctx,
-			userID,
-			row.Content.ID,
-			row.Attempt.DailyAssignmentID,
-		)
-		if err != nil {
-			return ReviewExerciseResponse{}, err
-		}
-		if !canSubmit {
-			continue
-		}
-		candidate := reviewCandidate{
-			row:        row,
-			avgMastery: avgMastery,
-			errorCount: errorCount,
-			priority:   (1 - avgMastery) * float64(errorCount),
-		}
-		if !hasCandidate || reviewCandidateBefore(candidate, best) {
-			best = candidate
-			hasCandidate = true
-		}
-	}
-	if !hasCandidate {
+	if len(rows) == 0 {
 		return ReviewExerciseResponse{}, ErrNotFound
 	}
-	return toReviewResponse(best), nil
+	knowledgeNames, err := s.knowledgeNames(ctx, []Content{rows[0].Content})
+	if err != nil {
+		return ReviewExerciseResponse{}, err
+	}
+	return toReviewTaskResponse(rows[0], knowledgeNames), nil
 }
 
 // GetReviewExerciseByAttempt returns the exact incorrect attempt selected by the student.
 func (s *Service) GetReviewExerciseByAttempt(ctx context.Context, userID string, attemptID string) (ReviewExerciseResponse, error) {
-	row, ok, err := s.repo.GetMistakeByAttempt(ctx, userID, strings.TrimSpace(attemptID))
+	attemptID = strings.TrimSpace(attemptID)
+	row, ok, err := s.repo.GetMistakeByAttempt(ctx, userID, attemptID)
 	if err != nil {
 		return ReviewExerciseResponse{}, err
 	}
 	if !ok || row.Attempt.IsCorrect || row.Attempt.SubmittedAt == nil {
 		return ReviewExerciseResponse{}, ErrNotFound
 	}
-	canSubmit, err := s.reviewEligibility.CanSubmitReviewExercise(
-		ctx,
-		userID,
-		row.Content.ID,
-		row.Attempt.DailyAssignmentID,
-	)
+	task, hasTask, err := s.repo.GetReviewTaskByAttempt(ctx, userID, attemptID)
 	if err != nil {
 		return ReviewExerciseResponse{}, err
 	}
-	if !canSubmit {
-		return ReviewExerciseResponse{}, ErrNotFound
+	if hasTask && (task.Status == ReviewTaskArchived || task.SourceAttemptID != attemptID) {
+		hasTask = false
+	}
+	now := s.now().UTC()
+	if hasTask {
+		view := ReviewTaskViewDue
+		if task.Status == ReviewTaskMastered {
+			view = ReviewTaskViewMastered
+		}
+		rows, _, listErr := s.repo.ListReviewTasks(ctx, userID, normalizeReviewTaskQuery(ReviewTaskQuery{
+			View:     view,
+			Page:     1,
+			PageSize: 1,
+			Now:      now,
+			TaskID:   task.ID,
+		}))
+		if listErr != nil {
+			return ReviewExerciseResponse{}, listErr
+		}
+		if len(rows) != 1 {
+			return ReviewExerciseResponse{}, ErrNotFound
+		}
+		knowledgeNames, namesErr := s.knowledgeNames(ctx, []Content{rows[0].Content})
+		if namesErr != nil {
+			return ReviewExerciseResponse{}, namesErr
+		}
+		return toReviewTaskResponse(rows[0], knowledgeNames), nil
 	}
 	profile, _, err := s.repo.GetProfile(ctx, userID)
 	if err != nil {
@@ -627,11 +606,19 @@ func (s *Service) GetReviewExerciseByAttempt(ctx context.Context, userID string,
 	if errorCount == 0 {
 		errorCount = 1
 	}
-	return toReviewResponse(reviewCandidate{
-		row:        row,
-		avgMastery: averageMastery(row.Content.ConceptIDs, profile.MasteryVector),
-		errorCount: errorCount,
-	}), nil
+	response := toReviewResponse(reviewCandidate{
+		row:            row,
+		avgMastery:     averageMastery(row.Content.ConceptIDs, profile.MasteryVector),
+		errorCount:     errorCount,
+		knowledgeNames: nil,
+	})
+	knowledgeNames, err := s.knowledgeNames(ctx, []Content{row.Content})
+	if err != nil {
+		return ReviewExerciseResponse{}, err
+	}
+	response.Exercise.KnowledgePointNames = knowledgePointNames(row.Content, knowledgeNames)
+	response.Context.DailyAssignmentID = ""
+	return response, nil
 }
 
 func normalizeListQuery(query ListQuery) ListQuery {
@@ -694,11 +681,12 @@ func toMistakeItem(item listItemData) MistakeItem {
 	return MistakeItem{
 		ID: row.Attempt.ID,
 		Exercise: MistakeExercise{
-			ID:              row.Content.ID,
-			Title:           nonEmpty(row.Content.Title, "无标题"),
-			Content:         row.Content.Body,
-			Difficulty:      row.Content.Difficulty,
-			KnowledgePoints: sliceutil.CloneStrings(row.Content.ConceptIDs),
+			ID:                  row.Content.ID,
+			Title:               nonEmpty(row.Content.Title, "无标题"),
+			Content:             row.Content.Body,
+			Difficulty:          row.Content.Difficulty,
+			KnowledgePoints:     sliceutil.CloneStrings(row.Content.ConceptIDs),
+			KnowledgePointNames: knowledgePointNames(row.Content, item.knowledgeNames),
 		},
 		Attempt: MistakeAttempt{
 			StudentAnswer:    row.Attempt.StudentAnswer,
@@ -721,9 +709,12 @@ func toMistakeItem(item listItemData) MistakeItem {
 			Previous: item.avgMastery,
 			Trend:    masteryTrend(item.avgMastery),
 		},
-		ErrorCount: item.errorCount,
-		CanReview:  row.Attempt.CanReview,
-		CanDelete:  row.Attempt.CanDelete,
+		ErrorCount:      item.errorCount,
+		LastReviewedAt:  optionalAttemptTimestamp(item.lastReviewedAt),
+		CanReview:       true,
+		CanDelete:       row.Attempt.CanDelete,
+		CanArchive:      true,
+		IsEarlyPractice: item.isEarlyPractice,
 	}
 }
 
@@ -801,7 +792,7 @@ func toReviewResponse(candidate reviewCandidate) ReviewExerciseResponse {
 			Difficulty:           row.Content.Difficulty,
 			Type:                 reviewQuestionType(row.Content),
 			KnowledgePoints:      sliceutil.CloneStrings(row.Content.ConceptIDs),
-			KnowledgePointNames:  metautil.StringSlice(row.Content.Meta, "knowledge_point_names"),
+			KnowledgePointNames:  knowledgePointNames(row.Content, candidate.knowledgeNames),
 			HintsAvailable:       len(metautil.StringSlice(row.Content.Meta, "hints")) > 0,
 			EstimatedTimeSeconds: metautil.IntDefault(row.Content.Meta, "estimated_time_seconds", 300),
 			Options:              metautil.OptionalStringSlice(row.Content.Meta, "options"),
@@ -818,6 +809,27 @@ func toReviewResponse(candidate reviewCandidate) ReviewExerciseResponse {
 			ErrorCount:          candidate.errorCount,
 		},
 	}
+}
+
+func toReviewTaskResponse(row ReviewTaskRow, knowledgeNames map[string]string) ReviewExerciseResponse {
+	response := toReviewResponse(reviewCandidate{
+		row: MistakeRow{
+			Attempt: Attempt{
+				ID:            row.SourceAttemptID,
+				StudentAnswer: row.SourceStudentAnswer,
+			},
+			Content:   row.Content,
+			Diagnosis: row.Diagnosis,
+		},
+		avgMastery:     row.AvgMastery,
+		errorCount:     row.ErrorCount,
+		knowledgeNames: knowledgeNames,
+	})
+	response.Context.ReviewTaskID = row.Association.ID
+	revision := row.Association.Revision
+	response.Context.ReviewTaskRevision = &revision
+	response.Context.DailyAssignmentID = ""
+	return response
 }
 
 func sortListItems(items []listItemData, sortBy string, sortOrder string) {
@@ -912,6 +924,46 @@ func averageMastery(conceptIDs []string, mastery map[string]float64) float64 {
 	return sum / float64(len(conceptIDs))
 }
 
+func (s *Service) knowledgeNames(ctx context.Context, contents []Content) (map[string]string, error) {
+	conceptIDs := make([]string, 0)
+	for _, content := range contents {
+		conceptIDs = sliceutil.AppendUniqueNonEmptyStrings(conceptIDs, content.ConceptIDs...)
+	}
+	return s.repo.KnowledgeNames(ctx, conceptIDs)
+}
+
+func contentsFromMistakeListRows(rows []MistakeListRow) []Content {
+	contents := make([]Content, 0, len(rows))
+	for _, row := range rows {
+		contents = append(contents, row.Row.Content)
+	}
+	return contents
+}
+
+func contentsFromReviewTaskRows(rows []ReviewTaskRow) []Content {
+	contents := make([]Content, 0, len(rows))
+	for _, row := range rows {
+		contents = append(contents, row.Content)
+	}
+	return contents
+}
+
+func knowledgePointNames(content Content, resolved map[string]string) []string {
+	metaNames := metautil.StringSlice(content.Meta, "knowledge_point_names")
+	names := make([]string, 0, len(content.ConceptIDs))
+	for index, conceptID := range content.ConceptIDs {
+		name := strings.TrimSpace(resolved[conceptID])
+		if name == "" && index < len(metaNames) {
+			name = strings.TrimSpace(metaNames[index])
+		}
+		if name == "" {
+			name = conceptID
+		}
+		names = append(names, name)
+	}
+	return names
+}
+
 func masteryValue(conceptID string, mastery map[string]float64) float64 {
 	value, ok := mastery[conceptID]
 	if !ok {
@@ -959,17 +1011,6 @@ func compareOptionalTime(left *time.Time, right *time.Time) int {
 	return 0
 }
 
-func compareOptionalTimeDesc(left *time.Time, right *time.Time) bool {
-	return compareOptionalTime(left, right) > 0
-}
-
-func reviewCandidateBefore(left reviewCandidate, right reviewCandidate) bool {
-	if left.priority != right.priority {
-		return left.priority > right.priority
-	}
-	return compareOptionalTimeDesc(left.row.Attempt.SubmittedAt, right.row.Attempt.SubmittedAt)
-}
-
 func compareInt(left int, right int) int {
 	switch {
 	case left < right:
@@ -1010,14 +1051,17 @@ func nonEmpty(value string, fallback string) string {
 }
 
 type listItemData struct {
-	row        MistakeRow
-	avgMastery float64
-	errorCount int
+	row             MistakeRow
+	avgMastery      float64
+	errorCount      int
+	lastReviewedAt  *time.Time
+	isEarlyPractice bool
+	knowledgeNames  map[string]string
 }
 
 type reviewCandidate struct {
-	row        MistakeRow
-	avgMastery float64
-	errorCount int
-	priority   float64
+	row            MistakeRow
+	avgMastery     float64
+	errorCount     int
+	knowledgeNames map[string]string
 }

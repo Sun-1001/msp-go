@@ -1,4 +1,4 @@
-import { useState, useCallback, useRef } from 'react';
+import { useState, useCallback, useEffect, useRef } from 'react';
 import axios from 'axios';
 import {
   exerciseService,
@@ -31,6 +31,10 @@ export type ExerciseErrorType =
   | 'answer_service_unavailable' // OCR 或数学判定服务不可用
   | 'exercise_changed' // 作答期间题目内容发生变化
   | 'daily_assignment_stale' // 每日一题任务已完成或失效
+  | 'review_not_due' // 复习任务尚未到期
+  | 'review_task_stale' // 复习任务版本已更新
+  | 'mistake_record_archived' // 精确重做绑定的原错题已归档
+  | 'submission_conflict' // 提交标识已绑定到另一份载荷
   | 'network_error' // 网络错误
   | 'unknown'; // 其他错误
 
@@ -45,13 +49,17 @@ export interface ExerciseAnswerSubmission {
 
 export interface ExerciseViewModelOptions {
   dailyAssignmentId?: string;
+  reviewTaskId?: string;
+  reviewTaskRevision?: number;
+  originalAttemptId?: string;
 }
 
 type SubmissionStage = 'upload' | 'grading';
 
-interface PendingDailySubmission {
+interface PendingBoundSubmission {
   signature: string;
   submissionId: string;
+  timeSpentSeconds?: number;
   answerImage?: File;
   answerImageUrl?: string;
 }
@@ -213,6 +221,26 @@ const getSubmissionError = (
         message: '每日一题状态已更新，正在同步最新任务',
         type: 'daily_assignment_stale',
       };
+    case 'REVIEW_NOT_DUE':
+      return {
+        message: '复习计划状态已变化，请返回错题本后重新进入',
+        type: 'review_not_due',
+      };
+    case 'REVIEW_TASK_STALE':
+      return {
+        message: '复习任务已更新，请重新加载后继续',
+        type: 'review_task_stale',
+      };
+    case 'MISTAKE_RECORD_ARCHIVED':
+      return {
+        message: '这条错题记录已归档，请返回错题本',
+        type: 'mistake_record_archived',
+      };
+    case 'SUBMISSION_ID_CONFLICT':
+      return {
+        message: '提交状态已变化，请重新提交',
+        type: 'submission_conflict',
+      };
     default:
       if (code.startsWith('MATH_')) {
         return {
@@ -241,6 +269,9 @@ const getSubmissionError = (
  */
 export function useExerciseViewModel(options: ExerciseViewModelOptions = {}) {
   const dailyAssignmentId = options.dailyAssignmentId?.trim() || undefined;
+  const reviewTaskId = options.reviewTaskId?.trim() || undefined;
+  const reviewTaskRevision = options.reviewTaskRevision;
+  const originalAttemptId = options.originalAttemptId?.trim() || undefined;
   const [currentQuestion, setCurrentQuestion] = useState<Question | null>(null);
   const [isLoading, setIsLoading] = useState(false);
   const [isGenerating, setIsGenerating] = useState(false);
@@ -259,14 +290,26 @@ export function useExerciseViewModel(options: ExerciseViewModelOptions = {}) {
   const submissionInFlightRef = useRef(false);
   const solutionInFlightRef = useRef(false);
   const questionVersionRef = useRef(0);
-  const pendingDailySubmissionRef = useRef<PendingDailySubmission | null>(null);
+  const submissionRequestRef = useRef(0);
+  const solutionRequestRef = useRef(0);
+  const pendingBoundSubmissionRef = useRef<PendingBoundSubmission | null>(null);
+
+  useEffect(() => {
+    pendingBoundSubmissionRef.current = null;
+  }, [dailyAssignmentId, reviewTaskId, reviewTaskRevision, originalAttemptId]);
 
   const loadQuestion = useCallback((question: Question) => {
     questionVersionRef.current += 1;
-    pendingDailySubmissionRef.current = null;
+    submissionRequestRef.current += 1;
+    solutionRequestRef.current += 1;
+    submissionInFlightRef.current = false;
+    solutionInFlightRef.current = false;
+    pendingBoundSubmissionRef.current = null;
     setCurrentQuestion(question);
+    setSubmitPhase('idle');
     setSubmitResult(null);
     setSolution(null);
+    setIsLoadingSolution(false);
     setSolutionError(null);
     setError(null);
     setErrorType(null);
@@ -276,10 +319,16 @@ export function useExerciseViewModel(options: ExerciseViewModelOptions = {}) {
 
   const clearQuestion = useCallback(() => {
     questionVersionRef.current += 1;
-    pendingDailySubmissionRef.current = null;
+    submissionRequestRef.current += 1;
+    solutionRequestRef.current += 1;
+    submissionInFlightRef.current = false;
+    solutionInFlightRef.current = false;
+    pendingBoundSubmissionRef.current = null;
     setCurrentQuestion(null);
+    setSubmitPhase('idle');
     setSubmitResult(null);
     setSolution(null);
+    setIsLoadingSolution(false);
     setSolutionError(null);
     setError(null);
     setErrorType(null);
@@ -295,7 +344,7 @@ export function useExerciseViewModel(options: ExerciseViewModelOptions = {}) {
       const question = await exerciseService.fetchNextQuestion(conceptId, difficulty);
       if (!question) {
         questionVersionRef.current += 1;
-        pendingDailySubmissionRef.current = null;
+        pendingBoundSubmissionRef.current = null;
         setCurrentQuestion(null);
         setSubmitResult(null);
         setSolution(null);
@@ -307,7 +356,7 @@ export function useExerciseViewModel(options: ExerciseViewModelOptions = {}) {
         return;
       }
       questionVersionRef.current += 1;
-      pendingDailySubmissionRef.current = null;
+      pendingBoundSubmissionRef.current = null;
       setCurrentQuestion(question);
       setSubmitResult(null);
       setSolution(null);
@@ -375,7 +424,7 @@ export function useExerciseViewModel(options: ExerciseViewModelOptions = {}) {
         questionType,
       });
       questionVersionRef.current += 1;
-      pendingDailySubmissionRef.current = null;
+      pendingBoundSubmissionRef.current = null;
       setCurrentQuestion(question);
       setSubmitResult(null);
       setSolution(null);
@@ -413,23 +462,29 @@ export function useExerciseViewModel(options: ExerciseViewModelOptions = {}) {
 
       const submittedQuestion = currentQuestion;
       const submittedQuestionVersion = questionVersionRef.current;
+      const submissionRequest = submissionRequestRef.current + 1;
+      submissionRequestRef.current = submissionRequest;
+      const submissionBinding = [
+        dailyAssignmentId ?? '',
+        reviewTaskId ?? '',
+        reviewTaskRevision?.toString() ?? '',
+        originalAttemptId ?? '',
+      ].join('\u0000');
       const submissionSignature = normalizedAnswer
-        ? `${submittedQuestion.id}\u0000text\u0000${normalizedAnswer}`
-        : `${submittedQuestion.id}\u0000image`;
-      let pendingDailySubmission: PendingDailySubmission | undefined;
-      if (dailyAssignmentId) {
-        const currentPending = pendingDailySubmissionRef.current;
-        const matchesPending = currentPending?.signature === submissionSignature
-          && (normalizedAnswer !== '' || currentPending.answerImage === answerImage);
-        pendingDailySubmission = matchesPending
-          ? currentPending
-          : {
-              signature: submissionSignature,
-              submissionId: crypto.randomUUID(),
-              ...(!normalizedAnswer && answerImage ? { answerImage } : {}),
-            };
-        pendingDailySubmissionRef.current = pendingDailySubmission;
-      }
+        ? `${submissionBinding}\u0000${submittedQuestion.id}\u0000text\u0000${normalizedAnswer}`
+        : `${submissionBinding}\u0000${submittedQuestion.id}\u0000image`;
+      const currentPending = pendingBoundSubmissionRef.current;
+      const matchesPending = currentPending?.signature === submissionSignature
+        && (normalizedAnswer !== '' || currentPending.answerImage === answerImage)
+        && Boolean(currentPending.submissionId);
+      let pendingBoundSubmission: PendingBoundSubmission = matchesPending
+        ? currentPending
+        : {
+            signature: submissionSignature,
+            submissionId: crypto.randomUUID(),
+            ...(!normalizedAnswer && answerImage ? { answerImage } : {}),
+          };
+      pendingBoundSubmissionRef.current = pendingBoundSubmission;
       let submissionStage: SubmissionStage = normalizedAnswer ? 'grading' : 'upload';
       submissionInFlightRef.current = true;
       setError(null);
@@ -439,7 +494,7 @@ export function useExerciseViewModel(options: ExerciseViewModelOptions = {}) {
       setSolution(null);
       setSolutionError(null);
       try {
-        let answerImageUrl = pendingDailySubmission?.answerImageUrl;
+        let answerImageUrl = pendingBoundSubmission.answerImageUrl;
         if (!normalizedAnswer && answerImage) {
           const validation = validateAnswerImageFile(answerImage);
           if (!validation.valid) {
@@ -456,23 +511,29 @@ export function useExerciseViewModel(options: ExerciseViewModelOptions = {}) {
             if (!answerImageUrl) {
               throw new Error('图片上传失败，请稍后重试');
             }
-            if (pendingDailySubmission) {
-              pendingDailySubmission = { ...pendingDailySubmission, answerImageUrl };
-              pendingDailySubmissionRef.current = pendingDailySubmission;
-            }
+            pendingBoundSubmission = { ...pendingBoundSubmission, answerImageUrl };
+            pendingBoundSubmissionRef.current = pendingBoundSubmission;
           }
         }
 
         submissionStage = 'grading';
         setSubmitPhase('recognizing');
-        const timeSpent = Math.round((Date.now() - startTimeRef.current) / 1000);
+        const timeSpentSeconds = pendingBoundSubmission.timeSpentSeconds
+          ?? Math.round((Date.now() - startTimeRef.current) / 1000);
+        if (pendingBoundSubmission.timeSpentSeconds === undefined) {
+          pendingBoundSubmission = { ...pendingBoundSubmission, timeSpentSeconds };
+          pendingBoundSubmissionRef.current = pendingBoundSubmission;
+        }
         const result = await exerciseService.submitAnswer({
           exerciseId: submittedQuestion.id,
           ...(dailyAssignmentId ? { dailyAssignmentId } : {}),
-          ...(pendingDailySubmission ? { submissionId: pendingDailySubmission.submissionId } : {}),
+          ...(reviewTaskId ? { reviewTaskId } : {}),
+          ...(reviewTaskRevision !== undefined ? { reviewTaskRevision } : {}),
+          ...(originalAttemptId ? { originalAttemptId } : {}),
+          submissionId: pendingBoundSubmission.submissionId,
           ...(normalizedAnswer ? { answerText: normalizedAnswer } : {}),
           ...(answerImageUrl ? { answerImageUrl } : {}),
-          timeSpentSeconds: timeSpent,
+          timeSpentSeconds,
         });
         if (questionVersionRef.current !== submittedQuestionVersion) {
           exerciseLogger.info('Discarded stale answer result', {
@@ -481,7 +542,7 @@ export function useExerciseViewModel(options: ExerciseViewModelOptions = {}) {
           return;
         }
         setSubmitResult(result);
-        pendingDailySubmissionRef.current = null;
+        pendingBoundSubmissionRef.current = null;
         exerciseLogger.info('Answer submitted', {
           questionId: submittedQuestion.id,
           isCorrect: result.isCorrect,
@@ -496,6 +557,15 @@ export function useExerciseViewModel(options: ExerciseViewModelOptions = {}) {
           return;
         }
         const submissionError = getSubmissionError(err, submissionStage);
+        if (
+          submissionError.type === 'review_task_stale'
+          || submissionError.type === 'review_not_due'
+          || submissionError.type === 'mistake_record_archived'
+          || submissionError.type === 'exercise_changed'
+          || submissionError.type === 'submission_conflict'
+        ) {
+          pendingBoundSubmissionRef.current = null;
+        }
         setError(submissionError.message);
         setErrorType(submissionError.type);
         setErrorSource('submission');
@@ -504,11 +574,13 @@ export function useExerciseViewModel(options: ExerciseViewModelOptions = {}) {
           error: err,
         });
       } finally {
-        submissionInFlightRef.current = false;
-        setSubmitPhase('idle');
+        if (submissionRequestRef.current === submissionRequest) {
+          submissionInFlightRef.current = false;
+          setSubmitPhase('idle');
+        }
       }
     },
-    [currentQuestion, dailyAssignmentId]
+    [currentQuestion, dailyAssignmentId, reviewTaskId, reviewTaskRevision, originalAttemptId]
   );
 
   const loadSolution = useCallback(async () => {
@@ -516,13 +588,30 @@ export function useExerciseViewModel(options: ExerciseViewModelOptions = {}) {
 
     const requestedQuestion = currentQuestion;
     const requestedQuestionVersion = questionVersionRef.current;
+    const solutionRequest = solutionRequestRef.current + 1;
+    solutionRequestRef.current = solutionRequest;
     solutionInFlightRef.current = true;
     setIsLoadingSolution(true);
     setSolutionError(null);
     try {
+      const solutionOriginalAttemptId = reviewTaskId ? undefined : originalAttemptId;
+      const solutionDailyAssignmentId = reviewTaskId || solutionOriginalAttemptId
+        ? undefined
+        : dailyAssignmentId;
+      const shouldBindSolutionAttempt = Boolean(reviewTaskId)
+        || Boolean(solutionOriginalAttemptId && submitResult?.isCorrect === false);
+      const solutionAttemptId = shouldBindSolutionAttempt
+        ? submitResult?.attemptId
+        : undefined;
       const nextSolution = await exerciseService.getSolution(
         requestedQuestion.id,
-        dailyAssignmentId,
+        solutionDailyAssignmentId,
+        reviewTaskId,
+        reviewTaskId
+          ? (submitResult?.reviewTaskRevision ?? reviewTaskRevision)
+          : undefined,
+        solutionOriginalAttemptId,
+        solutionAttemptId,
       );
       if (questionVersionRef.current !== requestedQuestionVersion) return;
       setSolution(nextSolution);
@@ -534,10 +623,21 @@ export function useExerciseViewModel(options: ExerciseViewModelOptions = {}) {
         error: err,
       });
     } finally {
-      solutionInFlightRef.current = false;
-      setIsLoadingSolution(false);
+      if (solutionRequestRef.current === solutionRequest) {
+        solutionInFlightRef.current = false;
+        setIsLoadingSolution(false);
+      }
     }
-  }, [currentQuestion, dailyAssignmentId]);
+  }, [
+    currentQuestion,
+    dailyAssignmentId,
+    originalAttemptId,
+    reviewTaskId,
+    reviewTaskRevision,
+    submitResult?.attemptId,
+    submitResult?.isCorrect,
+    submitResult?.reviewTaskRevision,
+  ]);
 
   return {
     currentQuestion,

@@ -1,6 +1,6 @@
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import axios from 'axios';
-import { useNavigate, useParams } from 'react-router-dom';
+import { useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import {
   AlertCircle,
   ArrowLeft,
@@ -26,6 +26,9 @@ import {
 } from '@/modules/mistake/hooks/useMistakeBook';
 import { getApiErrorMessage } from '@/libs/http/apiClient';
 
+const uncategorizedKnowledgePointId = '00000000-0000-0000-0000-000000000001';
+const uuidPattern = /^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i;
+
 const toQuestion = (review: ReviewExerciseResponse): Question => ({
   id: review.exercise.id,
   title: review.exercise.title,
@@ -50,17 +53,52 @@ const validateReview = (review: ReviewExerciseResponse): string | null => {
   ) {
     return '这道选择题缺少选项，暂时无法重做';
   }
+  if (!review.context.originalAttemptId.trim()) {
+    return '错题记录信息不完整，请重新加载后再试';
+  }
+  const hasReviewTaskId = Boolean(review.context.reviewTaskId?.trim());
+  const hasReviewTaskRevision = review.context.reviewTaskRevision !== undefined;
+  if (hasReviewTaskId !== hasReviewTaskRevision) {
+    return '复习任务信息不完整，请重新加载后再试';
+  }
   return null;
+};
+
+type LoadErrorKind = 'error' | 'not_due' | 'archived';
+
+const getResponseErrorCode = (error: unknown): string => {
+  if (!axios.isAxiosError(error)) return '';
+  const data = error.response?.data as { code?: unknown } | undefined;
+  return typeof data?.code === 'string' ? data.code.trim().toUpperCase() : '';
+};
+
+const getSafeMistakeBookReturnPath = (value: string | null): string => {
+  const fallback = '/mistake-book';
+  if (!value) return fallback;
+
+  try {
+    const parsed = new URL(value, window.location.origin);
+    if (parsed.origin !== window.location.origin || parsed.pathname !== fallback) {
+      return fallback;
+    }
+    return `${parsed.pathname}${parsed.search}`;
+  } catch {
+    return fallback;
+  }
 };
 
 export const MistakeRedoPage: React.FC = () => {
   const navigate = useNavigate();
   const { attemptId } = useParams<{ attemptId: string }>();
+  const [searchParams] = useSearchParams();
+  const returnPath = getSafeMistakeBookReturnPath(searchParams.get('return_to'));
   const [review, setReview] = useState<ReviewExerciseResponse | null>(null);
   const [isLoadingReview, setIsLoadingReview] = useState(Boolean(attemptId));
   const [loadError, setLoadError] = useState<string | null>(null);
+  const [loadErrorKind, setLoadErrorKind] = useState<LoadErrorKind | null>(null);
   const [reloadVersion, setReloadVersion] = useState(0);
   const [resetKey, setResetKey] = useState(0);
+  const handledReviewErrorRef = useRef<string | null>(null);
   const {
     currentQuestion,
     isSubmitting,
@@ -72,9 +110,15 @@ export const MistakeRedoPage: React.FC = () => {
     error,
     errorType,
     loadQuestion,
+    clearQuestion,
     submitAnswer,
     loadSolution,
-  } = useExerciseViewModel({ dailyAssignmentId: review?.context.dailyAssignmentId });
+  } = useExerciseViewModel({
+    dailyAssignmentId: review?.context.dailyAssignmentId,
+    reviewTaskId: review?.context.reviewTaskId,
+    reviewTaskRevision: review?.context.reviewTaskRevision,
+    originalAttemptId: review?.context.originalAttemptId,
+  });
 
   useEffect(() => {
     if (!attemptId) {
@@ -87,6 +131,7 @@ export const MistakeRedoPage: React.FC = () => {
     const loadReview = async () => {
       setIsLoadingReview(true);
       setLoadError(null);
+      setLoadErrorKind(null);
       setReview(null);
       try {
         const nextReview = await fetchReviewExerciseByAttempt(attemptId, controller.signal);
@@ -98,12 +143,18 @@ export const MistakeRedoPage: React.FC = () => {
         }
         setReview(nextReview);
         loadQuestion(toQuestion(nextReview));
+        handledReviewErrorRef.current = null;
         setResetKey((current) => current + 1);
       } catch (loadFailure) {
         if (controller.signal.aborted) return;
-        if (axios.isAxiosError(loadFailure) && loadFailure.response?.status === 404) {
+        if (getResponseErrorCode(loadFailure) === 'REVIEW_NOT_DUE') {
+          setLoadErrorKind('not_due');
+          setLoadError('复习计划状态已变化，请返回错题本后重新进入');
+        } else if (axios.isAxiosError(loadFailure) && loadFailure.response?.status === 404) {
+          setLoadErrorKind('error');
           setLoadError('错题记录不存在、已下架或当前不可重做');
         } else {
+          setLoadErrorKind('error');
           setLoadError(getApiErrorMessage(loadFailure, '加载错题失败，请稍后重试'));
         }
       } finally {
@@ -117,13 +168,60 @@ export const MistakeRedoPage: React.FC = () => {
     return () => controller.abort();
   }, [attemptId, loadQuestion, reloadVersion]);
 
-  const retryQuestion = useCallback(() => {
-    if (!review) return;
-    loadQuestion(toQuestion(review));
-    setResetKey((current) => current + 1);
-  }, [loadQuestion, review]);
+  useEffect(() => {
+    const reviewErrorKey = errorType ? `${errorType}:${error ?? ''}` : null;
+    if (reviewErrorKey && handledReviewErrorRef.current === reviewErrorKey) return;
 
-  const masteryPercent = Math.round(Math.min(Math.max(review?.context.masteryBefore ?? 0, 0), 1) * 100);
+    if (errorType === 'review_task_stale') {
+      handledReviewErrorRef.current = reviewErrorKey;
+      setIsLoadingReview(true);
+      setReview(null);
+      clearQuestion();
+      setReloadVersion((current) => current + 1);
+      return;
+    }
+    if (errorType === 'review_not_due') {
+      handledReviewErrorRef.current = reviewErrorKey;
+      setLoadErrorKind('not_due');
+      setLoadError(error || '复习计划状态已变化，请返回错题本后重新进入');
+      setReview(null);
+      clearQuestion();
+      return;
+    }
+    if (errorType === 'mistake_record_archived') {
+      handledReviewErrorRef.current = reviewErrorKey;
+      setLoadErrorKind('archived');
+      setLoadError(error || '这条错题记录已归档，请返回错题本');
+      setReview(null);
+      clearQuestion();
+    }
+  }, [clearQuestion, error, errorType]);
+
+  const handlePanelNext = useCallback(() => {
+    if (submitResult) {
+      navigate(returnPath);
+      return;
+    }
+    clearQuestion();
+    setReloadVersion((current) => current + 1);
+  }, [clearQuestion, navigate, returnPath, submitResult]);
+
+  const currentMastery = useMemo(() => {
+    const masteryUpdate = submitResult?.masteryUpdate;
+    if (!masteryUpdate || Object.keys(masteryUpdate).length === 0) {
+      return review?.context.masteryBefore ?? 0;
+    }
+
+    const exerciseValues = (review?.exercise.knowledgePoints ?? [])
+      .map((conceptId) => masteryUpdate[conceptId])
+      .filter((value): value is number => Number.isFinite(value));
+    const values = exerciseValues.length > 0
+      ? exerciseValues
+      : Object.values(masteryUpdate).filter((value) => Number.isFinite(value));
+    if (values.length === 0) return review?.context.masteryBefore ?? 0;
+    return values.reduce((sum, value) => sum + value, 0) / values.length;
+  }, [review?.context.masteryBefore, review?.exercise.knowledgePoints, submitResult?.masteryUpdate]);
+  const masteryPercent = Math.round(Math.min(Math.max(currentMastery, 0), 1) * 100);
   const difficulty = useMemo(
     () => getDifficultyBadge(review?.exercise.difficulty ?? 0),
     [review?.exercise.difficulty]
@@ -145,18 +243,24 @@ export const MistakeRedoPage: React.FC = () => {
       <MainLayout>
         <div className="container mx-auto flex min-h-[60vh] max-w-3xl flex-col items-center justify-center px-6 text-center">
           <AlertCircle className="mb-4 h-12 w-12 text-red-400" />
-          <h1 className="text-xl font-semibold text-surface-900 dark:text-surface-100">无法打开这道错题</h1>
+          <h1 className="text-xl font-semibold text-surface-900 dark:text-surface-100">
+            {loadErrorKind === 'not_due'
+              ? '复习计划已更新'
+              : loadErrorKind === 'archived'
+                ? '错题记录已归档'
+                : '无法打开这道错题'}
+          </h1>
           <p className="mt-2 text-surface-500 dark:text-surface-400">
             {loadError || '错题内容暂不可用'}
           </p>
           <div className="mt-6 flex flex-wrap justify-center gap-3">
-            {attemptId ? (
+            {attemptId && loadErrorKind !== 'not_due' && loadErrorKind !== 'archived' ? (
               <Button variant="outline" onClick={() => setReloadVersion((current) => current + 1)}>
                 <RefreshCw className="mr-2 h-4 w-4" />
                 重新加载
               </Button>
             ) : null}
-            <Button onClick={() => navigate('/mistake-book')}>
+            <Button onClick={() => navigate(returnPath)}>
               <ArrowLeft className="mr-2 h-4 w-4" />
               返回错题本
             </Button>
@@ -167,14 +271,18 @@ export const MistakeRedoPage: React.FC = () => {
   }
 
   const previousErrorLabel = getErrorTypeLabel(review.context.previousErrorType);
-  const knowledgeLabel = review.exercise.knowledgePointNames[0]
-    || review.exercise.knowledgePoints[0]
-    || '未分类';
+  const knowledgeLabel = review.exercise.knowledgePointNames
+    .map((value) => value.trim())
+    .find((value) => value && !uuidPattern.test(value))
+    || (review.exercise.knowledgePoints.length === 0
+      || review.exercise.knowledgePoints.includes(uncategorizedKnowledgePointId)
+      ? '未分类'
+      : '知识点名称暂缺');
 
   return (
     <MainLayout>
       <div className="container mx-auto max-w-5xl px-4 py-6 sm:px-6 sm:py-8">
-        <Button variant="ghost" className="mb-4" onClick={() => navigate('/mistake-book')}>
+        <Button variant="ghost" className="mb-4" onClick={() => navigate(returnPath)}>
           <ArrowLeft className="mr-2 h-4 w-4" />
           返回错题本
         </Button>
@@ -249,10 +357,10 @@ export const MistakeRedoPage: React.FC = () => {
           solutionError={solutionError}
           error={error}
           errorType={errorType}
-          onNextQuestion={retryQuestion}
+          onNextQuestion={handlePanelNext}
           submitAnswer={submitAnswer}
           onLoadSolution={loadSolution}
-          nextButtonLabel="再做一次"
+          nextButtonLabel="返回错题本"
           resetKey={resetKey}
         />
       </div>

@@ -110,6 +110,20 @@ func (r QuestionRepository) MatchConceptIDsBatch(ctx context.Context, groupNames
 	return matches, rows.Err()
 }
 
+// ConceptIDsExist reports whether every supplied concept ID resolves to a
+// current knowledge node.
+func (r QuestionRepository) ConceptIDsExist(ctx context.Context, conceptIDs []string) (bool, error) {
+	if len(conceptIDs) == 0 {
+		return true, nil
+	}
+	return r.Exists(ctx, `
+		SELECT count(DISTINCT id) = cardinality($1::varchar[])
+		FROM public.knowledge_nodes
+		WHERE id = ANY($1::varchar[])`,
+		conceptIDs,
+	)
+}
+
 // ListQuestions returns teacher-owned problem content with usage statistics.
 func (r QuestionRepository) ListQuestions(ctx context.Context, ownerID string, filter questionapp.ListFilter) ([]questionapp.Question, int, error) {
 	where, args := questionWhereClause(ownerID, filter)

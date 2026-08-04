@@ -90,6 +90,8 @@ export interface ExerciseSolution {
 
 export interface SubmitResult {
   attemptId?: string;
+  reviewTaskRevision?: number;
+  masteryWeight?: number;
   isCorrect: boolean;
   recorded?: boolean;
   gradingStatus?: 'correct' | 'incorrect' | 'indeterminate';
@@ -107,7 +109,10 @@ export interface SubmitResult {
 export interface SubmitPayload {
   exerciseId: string;
   dailyAssignmentId?: string;
-  submissionId?: string;
+  reviewTaskId?: string;
+  reviewTaskRevision?: number;
+  originalAttemptId?: string;
+  submissionId: string;
   answerText?: string;
   answerImageUrl?: string;
   answerSteps?: string[];
@@ -238,10 +243,19 @@ export const exerciseService = {
       mastery_update: Record<string, number> | null;
       mastery_model: string;
       next_recommendation: string;
+      mastery_weight?: number;
+      review_task_revision?: number;
     }>('/exercise/submit', {
       exercise_id: payload.exerciseId,
       ...(payload.dailyAssignmentId ? { daily_assignment_id: payload.dailyAssignmentId } : {}),
-      ...(payload.submissionId ? { submission_id: payload.submissionId } : {}),
+      ...(payload.reviewTaskId ? { review_task_id: payload.reviewTaskId } : {}),
+      ...(payload.reviewTaskRevision !== undefined
+        ? { review_task_revision: payload.reviewTaskRevision }
+        : {}),
+      ...(payload.originalAttemptId
+        ? { original_attempt_id: payload.originalAttemptId }
+        : {}),
+      submission_id: payload.submissionId,
       ...(payload.answerText ? { answer_text: payload.answerText } : {}),
       ...(payload.answerImageUrl ? { answer_image_url: payload.answerImageUrl } : {}),
       answer_steps: payload.answerSteps,
@@ -254,6 +268,12 @@ export const exerciseService = {
     const recorded = data.recorded !== false;
     return {
       attemptId: data.attempt_id,
+      ...(data.review_task_revision !== undefined
+        ? { reviewTaskRevision: data.review_task_revision }
+        : {}),
+      ...(data.mastery_weight !== undefined
+        ? { masteryWeight: data.mastery_weight }
+        : {}),
       isCorrect: data.is_correct,
       recorded,
       gradingStatus:
@@ -287,8 +307,15 @@ export const exerciseService = {
   async getSolution(
     exerciseId: string,
     dailyAssignmentId?: string,
+    reviewTaskId?: string,
+    reviewTaskRevision?: number,
+    originalAttemptId?: string,
+    solutionAttemptId?: string,
   ): Promise<ExerciseSolution> {
     const normalizedDailyAssignmentId = dailyAssignmentId?.trim();
+    const normalizedReviewTaskId = reviewTaskId?.trim();
+    const normalizedOriginalAttemptId = originalAttemptId?.trim();
+    const normalizedSolutionAttemptId = solutionAttemptId?.trim();
     const res = await apiClient.get<{
       exercise_id: string;
       answer: string;
@@ -302,9 +329,23 @@ export const exerciseService = {
         retryable: boolean;
       } | null;
     }>(`/exercise/${exerciseId}/solution`, {
-      ...(normalizedDailyAssignmentId
-        ? { params: { daily_assignment_id: normalizedDailyAssignmentId } }
-        : {}),
+      params: {
+        ...(normalizedDailyAssignmentId
+          ? { daily_assignment_id: normalizedDailyAssignmentId }
+          : {}),
+        ...(normalizedReviewTaskId
+          ? { review_task_id: normalizedReviewTaskId }
+          : {}),
+        ...(reviewTaskRevision !== undefined
+          ? { review_task_revision: reviewTaskRevision }
+          : {}),
+        ...(normalizedOriginalAttemptId
+          ? { original_attempt_id: normalizedOriginalAttemptId }
+          : {}),
+        ...(normalizedSolutionAttemptId
+          ? { attempt_id: normalizedSolutionAttemptId }
+          : {}),
+      },
     });
 
     return {

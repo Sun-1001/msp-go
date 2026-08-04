@@ -207,6 +207,85 @@ func (r ExerciseRepository) GetDailySubmissionResponse(
 	return response, true, nil
 }
 
+// GetMistakeRedoSubmissionResponse returns the committed response for one
+// student-scoped redo submission and rejects reuse against another payload.
+func (r ExerciseRepository) GetMistakeRedoSubmissionResponse(
+	ctx context.Context,
+	studentID string,
+	originalAttemptID string,
+	submissionKey string,
+	submissionDigest string,
+) (exerciseapp.SubmitResponse, bool, error) {
+	var storedOriginalAttemptID pgtype.Text
+	var storedDigest string
+	var raw []byte
+	err := r.DB().QueryRow(ctx, `
+		SELECT attempt.mistake_redo_original_attempt_id,
+		       attempt.mistake_redo_submission_digest,
+		       attempt.mistake_redo_submission_response
+		FROM public.content_attempts attempt
+		WHERE attempt.student_id = $1
+		  AND attempt.mistake_redo_submission_id = $2`,
+		studentID,
+		submissionKey,
+	).Scan(&storedOriginalAttemptID, &storedDigest, &raw)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return exerciseapp.SubmitResponse{}, false, nil
+	}
+	if err != nil {
+		return exerciseapp.SubmitResponse{}, false, err
+	}
+	if (storedOriginalAttemptID.Valid && storedOriginalAttemptID.String != originalAttemptID) || storedDigest != submissionDigest {
+		return exerciseapp.SubmitResponse{}, false, exerciseapp.ErrSubmissionConflict
+	}
+	if len(raw) == 0 {
+		return exerciseapp.SubmitResponse{}, false, fmt.Errorf("mistake redo submission response is incomplete")
+	}
+	var response exerciseapp.SubmitResponse
+	if err := json.Unmarshal(raw, &response); err != nil {
+		return exerciseapp.SubmitResponse{}, false, fmt.Errorf("decode mistake redo submission response: %w", err)
+	}
+	return response, true, nil
+}
+
+// GetRegularSubmissionResponse returns the committed response for one
+// student-scoped ordinary exercise submission.
+func (r ExerciseRepository) GetRegularSubmissionResponse(
+	ctx context.Context,
+	studentID string,
+	submissionKey string,
+	submissionDigest string,
+) (exerciseapp.SubmitResponse, bool, error) {
+	var storedDigest string
+	var raw []byte
+	err := r.DB().QueryRow(ctx, `
+		SELECT attempt.regular_submission_digest,
+		       attempt.regular_submission_response
+		FROM public.content_attempts attempt
+		WHERE attempt.student_id = $1
+		  AND attempt.regular_submission_id = $2`,
+		studentID,
+		submissionKey,
+	).Scan(&storedDigest, &raw)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return exerciseapp.SubmitResponse{}, false, nil
+	}
+	if err != nil {
+		return exerciseapp.SubmitResponse{}, false, err
+	}
+	if storedDigest != submissionDigest {
+		return exerciseapp.SubmitResponse{}, false, exerciseapp.ErrSubmissionConflict
+	}
+	if len(raw) == 0 {
+		return exerciseapp.SubmitResponse{}, false, fmt.Errorf("regular submission response is incomplete")
+	}
+	var response exerciseapp.SubmitResponse
+	if err := json.Unmarshal(raw, &response); err != nil {
+		return exerciseapp.SubmitResponse{}, false, fmt.Errorf("decode regular submission response: %w", err)
+	}
+	return response, true, nil
+}
+
 func (r ExerciseRepository) getDailyAssignment(
 	ctx context.Context,
 	assignmentID string,
@@ -235,6 +314,98 @@ func (r ExerciseRepository) HasReadyDailyAssignmentContent(ctx context.Context, 
 			  AND assignment.status = 'ready'
 		)`, studentID, contentID).Scan(&assigned)
 	return assigned, err
+}
+
+// GetMistakeRedoAttemptBinding revalidates the original error evidence while
+// the caller holds the per-student submission lock.
+func (r ExerciseRepository) GetMistakeRedoAttemptBinding(
+	ctx context.Context,
+	studentID string,
+	attemptID string,
+) (exerciseapp.MistakeRedoAttemptBinding, bool, error) {
+	var binding exerciseapp.MistakeRedoAttemptBinding
+	var ownerTeacherID pgtype.Text
+	var generatedByStudentID pgtype.Text
+	var conceptIDsRaw []byte
+	var metaRaw []byte
+	err := r.DB().QueryRow(ctx, `
+		SELECT ca.content_id,
+		       coalesce(ca.mistake_redo_original_attempt_id, ''),
+		       ca.is_correct,
+		       ca.submitted_at IS NOT NULL,
+		       EXISTS (
+		           SELECT 1
+		           FROM public.diagnosis_reports diagnosis
+		           WHERE diagnosis.attempt_id = ca.id
+		       ),
+		       EXISTS (
+		           SELECT 1
+		           FROM public.mistake_record_archives archive
+		           WHERE archive.attempt_id = ca.id
+		             AND archive.student_id = ca.student_id
+		       ),
+		       ca.content_id,
+		       c.owner_teacher_id,
+		       coalesce(
+		           ca.review_question_generated_by_student_id,
+		           daily_assignment.question_generated_by_student_id,
+		           c.generated_by_student_id
+		       ),
+		       'PUBLISHED'::text,
+		       coalesce(ca.review_question_title, daily_assignment.question_title, c.title),
+		       coalesce(ca.review_question_body, daily_assignment.question_body, c.body),
+		       coalesce(ca.review_question_difficulty, daily_assignment.question_difficulty, c.difficulty),
+		       `+mistakeQuestionConceptIDs+`,
+		       coalesce(ca.review_question_meta, daily_assignment.question_meta, c.meta)
+		FROM public.content_attempts ca
+		JOIN public.contents c ON c.id = ca.content_id
+		`+mistakeDailyAssignmentJoin+`
+		WHERE ca.id = $1
+		  AND ca.student_id = $2
+		  AND `+mistakeRepresentativeAttemptPredicate+`
+		FOR SHARE OF ca, c`,
+		attemptID,
+		studentID,
+	).Scan(
+		&binding.ContentID,
+		&binding.RedoOriginalAttemptID,
+		&binding.IsCorrect,
+		&binding.IsSubmitted,
+		&binding.HasDiagnosis,
+		&binding.IsArchived,
+		&binding.Exercise.ID,
+		&ownerTeacherID,
+		&generatedByStudentID,
+		&binding.Exercise.Status,
+		&binding.Exercise.Title,
+		&binding.Exercise.Body,
+		&binding.Exercise.Difficulty,
+		&conceptIDsRaw,
+		&metaRaw,
+	)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return exerciseapp.MistakeRedoAttemptBinding{}, false, nil
+	}
+	if err != nil {
+		return exerciseapp.MistakeRedoAttemptBinding{}, false, err
+	}
+	if ownerTeacherID.Valid {
+		binding.Exercise.OwnerTeacherID = ownerTeacherID.String
+	}
+	if generatedByStudentID.Valid {
+		binding.Exercise.GeneratedByStudentID = generatedByStudentID.String
+	}
+	conceptIDs, err := decodeStringSlice(conceptIDsRaw)
+	if err != nil {
+		return exerciseapp.MistakeRedoAttemptBinding{}, false, fmt.Errorf("decode mistake redo concept ids: %w", err)
+	}
+	meta, err := decodeObjectMap(metaRaw)
+	if err != nil {
+		return exerciseapp.MistakeRedoAttemptBinding{}, false, fmt.Errorf("decode mistake redo meta: %w", err)
+	}
+	binding.Exercise.ConceptIDs = conceptIDs
+	binding.Exercise.Meta = meta
+	return binding, true, nil
 }
 
 // ApplyDailyAttempt records the immutable first result or the first successful correction.
@@ -639,17 +810,14 @@ func (r ExerciseRepository) ListRecentInteractions(ctx context.Context, userID s
 	}
 	rows, err := r.DB().Query(ctx, `
 		SELECT
+			ca.id,
 			ca.content_id,
-			coalesce(assignment.question_concept_ids, c.concept_ids),
+			ca.review_question_concept_ids,
 			ca.is_correct,
-			coalesce(assignment.question_difficulty, c.difficulty),
+			ca.review_question_difficulty,
+			ca.mastery_weight,
 			ca.submitted_at
 		FROM public.content_attempts ca
-		JOIN public.contents c ON c.id = ca.content_id
-		LEFT JOIN public.daily_question_assignments assignment
-		  ON assignment.id = ca.daily_assignment_id
-		 AND assignment.student_id = ca.student_id
-		 AND assignment.content_id = ca.content_id
 		WHERE ca.student_id = $1
 		  AND ca.submitted_at IS NOT NULL
 		  AND ca.id <> $2
@@ -669,10 +837,12 @@ func (r ExerciseRepository) ListRecentInteractions(ctx context.Context, userID s
 		var interaction exerciseapp.LearningInteraction
 		var conceptIDsRaw []byte
 		if err := rows.Scan(
+			&interaction.AttemptID,
 			&interaction.ExerciseID,
 			&conceptIDsRaw,
 			&interaction.IsCorrect,
 			&interaction.Difficulty,
+			&interaction.MasteryWeight,
 			&interaction.SubmittedAt,
 		); err != nil {
 			return nil, err
@@ -697,15 +867,99 @@ func (r ExerciseRepository) InsertAttempt(ctx context.Context, record exerciseap
 	var dailySubmissionKey any
 	if record.DailyAssignmentID != "" {
 		dailyAssignmentID = record.DailyAssignmentID
-		dailySubmissionKey = record.DailySubmissionKey
+		if record.DailySubmissionKey != "" {
+			dailySubmissionKey = record.DailySubmissionKey
+		}
+	}
+	var reviewTaskID any
+	var reviewSubmissionKey any
+	var reviewSubmissionDigest any
+	var redoOriginalAttemptID any
+	var redoSubmissionID any
+	var redoSubmissionDigest any
+	var regularSubmissionID any
+	var regularSubmissionDigest any
+	var reviewQuestionTitle any
+	var reviewQuestionBody any
+	var reviewQuestionConceptIDs any
+	var reviewQuestionDifficulty any
+	var reviewQuestionMeta any
+	var reviewQuestionGeneratedByStudentID any
+	if record.QuestionSnapshot == nil {
+		return errors.New("submitted attempt question snapshot is nil")
+	}
+	if record.ReviewTaskID != "" {
+		if record.ReviewSubmissionKey == "" || record.ReviewSubmissionDigest == "" {
+			return errors.New("review submission idempotency binding is incomplete")
+		}
+		reviewTaskID = record.ReviewTaskID
+		reviewSubmissionKey = record.ReviewSubmissionKey
+		reviewSubmissionDigest = record.ReviewSubmissionDigest
+	}
+	if record.QuestionSnapshot != nil {
+		reviewQuestionTitle = record.QuestionSnapshot.Title
+		reviewQuestionBody = record.QuestionSnapshot.Body
+		conceptIDs := record.QuestionSnapshot.ConceptIDs
+		if conceptIDs == nil {
+			conceptIDs = []string{}
+		}
+		conceptIDsRaw, marshalErr := json.Marshal(conceptIDs)
+		if marshalErr != nil {
+			return marshalErr
+		}
+		meta := record.QuestionSnapshot.Meta
+		if meta == nil {
+			meta = map[string]any{}
+		}
+		metaRaw, marshalErr := json.Marshal(meta)
+		if marshalErr != nil {
+			return marshalErr
+		}
+		reviewQuestionConceptIDs = string(conceptIDsRaw)
+		reviewQuestionDifficulty = record.QuestionSnapshot.Difficulty
+		reviewQuestionMeta = string(metaRaw)
+		if record.QuestionSnapshot.GeneratedByStudentID != "" {
+			reviewQuestionGeneratedByStudentID = record.QuestionSnapshot.GeneratedByStudentID
+		}
+	}
+	if record.RedoOriginalAttemptID != "" || record.RedoSubmissionKey != "" || record.RedoSubmissionDigest != "" {
+		if record.RedoOriginalAttemptID == "" || record.RedoSubmissionKey == "" || record.RedoSubmissionDigest == "" || record.ReviewTaskID != "" {
+			return errors.New("mistake redo idempotency binding is incomplete")
+		}
+		redoOriginalAttemptID = record.RedoOriginalAttemptID
+		redoSubmissionID = record.RedoSubmissionKey
+		redoSubmissionDigest = record.RedoSubmissionDigest
+	}
+	if record.RegularSubmissionKey != "" || record.RegularSubmissionDigest != "" {
+		if record.RegularSubmissionKey == "" || record.RegularSubmissionDigest == "" ||
+			record.DailyAssignmentID != "" || record.ReviewTaskID != "" || record.RedoOriginalAttemptID != "" {
+			return errors.New("regular submission idempotency binding is incomplete")
+		}
+		regularSubmissionID = record.RegularSubmissionKey
+		regularSubmissionDigest = record.RegularSubmissionDigest
 	}
 	_, err = r.DB().Exec(ctx, `
 		INSERT INTO public.content_attempts (
 			id,
 			content_id,
 			student_id,
-				daily_assignment_id,
-				daily_submission_key,
+			daily_assignment_id,
+			daily_submission_key,
+			review_task_id,
+			review_submission_key,
+			review_submission_digest,
+			mistake_redo_original_attempt_id,
+			mistake_redo_submission_id,
+			mistake_redo_submission_digest,
+			regular_submission_id,
+			regular_submission_digest,
+			review_question_title,
+			review_question_body,
+			review_question_concept_ids,
+			review_question_difficulty,
+			review_question_meta,
+			review_question_generated_by_student_id,
+			mastery_weight,
 			student_answer,
 			student_steps,
 			is_correct,
@@ -714,12 +968,30 @@ func (r ExerciseRepository) InsertAttempt(ctx context.Context, record exerciseap
 			submitted_at,
 			time_spent_seconds
 		)
-			VALUES ($1, $2, $3, $4, $5, $6, $7::json, $8, $9, $10, $11, $12)`,
+			VALUES (
+				$1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16::json, $17,
+				$18::json, $19, $20, $21, $22::json, $23, $24, $25, $26, $27
+			)`,
 		record.ID,
 		record.ContentID,
 		record.StudentID,
 		dailyAssignmentID,
 		dailySubmissionKey,
+		reviewTaskID,
+		reviewSubmissionKey,
+		reviewSubmissionDigest,
+		redoOriginalAttemptID,
+		redoSubmissionID,
+		redoSubmissionDigest,
+		regularSubmissionID,
+		regularSubmissionDigest,
+		reviewQuestionTitle,
+		reviewQuestionBody,
+		reviewQuestionConceptIDs,
+		reviewQuestionDifficulty,
+		reviewQuestionMeta,
+		reviewQuestionGeneratedByStudentID,
+		record.MasteryWeight,
 		record.StudentAnswer,
 		string(stepsRaw),
 		record.IsCorrect,
@@ -729,6 +1001,82 @@ func (r ExerciseRepository) InsertAttempt(ctx context.Context, record exerciseap
 		record.TimeSpentSeconds,
 	)
 	return err
+}
+
+// SaveRegularSubmissionResponse completes an ordinary submission's
+// idempotency record in the same transaction as its learning-state updates.
+func (r ExerciseRepository) SaveRegularSubmissionResponse(
+	ctx context.Context,
+	attemptID string,
+	studentID string,
+	submissionKey string,
+	submissionDigest string,
+	response exerciseapp.SubmitResponse,
+) error {
+	raw, err := json.Marshal(response)
+	if err != nil {
+		return err
+	}
+	tag, err := r.DB().Exec(ctx, `
+		UPDATE public.content_attempts
+		SET regular_submission_response = $5::json
+		WHERE id = $1
+		  AND student_id = $2
+		  AND regular_submission_id = $3
+		  AND regular_submission_digest = $4
+		  AND daily_assignment_id IS NULL
+		  AND review_task_id IS NULL
+		  AND mistake_redo_original_attempt_id IS NULL`,
+		attemptID,
+		studentID,
+		submissionKey,
+		submissionDigest,
+		string(raw),
+	)
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() != 1 {
+		return exerciseapp.ErrSubmissionConflict
+	}
+	return nil
+}
+
+// SaveMistakeRedoSubmissionResponse completes a historical redo's idempotency
+// record in the same transaction as the attempt and tracking updates.
+func (r ExerciseRepository) SaveMistakeRedoSubmissionResponse(
+	ctx context.Context,
+	attemptID string,
+	studentID string,
+	submissionKey string,
+	submissionDigest string,
+	response exerciseapp.SubmitResponse,
+) error {
+	raw, err := json.Marshal(response)
+	if err != nil {
+		return err
+	}
+	tag, err := r.DB().Exec(ctx, `
+		UPDATE public.content_attempts
+		SET mistake_redo_submission_response = $5::json
+		WHERE id = $1
+		  AND student_id = $2
+		  AND mistake_redo_submission_id = $3
+		  AND mistake_redo_submission_digest = $4
+		  AND mistake_redo_original_attempt_id IS NOT NULL`,
+		attemptID,
+		studentID,
+		submissionKey,
+		submissionDigest,
+		string(raw),
+	)
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() != 1 {
+		return exerciseapp.ErrSubmissionConflict
+	}
+	return nil
 }
 
 // SaveDailySubmissionResponse completes the idempotency record in the attempt transaction.

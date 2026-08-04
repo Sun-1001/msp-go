@@ -6,6 +6,7 @@ import (
 	"strings"
 	"time"
 
+	"mathstudy/backend/internal/platform/learningconcept"
 	"mathstudy/backend/internal/platform/numutil"
 )
 
@@ -14,6 +15,8 @@ var (
 	ErrNotFound = errors.New("knowledge not found")
 	// ErrBadRequest is returned when an operation cannot be applied.
 	ErrBadRequest = errors.New("knowledge bad request")
+	// ErrConflict is returned when a node is still referenced by business data.
+	ErrConflict = errors.New("knowledge conflict")
 )
 
 // Error wraps a domain error with the Python-compatible message.
@@ -261,6 +264,10 @@ func (s *Service) CreateNode(ctx context.Context, input NodeInput) (NodeResponse
 
 // UpdateNode updates a knowledge node.
 func (s *Service) UpdateNode(ctx context.Context, nodeID string, update NodeUpdate) (NodeResponse, error) {
+	nodeID = strings.TrimSpace(nodeID)
+	if nodeID == learningconcept.UncategorizedID {
+		return NodeResponse{}, badRequest("系统知识节点不可修改")
+	}
 	update = normalizeNodeUpdate(update)
 	if !nodeUpdateHasFields(update) {
 		return NodeResponse{}, badRequest("没有需要更新的字段")
@@ -268,7 +275,7 @@ func (s *Service) UpdateNode(ctx context.Context, nodeID string, update NodeUpda
 	if update.NodeType != nil && !validNodeType(*update.NodeType) {
 		return NodeResponse{}, badRequest("无效的节点类型: " + *update.NodeType)
 	}
-	node, ok, err := s.repo.UpdateNode(ctx, strings.TrimSpace(nodeID), update, s.now())
+	node, ok, err := s.repo.UpdateNode(ctx, nodeID, update, s.now())
 	if err != nil {
 		return NodeResponse{}, err
 	}
@@ -280,8 +287,15 @@ func (s *Service) UpdateNode(ctx context.Context, nodeID string, update NodeUpda
 
 // DeleteNode deletes a node and its relations.
 func (s *Service) DeleteNode(ctx context.Context, nodeID string) (DeleteResponse, error) {
-	ok, err := s.repo.DeleteNode(ctx, strings.TrimSpace(nodeID))
+	nodeID = strings.TrimSpace(nodeID)
+	if nodeID == learningconcept.UncategorizedID {
+		return DeleteResponse{}, badRequest("系统知识节点不可删除")
+	}
+	ok, err := s.repo.DeleteNode(ctx, nodeID)
 	if err != nil {
+		if errors.Is(err, ErrConflict) {
+			return DeleteResponse{}, conflict("该知识节点仍被题目或学习记录使用，请先迁移或解除引用")
+		}
 		return DeleteResponse{}, err
 	}
 	if !ok {
@@ -482,4 +496,8 @@ func validRelationType(value string) bool {
 
 func badRequest(message string) error {
 	return Error{Kind: ErrBadRequest, Message: message}
+}
+
+func conflict(message string) error {
+	return Error{Kind: ErrConflict, Message: message}
 }

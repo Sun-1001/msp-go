@@ -280,7 +280,7 @@ export const KnowledgeGraphPage = () => {
   }, [navigate]);
 
   const handleMistakes = useCallback((node: KnowledgeNode) => {
-    navigate(`/mistake-book?concept_id=${encodeURIComponent(node.id)}`);
+    navigate(`/mistake-book?view=library&concept_id=${encodeURIComponent(node.id)}`);
   }, [navigate]);
 
   const handleOpenLearningPath = useCallback(() => {

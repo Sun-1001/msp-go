@@ -5,6 +5,7 @@ import (
 	"errors"
 	"log/slog"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
@@ -25,9 +26,10 @@ import (
 type Service interface {
 	GetNextExercise(context.Context, string, exerciseapp.NextQuery) (*exerciseapp.ExerciseResponse, error)
 	GenerateExercise(context.Context, string, exerciseapp.GenerateExerciseRequest) (*exerciseapp.ExerciseResponse, error)
+	PreflightSubmit(context.Context, string, exerciseapp.SubmitRequest) (exerciseapp.SubmitResponse, bool, error)
 	SubmitAnswer(context.Context, string, exerciseapp.SubmitRequest) (exerciseapp.SubmitResponse, error)
 	GetExercise(context.Context, string, string) (exerciseapp.ExerciseDetailResponse, error)
-	GetSolution(context.Context, string, string, string) (exerciseapp.SolutionResponse, error)
+	GetSolution(context.Context, string, string, string, string, *int64, string, string) (exerciseapp.SolutionResponse, error)
 }
 
 // Authenticator decodes Go/Python-compatible access tokens.
@@ -139,13 +141,16 @@ func (h *Handler) Register(mux *http.ServeMux, prefix string) {
 }
 
 type submitRequest struct {
-	ExerciseID        string   `json:"exercise_id"`
-	DailyAssignmentID string   `json:"daily_assignment_id"`
-	SubmissionID      string   `json:"submission_id"`
-	AnswerText        *string  `json:"answer_text"`
-	AnswerImageURL    *string  `json:"answer_image_url"`
-	AnswerSteps       []string `json:"answer_steps"`
-	TimeSpentSeconds  int      `json:"time_spent_seconds"`
+	ExerciseID         string   `json:"exercise_id"`
+	DailyAssignmentID  string   `json:"daily_assignment_id"`
+	ReviewTaskID       string   `json:"review_task_id"`
+	ReviewTaskRevision *int64   `json:"review_task_revision"`
+	OriginalAttemptID  string   `json:"original_attempt_id"`
+	SubmissionID       string   `json:"submission_id"`
+	AnswerText         *string  `json:"answer_text"`
+	AnswerImageURL     *string  `json:"answer_image_url"`
+	AnswerSteps        []string `json:"answer_steps"`
+	TimeSpentSeconds   int      `json:"time_spent_seconds"`
 }
 
 type generateRequest struct {
@@ -240,6 +245,27 @@ func (h *Handler) submit(w http.ResponseWriter, r *http.Request) {
 		writeExerciseError(w, http.StatusBadRequest, "BAD_REQUEST", "请提供文本答案或答案图片")
 		return
 	}
+	applicationRequest := exerciseapp.SubmitRequest{
+		ExerciseID:         request.ExerciseID,
+		DailyAssignmentID:  strings.TrimSpace(request.DailyAssignmentID),
+		ReviewTaskID:       strings.TrimSpace(request.ReviewTaskID),
+		ReviewTaskRevision: request.ReviewTaskRevision,
+		OriginalAttemptID:  strings.TrimSpace(request.OriginalAttemptID),
+		SubmissionID:       strings.TrimSpace(request.SubmissionID),
+		AnswerText:         answerText,
+		AnswerImageURL:     answerImageURL,
+		AnswerSteps:        request.AnswerSteps,
+		TimeSpentSeconds:   request.TimeSpentSeconds,
+	}
+	cached, found, err := h.service.PreflightSubmit(r.Context(), principal.UserID, applicationRequest)
+	if err != nil {
+		h.writeSubmitError(w, err)
+		return
+	}
+	if found {
+		httpjson.Write(w, http.StatusOK, cached)
+		return
+	}
 	content := strings.TrimSpace(answerText + "\n" + strings.Join(request.AnswerSteps, "\n"))
 	lease, ok := h.acquireAILease(w, r, principal.UserID, "exercise_submit", content)
 	if !ok {
@@ -250,24 +276,20 @@ func (h *Handler) submit(w http.ResponseWriter, r *http.Request) {
 		writeExerciseError(w, http.StatusTooManyRequests, "OCR_RATE_LIMITED", "图片答案识别请求过于频繁，请稍后重试")
 		return
 	}
-	response, err := h.service.SubmitAnswer(r.Context(), principal.UserID, exerciseapp.SubmitRequest{
-		ExerciseID:        request.ExerciseID,
-		DailyAssignmentID: strings.TrimSpace(request.DailyAssignmentID),
-		SubmissionID:      strings.TrimSpace(request.SubmissionID),
-		AnswerText:        answerText,
-		AnswerImageURL:    answerImageURL,
-		AnswerSteps:       request.AnswerSteps,
-		TimeSpentSeconds:  request.TimeSpentSeconds,
-	})
+	response, err := h.service.SubmitAnswer(r.Context(), principal.UserID, applicationRequest)
 	if err != nil {
-		if errors.Is(err, exerciseapp.ErrBadRequest) {
-			writeExerciseError(w, http.StatusBadRequest, "BAD_REQUEST", "提交失败，请检查输入后重试")
-			return
-		}
-		h.writeExerciseError(w, err, "提交答案失败")
+		h.writeSubmitError(w, err)
 		return
 	}
 	httpjson.Write(w, http.StatusOK, response)
+}
+
+func (h *Handler) writeSubmitError(w http.ResponseWriter, err error) {
+	if errors.Is(err, exerciseapp.ErrBadRequest) {
+		writeExerciseError(w, http.StatusBadRequest, "BAD_REQUEST", "提交失败，请检查输入后重试")
+		return
+	}
+	h.writeExerciseError(w, err, "提交答案失败")
 }
 
 func (h *Handler) detail(w http.ResponseWriter, r *http.Request) {
@@ -292,6 +314,14 @@ func (h *Handler) solution(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	dailyAssignmentID := strings.TrimSpace(r.URL.Query().Get("daily_assignment_id"))
+	reviewTaskID := strings.TrimSpace(r.URL.Query().Get("review_task_id"))
+	originalAttemptID := strings.TrimSpace(r.URL.Query().Get("original_attempt_id"))
+	solutionAttemptID := strings.TrimSpace(r.URL.Query().Get("attempt_id"))
+	reviewTaskRevision, ok := parseReviewTaskRevision(w, reviewTaskID, r.URL.Query().Get("review_task_revision"))
+	if !ok {
+		return
+	}
 	lease, ok := h.acquireAILease(w, r, principal.UserID, "exercise_solution", "")
 	if !ok {
 		return
@@ -301,7 +331,11 @@ func (h *Handler) solution(w http.ResponseWriter, r *http.Request) {
 		r.Context(),
 		principal.UserID,
 		r.PathValue("exercise_id"),
-		strings.TrimSpace(r.URL.Query().Get("daily_assignment_id")),
+		dailyAssignmentID,
+		reviewTaskID,
+		reviewTaskRevision,
+		originalAttemptID,
+		solutionAttemptID,
 	)
 	if err != nil {
 		if errors.Is(err, exerciseapp.ErrNotFound) {
@@ -312,6 +346,23 @@ func (h *Handler) solution(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	httpjson.Write(w, http.StatusOK, response)
+}
+
+func parseReviewTaskRevision(w http.ResponseWriter, reviewTaskID string, rawRevision string) (*int64, bool) {
+	rawRevision = strings.TrimSpace(rawRevision)
+	if reviewTaskID == "" && rawRevision == "" {
+		return nil, true
+	}
+	if reviewTaskID == "" || rawRevision == "" {
+		writeExerciseError(w, http.StatusUnprocessableEntity, "VALIDATION_ERROR", "复习任务 ID 和 revision 必须同时提供")
+		return nil, false
+	}
+	revision, err := strconv.ParseInt(rawRevision, 10, 64)
+	if err != nil || revision < 0 {
+		writeExerciseError(w, http.StatusUnprocessableEntity, "VALIDATION_ERROR", "review_task_revision 必须是非负整数")
+		return nil, false
+	}
+	return &revision, true
 }
 
 func (h *Handler) acquireAILease(w http.ResponseWriter, r *http.Request, studentID, source, content string) (airiskapp.Lease, bool) {
@@ -399,6 +450,22 @@ func (h *Handler) writeExerciseError(w http.ResponseWriter, err error, fallback 
 	}
 	if errors.Is(err, exerciseapp.ErrDailyAssignmentClosed) {
 		writeExerciseError(w, http.StatusConflict, "DAILY_ASSIGNMENT_COMPLETED", "该每日一题已完成，无需重复提交")
+		return
+	}
+	if errors.Is(err, exerciseapp.ErrReviewTaskStale) {
+		writeExerciseError(w, http.StatusConflict, "REVIEW_TASK_STALE", "复习任务已更新，请重新加载")
+		return
+	}
+	if errors.Is(err, exerciseapp.ErrReviewNotDue) {
+		writeExerciseError(w, http.StatusConflict, "REVIEW_NOT_DUE", "这道题还未到复习时间")
+		return
+	}
+	if errors.Is(err, exerciseapp.ErrMistakeRecordArchived) {
+		writeExerciseError(w, http.StatusConflict, "MISTAKE_RECORD_ARCHIVED", "这条错题记录已归档，请返回错题本")
+		return
+	}
+	if errors.Is(err, exerciseapp.ErrSubmissionConflict) {
+		writeExerciseError(w, http.StatusConflict, "SUBMISSION_ID_CONFLICT", "提交标识已用于其他答案，请重新提交")
 		return
 	}
 	if errors.Is(err, exerciseapp.ErrForbidden) {

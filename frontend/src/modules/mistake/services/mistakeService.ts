@@ -17,6 +17,7 @@ export interface MistakeExercise {
   content: string;
   difficulty: number;
   knowledgePoints: string[];
+  knowledgePointNames: string[];
 }
 
 export interface MistakeAttempt {
@@ -51,8 +52,10 @@ export interface MistakeRecord {
   mastery: MistakeMastery;
   errorCount: number;
   lastReviewedAt: string | null;
+  isEarlyPractice: boolean;
   canReview: boolean;
   canDelete: boolean;
+  canArchive: boolean;
 }
 
 export interface PaginationInfo {
@@ -170,6 +173,8 @@ export interface ReviewExercise {
 export interface ReviewContext {
   isReview: boolean;
   originalAttemptId: string;
+  reviewTaskId?: string;
+  reviewTaskRevision?: number;
   dailyAssignmentId?: string;
   previousAnswer: string;
   previousErrorType: string | null;
@@ -182,6 +187,51 @@ export interface ReviewContext {
 export interface ReviewExerciseResponse {
   exercise: ReviewExercise;
   context: ReviewContext;
+}
+
+export type ReviewTaskView = 'due' | 'mastered';
+
+export interface ReviewTaskCounts {
+  active: number;
+  dueNow: number;
+  mastered: number;
+}
+
+export interface ReviewTask {
+  id: string;
+  sourceAttemptId: string;
+  status: 'pending' | 'verification_due' | 'mastered';
+  stage: number;
+  revision: number;
+  reviewCount: number;
+  successfulReviewCount: number;
+  errorCount: number;
+  dueAt: string | null;
+  lastOutcome: boolean | null;
+  lastReviewedAt: string | null;
+  masteredAt: string | null;
+  isDue: boolean;
+  canReview: boolean;
+  exercise: MistakeExercise;
+  diagnosis: MistakeDiagnosis;
+  mastery: MistakeMastery;
+}
+
+export interface ReviewTaskListResponse {
+  items: ReviewTask[];
+  pagination: PaginationInfo;
+  counts: ReviewTaskCounts;
+}
+
+export interface ReviewTaskQueryParams {
+  view: ReviewTaskView;
+  page?: number;
+  pageSize?: number;
+}
+
+export interface ArchiveMistakeResponse {
+  success: boolean;
+  message: string;
 }
 
 export interface MistakeQueryParams {
@@ -214,6 +264,7 @@ interface MistakeListResponseRaw {
       content: string;
       difficulty: number;
       knowledge_points: string[] | null;
+      knowledge_point_names?: string[] | null;
     };
     attempt: {
       student_answer: string;
@@ -238,8 +289,10 @@ interface MistakeListResponseRaw {
     };
     error_count: number;
     last_reviewed_at: string | null;
+    is_early_practice: boolean;
     can_review: boolean;
     can_delete: boolean;
+    can_archive: boolean;
   }>;
   pagination: {
     page: number;
@@ -337,6 +390,8 @@ interface ReviewExerciseResponseRaw {
   context: {
     is_review: boolean;
     original_attempt_id: string;
+    review_task_id?: string;
+    review_task_revision?: number;
     daily_assignment_id?: string;
     previous_answer: string;
     previous_error_type: string | null;
@@ -344,6 +399,57 @@ interface ReviewExerciseResponseRaw {
     previous_suggestion: string;
     mastery_before: number;
     error_count: number;
+  };
+}
+
+interface ReviewTaskListResponseRaw {
+  items: Array<{
+    id: string;
+    source_attempt_id: string;
+    status: ReviewTask['status'];
+    stage: number;
+    revision: number;
+    review_count: number;
+    successful_review_count: number;
+    error_count: number;
+    due_at: string | null;
+    last_outcome: boolean | null;
+    last_reviewed_at: string | null;
+    mastered_at: string | null;
+    is_due: boolean;
+    can_review: boolean;
+    exercise: {
+      id: string;
+      title: string;
+      content: string;
+      difficulty: number;
+      knowledge_points: string[] | null;
+      knowledge_point_names?: string[] | null;
+    };
+    diagnosis: {
+      error_type: string | null;
+      error_subtype: string;
+      severity: string;
+      explanation: string;
+      suggestion: string;
+      related_concepts: string[] | null;
+    };
+    mastery: {
+      current: number;
+      previous: number;
+      trend: MistakeMastery['trend'];
+    };
+  }>;
+  pagination: {
+    page: number;
+    page_size: number;
+    total: number;
+    total_pages: number;
+  };
+  counts: {
+    active: number;
+    due_now: number;
+    mastered: number;
   };
 }
 
@@ -358,6 +464,7 @@ function mapMistakeRecord(raw: MistakeListResponseRaw['items'][number]): Mistake
       content: raw.exercise.content,
       difficulty: raw.exercise.difficulty,
       knowledgePoints: raw.exercise.knowledge_points ?? [],
+      knowledgePointNames: raw.exercise.knowledge_point_names ?? [],
     },
     attempt: {
       studentAnswer: raw.attempt.student_answer,
@@ -378,8 +485,10 @@ function mapMistakeRecord(raw: MistakeListResponseRaw['items'][number]): Mistake
     mastery: raw.mastery,
     errorCount: raw.error_count,
     lastReviewedAt: raw.last_reviewed_at,
+    isEarlyPractice: raw.is_early_practice ?? false,
     canReview: raw.can_review,
     canDelete: raw.can_delete,
+    canArchive: raw.can_archive,
   };
 }
 
@@ -475,6 +584,12 @@ function mapReviewExerciseResponse(raw: ReviewExerciseResponseRaw): ReviewExerci
     context: {
       isReview: raw.context.is_review,
       originalAttemptId: raw.context.original_attempt_id,
+      ...(raw.context.review_task_id
+        ? { reviewTaskId: raw.context.review_task_id }
+        : {}),
+      ...(raw.context.review_task_revision !== undefined
+        ? { reviewTaskRevision: raw.context.review_task_revision }
+        : {}),
       ...(raw.context.daily_assignment_id
         ? { dailyAssignmentId: raw.context.daily_assignment_id }
         : {}),
@@ -488,13 +603,63 @@ function mapReviewExerciseResponse(raw: ReviewExerciseResponseRaw): ReviewExerci
   };
 }
 
+function mapReviewTaskListResponse(raw: ReviewTaskListResponseRaw): ReviewTaskListResponse {
+  return {
+    items: raw.items.map((item) => ({
+      id: item.id,
+      sourceAttemptId: item.source_attempt_id,
+      status: item.status,
+      stage: item.stage,
+      revision: item.revision,
+      reviewCount: item.review_count,
+      successfulReviewCount: item.successful_review_count,
+      errorCount: item.error_count,
+      dueAt: item.due_at,
+      lastOutcome: item.last_outcome,
+      lastReviewedAt: item.last_reviewed_at,
+      masteredAt: item.mastered_at,
+      isDue: item.is_due,
+      canReview: item.can_review,
+      exercise: {
+        id: item.exercise.id,
+        title: item.exercise.title,
+        content: item.exercise.content,
+        difficulty: item.exercise.difficulty,
+        knowledgePoints: item.exercise.knowledge_points ?? [],
+        knowledgePointNames: item.exercise.knowledge_point_names ?? [],
+      },
+      diagnosis: {
+        errorType: item.diagnosis.error_type,
+        errorSubtype: item.diagnosis.error_subtype,
+        severity: item.diagnosis.severity,
+        explanation: item.diagnosis.explanation,
+        suggestion: item.diagnosis.suggestion,
+        relatedConcepts: item.diagnosis.related_concepts ?? [],
+      },
+      mastery: item.mastery,
+    })),
+    pagination: {
+      page: raw.pagination.page,
+      pageSize: raw.pagination.page_size,
+      total: raw.pagination.total,
+      totalPages: raw.pagination.total_pages,
+    },
+    counts: {
+      active: raw.counts.active,
+      dueNow: raw.counts.due_now,
+      mastered: raw.counts.mastered,
+    },
+  };
+}
+
 // ========== API 方法 ==========
 
 /**
  * 获取错题列表
  */
 export async function fetchMistakes(
-  params: MistakeQueryParams = {}
+  params: MistakeQueryParams = {},
+  signal?: AbortSignal
 ): Promise<MistakeListResponse> {
   mistakeLogger.info('Fetching mistakes', { params });
 
@@ -513,6 +678,7 @@ export async function fetchMistakes(
         sort_by: params.sortBy || 'time',
         sort_order: params.sortOrder || 'desc',
       },
+      signal,
     });
 
     const mapped = mapMistakeListResponse(response.data);
@@ -604,15 +770,69 @@ export async function markAsMastered(
 /**
  * 删除错题
  */
-export async function deleteMistake(attemptId: string): Promise<void> {
-  mistakeLogger.info('Deleting mistake', { attemptId });
+export async function archiveMistake(
+  attemptId: string
+): Promise<ArchiveMistakeResponse> {
+  const normalizedAttemptId = attemptId.trim();
+  if (!normalizedAttemptId) {
+    throw new Error('缺少错题记录 ID');
+  }
+
+  mistakeLogger.info('Archiving mistake record', { attemptId: normalizedAttemptId });
 
   try {
-    await apiClient.delete(`/mistakes/${attemptId}`);
+    const response = await apiClient.delete<{
+      success: boolean;
+      message: string;
+    }>(`/mistakes/${encodeURIComponent(normalizedAttemptId)}`);
 
-    mistakeLogger.info('Mistake deleted successfully');
+    mistakeLogger.info('Mistake record archived successfully');
+    return {
+      success: response.data.success,
+      message: response.data.message,
+    };
   } catch (error) {
-    mistakeLogger.error('Failed to delete mistake', { error });
+    mistakeLogger.error('Failed to archive mistake record', { error });
+    throw error;
+  }
+}
+
+/**
+ * 兼容现有 Redux thunk；后端已将该操作改为归档而非删除作答证据。
+ */
+export async function deleteMistake(attemptId: string): Promise<void> {
+  await archiveMistake(attemptId);
+}
+
+/**
+ * 获取待复习或已验证掌握的任务。
+ */
+export async function fetchReviewTasks(
+  params: ReviewTaskQueryParams,
+  signal?: AbortSignal
+): Promise<ReviewTaskListResponse> {
+  mistakeLogger.info('Fetching mistake review tasks', { params });
+
+  try {
+    const response = await apiClient.get<ReviewTaskListResponseRaw>(
+      '/mistakes/review-tasks',
+      {
+        params: {
+          view: params.view,
+          page: params.page || 1,
+          page_size: params.pageSize || 20,
+        },
+        signal,
+      }
+    );
+    const mapped = mapReviewTaskListResponse(response.data);
+    mistakeLogger.info('Mistake review tasks fetched successfully', {
+      view: params.view,
+      total: mapped.pagination.total,
+    });
+    return mapped;
+  } catch (error) {
+    mistakeLogger.error('Failed to fetch mistake review tasks', { error });
     throw error;
   }
 }
@@ -679,7 +899,9 @@ export const mistakeService = {
   fetchStatistics,
   fetchMistakeDetail,
   markAsMastered,
+  archiveMistake,
   deleteMistake,
+  fetchReviewTasks,
   fetchReviewExercise,
   fetchReviewExerciseByAttempt,
 };

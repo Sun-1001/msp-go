@@ -7,15 +7,17 @@ import (
 	"sort"
 	"strings"
 
+	"mathstudy/backend/internal/platform/learningconcept"
 	"mathstudy/backend/internal/platform/numutil"
 )
 
 const (
-	dktModelName         = "dkt-sakt-lite"
-	dktMaxSequenceLength = 64
-	dktEmbeddingDim      = 16
-	dktRetentionFloor    = 0.05
-	epsilon              = 1e-6
+	dktModelName          = "dkt-sakt-lite"
+	dktMaxSequenceLength  = 64
+	dktEmbeddingDim       = 16
+	dktRetentionFloor     = 0.05
+	dktUncategorizedPrior = 0.5
+	epsilon               = 1e-6
 )
 
 type dktResult struct {
@@ -31,15 +33,18 @@ func buildDKTSequence(history []LearningInteraction, current LearningInteraction
 		if strings.TrimSpace(item.ExerciseID) == "" {
 			continue
 		}
-		item.ConceptIDs = uniqueNonEmpty(item.ConceptIDs)
-		if len(item.ConceptIDs) == 0 {
-			continue
-		}
+		item.ConceptIDs = trackedConceptIDs(item.ConceptIDs)
 		item.Difficulty = numutil.ClampFloat(item.Difficulty, 0, 1)
+		item.MasteryWeight = normalizeMasteryWeight(item.MasteryWeight)
 		sequence = append(sequence, item)
 	}
+	current.ConceptIDs = trackedConceptIDs(current.ConceptIDs)
+	current.MasteryWeight = normalizeMasteryWeight(current.MasteryWeight)
 	sequence = append(sequence, current)
 	sort.SliceStable(sequence, func(i, j int) bool {
+		if sequence[i].SubmittedAt.Equal(sequence[j].SubmittedAt) {
+			return sequence[i].AttemptID < sequence[j].AttemptID
+		}
 		return sequence[i].SubmittedAt.Before(sequence[j].SubmittedAt)
 	})
 	if len(sequence) > dktMaxSequenceLength {
@@ -55,8 +60,34 @@ func dktColdStartMastery(preferredDifficulty float64, learningPace float64, item
 	return numutil.ClampFloat(0.45+0.12*(preferred-difficulty)+0.05*(pace-1.0), 0.15, 0.75)
 }
 
+func dktProfilePrior(
+	conceptID string,
+	mastery float64,
+	exists bool,
+	preferredDifficulty float64,
+	learningPace float64,
+	itemDifficulty float64,
+) float64 {
+	if exists && (conceptID == learningconcept.UncategorizedID || mastery != 0) {
+		return mastery
+	}
+	if conceptID == learningconcept.UncategorizedID {
+		return dktUncategorizedPrior
+	}
+	return dktColdStartMastery(preferredDifficulty, learningPace, itemDifficulty)
+}
+
+func trackedConceptIDs(conceptIDs []string) []string {
+	conceptIDs = uniqueNonEmpty(conceptIDs)
+	if len(conceptIDs) == 0 {
+		return []string{learningconcept.UncategorizedID}
+	}
+	return conceptIDs
+}
+
 func dktUpdate(priorMastery float64, targetConcept string, current LearningInteraction, sequence []LearningInteraction, profile StudentProfile, errorType string, attemptCount int) dktResult {
 	prior := numutil.ClampFloat(priorMastery, 0.001, 0.999)
+	masteryWeight := normalizeMasteryWeight(current.MasteryWeight)
 	difficulty := numutil.ClampFloat(current.Difficulty, 0, 1)
 	abilityGap := numutil.ClampFloat(profile.PreferredDifficulty-difficulty, -1, 1)
 	pace := numutil.ClampFloat(profile.LearningPace, 0.2, 2.0)
@@ -73,11 +104,11 @@ func dktUpdate(priorMastery float64, targetConcept string, current LearningInter
 
 	next := prior
 	if current.IsCorrect {
-		next += numutil.ClampFloat(currentGain, 0.08, 0.3) * (1 - prior)
+		next += masteryWeight * numutil.ClampFloat(currentGain, 0.08, 0.3) * (1 - prior)
 	} else {
-		next -= numutil.ClampFloat(currentLoss, 0.12, 0.38) * prior
+		next -= masteryWeight * numutil.ClampFloat(currentLoss, 0.12, 0.38) * prior
 	}
-	next += 0.10 * attentionSignal
+	next += masteryWeight * 0.10 * attentionSignal
 	next = numutil.ClampFloat(next, 0.001, 0.999)
 
 	effectiveAttempts := math.Max(float64(attemptCount), 0) + 1
@@ -124,9 +155,16 @@ func attentionSignal(targetConcept string, current LearningInteraction, sequence
 		}
 		relevance := conceptRelevance(targetConcept, current.ConceptIDs, item.ConceptIDs)
 		difficultyWeight := 0.75 + 0.25*numutil.ClampFloat(item.Difficulty, 0, 1)
-		weightedSignal += attention * outcome * relevance * difficultyWeight
+		weightedSignal += attention * outcome * relevance * difficultyWeight * normalizeMasteryWeight(item.MasteryWeight)
 	}
 	return numutil.ClampFloat(weightedSignal, -1, 1), numutil.ClampFloat(maxAttention*float64(len(sequence)), 0, 1)
+}
+
+func normalizeMasteryWeight(weight float64) float64 {
+	if weight <= 0 || math.IsNaN(weight) || math.IsInf(weight, 0) {
+		return fullMasteryWeight
+	}
+	return numutil.ClampFloat(weight, 0.01, fullMasteryWeight)
 }
 
 func conceptRelevance(targetConcept string, currentConcepts []string, itemConcepts []string) float64 {

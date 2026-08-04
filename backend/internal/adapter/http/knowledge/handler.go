@@ -249,6 +249,10 @@ func (h *Handler) deleteNode(w http.ResponseWriter, r *http.Request) {
 	}
 	response, err := h.service.DeleteNode(r.Context(), r.PathValue("node_id"))
 	if err != nil {
+		if errors.Is(err, knowledgeapp.ErrConflict) {
+			writeKnowledgeAppError(w, http.StatusConflict, "KNOWLEDGE_NODE_IN_USE", err)
+			return
+		}
 		if errors.Is(err, knowledgeapp.ErrBadRequest) {
 			writeKnowledgeAppError(w, http.StatusBadRequest, "BAD_REQUEST", err)
 			return
