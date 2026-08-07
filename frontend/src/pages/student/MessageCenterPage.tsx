@@ -18,6 +18,7 @@ import {
   Import,
   Loader2,
   MessageSquare,
+  MessagesSquare,
   Plus,
   Search,
   SquareCheckBig,
@@ -68,6 +69,7 @@ import { MessageAttachmentPicker } from '@/modules/message-center/MessageAttachm
 import { MessageAttachments } from '@/modules/message-center/MessageAttachments';
 import { MessageComposer } from '@/modules/message-center/MessageComposer';
 import type { MessageAttachment } from '@/modules/message-center/attachmentTypes';
+import { ForumCenter } from '@/modules/forum';
 import {
   fetchMistakes,
   type MistakeRecord,
@@ -97,7 +99,7 @@ function isConversationViewportNearBottom(viewport: HTMLDivElement): boolean {
   return viewport.scrollHeight - viewport.scrollTop - viewport.clientHeight <= 80;
 }
 
-const studentTabs = new Set(['private', 'notices', 'questions']);
+const studentTabs = new Set(['private', 'notices', 'questions', 'forum']);
 
 function parseStudentTab(value: string | null): string {
   return value && studentTabs.has(value) ? value : 'private';
@@ -268,6 +270,7 @@ export const MessageCenterPage: React.FC = () => {
     private: summary?.conversation_count ?? 0,
     notices: summary?.notice_count ?? 0,
     questions: summary?.thread_count ?? 0,
+    forum: summary?.forum_count ?? 0,
   };
 
   // import modal
@@ -1311,10 +1314,10 @@ export const MessageCenterPage: React.FC = () => {
           <div>
             <h1 className="text-2xl font-bold text-surface-900 dark:text-surface-100">消息中心</h1>
             <p className="mt-1 text-sm text-surface-500 dark:text-surface-400">
-              管理和老师的私信、班级通知与答疑线程
+              管理私信、班级通知、答疑与论坛互动
             </p>
           </div>
-          <div className="flex flex-col gap-3 sm:flex-row">
+          {activeTab !== 'forum' && <div className="flex flex-col gap-3 sm:flex-row">
             <div className="relative w-full sm:w-72">
               <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-surface-400" />
               <Input
@@ -1324,7 +1327,7 @@ export const MessageCenterPage: React.FC = () => {
                 className="pl-10"
               />
             </div>
-          </div>
+          </div>}
         </div>
 
         {loadError && <div className="mb-4 flex items-center justify-between gap-3 rounded-md border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700 dark:border-red-900 dark:bg-red-950/30 dark:text-red-200"><span>{loadError}</span><Button variant="outline" size="sm" onClick={() => void reloadInitialData(true)} disabled={loading}>重新加载</Button></div>}
@@ -1355,6 +1358,7 @@ export const MessageCenterPage: React.FC = () => {
               <MessageCenterSideTab value="private" label="私信" count={tabCounts.private} icon={MessageSquare} />
               <MessageCenterSideTab value="notices" label="通知" count={tabCounts.notices} icon={Bell} />
               <MessageCenterSideTab value="questions" label="答疑" count={tabCounts.questions} icon={HelpCircle} />
+              <MessageCenterSideTab value="forum" label="全站论坛" count={tabCounts.forum} icon={MessagesSquare} />
             </TabsList>
 
             <div className="min-w-0 flex-1">
@@ -1745,6 +1749,16 @@ export const MessageCenterPage: React.FC = () => {
                 </CardContent>
               </Card>
             </div>
+          </TabsContent>
+
+          {/* ============================================================ FORUM */}
+          <TabsContent value="forum" className="mt-0">
+            <ForumCenter
+              role="student"
+              postId={searchParams.get('tab') === 'forum' ? searchParams.get('id') ?? '' : ''}
+              onPostChange={(id) => setSearchParams(id ? { tab: 'forum', id } : { tab: 'forum' }, { replace: true })}
+              onUnreadChange={refreshMessageCenterSummaryAfterMutation}
+            />
           </TabsContent>
             </div>
           </div>

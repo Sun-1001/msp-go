@@ -115,7 +115,7 @@ go run ./cmd/migrate
 go run ./cmd/migrate  # 重复执行应无待应用版本
 ```
 
-当前共享迁移链是 `0001` 至 `0010`：`0005_daily_question` 交付每日一题，`0006` 至 `0008` 交付画像能力，`0009_daily_question_integrity` 增加每日题一致性结构。远端只到 version 9，因此四个未发布的错题本迁移已按原依赖顺序收敛到单一 `0010_mistake_review_tasks`；它一次交付复习任务、全部提交幂等、聚合归档、`mastery_weight`、知识点 JSON 校准、系统“未分类”、DKT/画像一致性和全部已提交作答题面冻结。远端 version 9 升级只应新增 version 10，复跑应无待应用版本；后续迁移从 `0011` 开始。曾执行旧草稿 10 至 13 的本地数据库不能直接删除账本或重放 version 10，必须先停止写入、备份并核对最终结构，再做专门的迁移元数据收敛。runner 会校验数据库中的版本、名称和未知记录；其他旧开发链仍应按 [迁移策略](../../backend/migrations/README.md) 重建或设计数据保留方案。
+当前共享迁移链是 `0001` 至 `0011`：`0005_daily_question` 交付每日一题，`0006` 至 `0008` 交付画像能力，`0009_daily_question_integrity` 增加每日题一致性结构，`0010_mistake_review_tasks` 统一交付错题复习、幂等、归档、知识点校准和作答题面冻结，`0011_forum_center` 交付消息中心内的全站论坛及互动通知。远端 version 9 升级应依次新增 version 10 和 11；version 10 数据库只新增 version 11；复跑应无待应用版本。曾执行旧草稿 10 至 13 的本地数据库不能直接删除账本或重放 version 10，必须先停止写入、备份并核对最终结构，再做专门的迁移元数据收敛。曾以旧错题草稿占用 version 11 的本地库必须按 [迁移策略](../../backend/migrations/README.md) 的专用校准流程处理，不能改论坛迁移编号。runner 会校验数据库中的版本、名称和未知记录；其他旧开发链仍应重建或设计数据保留方案。
 
 ## 环境配置
 
@@ -164,7 +164,7 @@ WECHAT_QA_MESSAGE_TEMPLATE_ID=
 
 若测试号页面没有消息加解密模式选项，使用 `plain`。不要自行编造 `AES_KEY`，兼容模式和安全模式必须使用微信后台对应的 `EncodingAESKey`。
 
-消息中心结构和北京时间默认值由 `backend/migrations/0003_communication.up.sql` 交付，微信公众号绑定和基础提醒任务由 `0004_delivery_integrations.up.sql` 交付；每日一题及画像能力由 `0005` 至 `0008` 交付；每日题一致性由 `0009` 追加；错题复习、幂等与归属约束、DKT/画像校准和全部作答题面冻结统一由 `0010_mistake_review_tasks.up.sql` 交付。全新数据库第一次运行应记录版本 `1` 至 `10`，远端 version 9 数据库应只新增 version 10，第二次运行都应无待应用版本。
+消息中心结构和北京时间默认值由 `backend/migrations/0003_communication.up.sql` 交付，微信公众号绑定和基础提醒任务由 `0004_delivery_integrations.up.sql` 交付；每日一题及画像能力由 `0005` 至 `0008` 交付；每日题一致性由 `0009` 追加；错题复习、幂等与归属约束、DKT/画像校准和全部作答题面冻结统一由 `0010_mistake_review_tasks.up.sql` 交付；消息中心全站论坛及互动通知由 `0011_forum_center.up.sql` 追加。全新数据库第一次运行应记录版本 `1` 至 `11`，远端 version 9 数据库应新增 version 10 和 11，version 10 数据库应只新增 version 11，第二次运行都应无待应用版本。
 
 ```powershell
 Set-Location backend

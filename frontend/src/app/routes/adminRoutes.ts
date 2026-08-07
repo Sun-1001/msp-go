@@ -11,6 +11,7 @@ const KnowledgeManagementPage = lazy(() => import('@/pages/admin/KnowledgeManage
 const InboxPage = lazy(() => import('@/pages/admin/InboxPage').then(m => ({ default: m.InboxPage })));
 const AIRiskControlPage = lazy(() => import('@/pages/admin/AIRiskControlPage').then(m => ({ default: m.AIRiskControlPage })));
 const AnnouncementManagementPage = lazy(() => import('@/pages/admin/AnnouncementManagementPage').then(m => ({ default: m.AnnouncementManagementPage })));
+const ForumManagementPage = lazy(() => import('@/pages/admin/ForumManagementPage').then(m => ({ default: m.ForumManagementPage })));
 
 /**
  * 管理员路由 - 需要登录 + admin 角色
@@ -20,6 +21,7 @@ export const adminRoutes: RouteConfig[] = [
   { path: '/admin/dashboard', component: AdminDashboardPage, title: '运维控制台', protected: true, requiredRole: 'admin' },
   { path: '/admin/inbox', component: InboxPage, title: '信箱', protected: true, requiredRole: 'admin' },
   { path: '/admin/accounts', component: AccountManagementPage, title: '账户管理', protected: true, requiredRole: 'admin' },
+  { path: '/admin/forum', component: ForumManagementPage, title: '论坛管理', protected: true, requiredRole: 'admin' },
   { path: '/admin/ai-models', component: AIModelSettingsPage, title: 'AI 模型设置', protected: true, requiredRole: 'admin' },
   { path: '/admin/risk-control', component: AIRiskControlPage, title: 'AI 风控中心', protected: true, requiredRole: 'admin' },
   { path: '/admin/announcements', component: AnnouncementManagementPage, title: '系统公告', protected: true, requiredRole: 'admin' },

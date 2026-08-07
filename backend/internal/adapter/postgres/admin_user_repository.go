@@ -121,6 +121,28 @@ func (r UserRepository) DeleteUser(ctx context.Context, userID string) (bool, er
 			return err
 		}
 		statements := []string{
+			// Forum content uses restrictive author/reporter foreign keys. Remove
+			// dependent moderation records before deleting authored posts/replies.
+			`DELETE FROM public.forum_notifications WHERE actor_id = $1`,
+			`UPDATE public.forum_posts
+			 SET is_featured = false, featured_by = NULL, featured_at = NULL
+			 WHERE featured_by = $1`,
+			`DELETE FROM public.forum_reports
+			 WHERE reporter_id = $1
+			    OR (target_type = 'post' AND target_id IN (SELECT id FROM public.forum_posts WHERE author_id = $1))
+			    OR (target_type = 'reply' AND target_id IN (
+					SELECT reply.id
+					FROM public.forum_replies reply
+					JOIN public.forum_posts post ON post.id = reply.post_id
+					WHERE reply.author_id = $1 OR post.author_id = $1
+				))`,
+			`UPDATE public.forum_posts
+			 SET accepted_reply_id = NULL,
+			     status = CASE WHEN status = 'resolved' THEN 'open' ELSE status END,
+			     updated_at = CURRENT_TIMESTAMP AT TIME ZONE 'Asia/Shanghai'
+			 WHERE accepted_reply_id IN (SELECT id FROM public.forum_replies WHERE author_id = $1)`,
+			`DELETE FROM public.forum_replies WHERE author_id = $1`,
+			`DELETE FROM public.forum_posts WHERE author_id = $1`,
 			`DELETE FROM public.session_messages WHERE session_id IN (SELECT id FROM public.learning_sessions WHERE student_id = $1)`,
 			`DELETE FROM public.learning_sessions WHERE student_id = $1`,
 			`DELETE FROM public.student_profiles WHERE student_id = $1`,

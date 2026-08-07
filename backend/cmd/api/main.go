@@ -27,6 +27,7 @@ import (
 	conversationhttp "mathstudy/backend/internal/adapter/http/conversation"
 	dailyquestionhttp "mathstudy/backend/internal/adapter/http/dailyquestion"
 	exercisehttp "mathstudy/backend/internal/adapter/http/exercise"
+	forumhttp "mathstudy/backend/internal/adapter/http/forum"
 	knowledgehttp "mathstudy/backend/internal/adapter/http/knowledge"
 	messagecenterhttp "mathstudy/backend/internal/adapter/http/messagecenter"
 	mistakehttp "mathstudy/backend/internal/adapter/http/mistake"
@@ -63,6 +64,7 @@ import (
 	dailyquestionapp "mathstudy/backend/internal/application/dailyquestion"
 	emailapp "mathstudy/backend/internal/application/email"
 	exerciseapp "mathstudy/backend/internal/application/exercise"
+	forumapp "mathstudy/backend/internal/application/forum"
 	knowledgeapp "mathstudy/backend/internal/application/knowledge"
 	messagecenterapp "mathstudy/backend/internal/application/messagecenter"
 	mistakeapp "mathstudy/backend/internal/application/mistake"
@@ -658,6 +660,28 @@ func main() {
 		os.Exit(1)
 	}
 
+	// Message center: global forum
+	forumRepo, err := adapterpostgres.NewForumRepository(dbPool)
+	if err != nil {
+		logger.Error("configure forum repository", "error", err)
+		os.Exit(1)
+	}
+	forumService, err := forumapp.NewService(forumRepo)
+	if err != nil {
+		logger.Error("configure forum service", "error", err)
+		os.Exit(1)
+	}
+	forumHandler, err := forumhttp.NewHandler(
+		logger,
+		forumService,
+		authService,
+		forumhttp.WithRateLimits(messageCenterWriteLimiter, messageCenterSearchLimiter),
+	)
+	if err != nil {
+		logger.Error("configure forum handler", "error", err)
+		os.Exit(1)
+	}
+
 	messageCenterRepo, err := adapterpostgres.NewMessageCenterRepository(dbPool)
 	if err != nil {
 		logger.Error("configure message center repository", "error", err)
@@ -969,6 +993,7 @@ func main() {
 			conversationHandler.Register(mux, cfg.APIV1Prefix+"/conversations")
 			noticeHandler.Register(mux, cfg.APIV1Prefix+"/notices")
 			qaThreadHandler.Register(mux, cfg.APIV1Prefix+"/qa-threads")
+			forumHandler.Register(mux, cfg.APIV1Prefix+"/forum")
 			messageCenterHandler.Register(mux, cfg.APIV1Prefix+"/message-center")
 			adminUserHandler.Register(mux, cfg.APIV1Prefix+"/admin/users")
 			aiRiskHandler.Register(mux, cfg.APIV1Prefix+"/admin/risk-control")

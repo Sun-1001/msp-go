@@ -89,6 +89,7 @@ backend/
 | Session/Exercise | 学习会话、题目生成、判题、诊断、错题和 DKT 更新 |
 | Progress/Portrait | 掌握度、学习路径、统计、知识图谱和学生画像 |
 | Classroom/Teacher | 班级、成员、题库、教学资源和教师分析 |
+| Communication/Forum | 私信、班级通知、答疑线程、全站论坛和消息中心未读摘要 |
 | Daily Question | 上海自然日固定题、班级统一/个性化分配、教师计划与公众号提醒 |
 | Resource/Upload | 资源元数据、收藏、上传、对象存储和管理员运行时配置 |
 | AI Config | provider、model、凭据和 Agent 运行配置 |
@@ -98,6 +99,7 @@ backend/
 
 - 业务 API 默认使用 `/api/v1`，健康检查和指标使用明确的独立入口。
 - Auth/Admin、Session/Exercise、Progress/Portrait、Classroom/Teacher、Resource/Upload、AI Config 和 Xidian/Security 的路由由对应 HTTP adapter 承接；实际路由注册是接口清单的代码事实来源。
+- 全站论坛使用 `/api/v1/forum`，由独立 application service、HTTP adapter 和 PostgreSQL repository 承接。学生、教师和管理员可以读写论坛；教师只能精选自己当前所教学生发布的帖子，管理员不能设置或取消精选，但可以软删除违规帖子，举报审核只允许管理员操作。查询层结合 `featured_by`、发帖学生当前 `class_enrollments` 和查看者身份计算有效精选：仅发帖学生当前班级成员及该班教师看到精选标记，其他用户和管理员按普通帖子查看；所有列表排序都在服务端分页前先按有效精选置顶，精选操作不改写全站通用的帖子更新时间。发布帖子时板块和类型可省略，服务端将其归入稳定默认板块 `learning-methods`（学习方法）并使用 `discussion` 类型；历史帖子仍保留原有板块和类型。学生和教师从消息中心普通进入论坛时先停留在帖子选择界面，只有携带论坛帖子 ID 的互动通知深链会直接打开详情；回复、点赞、`@` 提及、最佳答案和精选通知统一合并进消息中心摘要，打开对应帖子后按通知所有权标记已读，点赞撤销、最佳答案变更或精选撤销/替换时同步撤回已经失效的互动通知。帖子与回复的并发写入统一按帖子、回复顺序加行锁，举报目标校验和举报写入位于同一事务，避免软删除后继续产生互动或待审核记录。管理后台提供举报状态筛选、目标内容查看、举报处理和帖子软删除入口。
 - 前端依赖的 JSON 字段名保持稳定；错误响应保留稳定的 `code`、`message` 和 HTTP 状态码。
 - JWT、Cookie、刷新令牌和角色权限共同构成认证兼容边界。
 - 上传访问入口保留 `/uploads`；调整路径时必须同步修改前端、存储配置和部署代理。

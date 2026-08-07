@@ -2,7 +2,12 @@ import { apiClient } from '@/libs/http/apiClient';
 
 export interface MessagePreviewItem {
   id: string;
-  type: 'conversation' | 'notice' | 'thread';
+  type: 'conversation' | 'notice' | 'thread' | 'forum';
+  /** Optional target fields used by forum previews when id is a notification id. */
+  target_id?: string;
+  post_id?: string;
+  reply_id?: string;
+  navigation_id?: string;
   title: string;
   summary: string;
   occurred_at: string;
@@ -13,6 +18,7 @@ export interface MessageCenterSummary {
   conversation_count: number;
   notice_count: number;
   thread_count: number;
+  forum_count?: number;
   items: MessagePreviewItem[];
 }
 

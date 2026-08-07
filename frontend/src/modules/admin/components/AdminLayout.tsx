@@ -20,6 +20,7 @@ import {
   Inbox,
   ShieldAlert,
   Megaphone,
+  MessagesSquare,
 } from 'lucide-react';
 import { ThemeToggle } from '@/components/ui/ThemeToggle';
 import { passwordResetService } from '@/modules/password-reset/services/passwordResetService';
@@ -94,6 +95,11 @@ export const AdminLayout: React.FC<AdminLayoutProps> = ({ children, className = 
       icon: Users,
       label: '账户管理',
       path: '/admin/accounts',
+    },
+    {
+      icon: MessagesSquare,
+      label: '论坛管理',
+      path: '/admin/forum',
     },
     {
       icon: Brain,
