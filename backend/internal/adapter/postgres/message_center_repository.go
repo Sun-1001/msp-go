@@ -47,8 +47,11 @@ func (r MessageCenterRepository) studentSummary(ctx context.Context, studentID s
 			(SELECT COUNT(*) FROM public.question_threads qt
 			 WHERE qt.student_id = $1
 			   AND EXISTS (SELECT 1 FROM public.question_thread_messages qtm
-			               WHERE qtm.thread_id = qt.id AND qtm.sender_role = 'teacher' AND qtm.read_at IS NULL))`, studentID,
-	).Scan(&summary.ConversationCount, &summary.NoticeCount, &summary.ThreadCount); err != nil {
+			               WHERE qtm.thread_id = qt.id AND qtm.sender_role = 'teacher' AND qtm.read_at IS NULL)),
+			(SELECT COUNT(*) FROM public.forum_notifications n
+			 WHERE n.recipient_id = $1 AND n.read_at IS NULL
+			   AND `+forumNotificationTargetActiveSQL+`)`, studentID,
+	).Scan(&summary.ConversationCount, &summary.NoticeCount, &summary.ThreadCount, &summary.ForumCount); err != nil {
 		return messagecenterapp.Summary{}, err
 	}
 
@@ -75,6 +78,23 @@ func (r MessageCenterRepository) studentSummary(ctx context.Context, studentID s
 					WHERE qtm.thread_id = qt.id AND qtm.sender_role = 'teacher' AND qtm.read_at IS NULL)
 			FROM public.question_threads qt
 			WHERE qt.student_id = $1
+			UNION ALL
+			SELECT latest.post_id, 'forum'::text, LEFT(latest.title, 120), LEFT(latest.summary, 240), latest.created_at,
+				EXISTS (
+					SELECT 1
+					FROM public.forum_notifications n
+					WHERE n.recipient_id = $1
+					  AND n.post_id = latest.post_id
+					  AND n.read_at IS NULL
+					  AND `+forumNotificationTargetActiveSQL+`
+				)
+			FROM (
+				SELECT DISTINCT ON (n.post_id) n.post_id, n.title, n.summary, n.created_at, n.id
+				FROM public.forum_notifications n
+				WHERE n.recipient_id = $1 AND n.post_id IS NOT NULL
+				  AND `+forumNotificationTargetActiveSQL+`
+				ORDER BY n.post_id, n.created_at DESC, n.id DESC
+			) AS latest
 		) AS previews
 			ORDER BY occurred_at DESC, id DESC, type
 		LIMIT 5`, studentID)
@@ -104,8 +124,11 @@ func (r MessageCenterRepository) teacherSummary(ctx context.Context, teacherID s
 			               WHERE nr.notice_id = n.id
 			                 AND NOT EXISTS (SELECT 1 FROM public.notice_confirmations nc WHERE nc.notice_id = nr.notice_id AND nc.student_id = nr.student_id))),
 			(SELECT COUNT(*) FROM public.question_threads qt
-			 WHERE qt.teacher_id = $1 AND qt.status IN ('待回复', '需跟进'))`, teacherID,
-	).Scan(&summary.ConversationCount, &summary.NoticeCount, &summary.ThreadCount); err != nil {
+			 WHERE qt.teacher_id = $1 AND qt.status IN ('待回复', '需跟进')),
+			(SELECT COUNT(*) FROM public.forum_notifications n
+			 WHERE n.recipient_id = $1 AND n.read_at IS NULL
+			   AND `+forumNotificationTargetActiveSQL+`)`, teacherID,
+	).Scan(&summary.ConversationCount, &summary.NoticeCount, &summary.ThreadCount, &summary.ForumCount); err != nil {
 		return messagecenterapp.Summary{}, err
 	}
 
@@ -132,6 +155,23 @@ func (r MessageCenterRepository) teacherSummary(ctx context.Context, teacherID s
 				qt.status IN ('待回复', '需跟进')
 			FROM public.question_threads qt
 			WHERE qt.teacher_id = $1
+			UNION ALL
+			SELECT latest.post_id, 'forum'::text, LEFT(latest.title, 120), LEFT(latest.summary, 240), latest.created_at,
+				EXISTS (
+					SELECT 1
+					FROM public.forum_notifications n
+					WHERE n.recipient_id = $1
+					  AND n.post_id = latest.post_id
+					  AND n.read_at IS NULL
+					  AND `+forumNotificationTargetActiveSQL+`
+				)
+			FROM (
+				SELECT DISTINCT ON (n.post_id) n.post_id, n.title, n.summary, n.created_at, n.id
+				FROM public.forum_notifications n
+				WHERE n.recipient_id = $1 AND n.post_id IS NOT NULL
+				  AND `+forumNotificationTargetActiveSQL+`
+				ORDER BY n.post_id, n.created_at DESC, n.id DESC
+			) AS latest
 		) AS previews
 			ORDER BY occurred_at DESC, id DESC, type
 		LIMIT 5`, teacherID)

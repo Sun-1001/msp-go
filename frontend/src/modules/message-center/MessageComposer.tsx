@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { Loader2, Mic, Send } from 'lucide-react';
 
+import { IconTooltip } from '@/components/ui/IconTooltip';
 import { cn } from '@/libs/utils/cn';
 import {
   MessageAttachmentControls,
@@ -59,6 +60,8 @@ interface MessageComposerProps {
   disabled?: boolean;
   uploading?: boolean;
   sending?: boolean;
+  allowAttachmentOnly?: boolean;
+  maxLength?: number;
   className?: string;
 }
 
@@ -83,6 +86,8 @@ export function MessageComposer({
   disabled = false,
   uploading = false,
   sending = false,
+  allowAttachmentOnly = true,
+  maxLength,
   className,
 }: MessageComposerProps) {
   const textareaRef = useRef<HTMLTextAreaElement>(null);
@@ -92,7 +97,10 @@ export function MessageComposer({
   const [pendingAttachments, setPendingAttachments] = useState<PendingMessageAttachment[]>([]);
   const speechWindow = typeof window === 'undefined' ? undefined : window as SpeechRecognitionWindow;
   const SpeechRecognition = speechWindow?.SpeechRecognition ?? speechWindow?.webkitSpeechRecognition;
-  const canSend = !disabled && !uploading && !listening && (value.trim().length > 0 || attachments.length > 0);
+  const canSend = !disabled
+    && !uploading
+    && !listening
+    && (value.trim().length > 0 || (allowAttachmentOnly && attachments.length > 0));
 
   useEffect(() => {
     const textarea = textareaRef.current;
@@ -176,6 +184,7 @@ export function MessageComposer({
         <textarea
           ref={textareaRef}
           rows={1}
+          maxLength={maxLength}
           value={value}
           onChange={(event) => onChange(event.target.value)}
           onKeyDown={(event) => {
@@ -205,15 +214,16 @@ export function MessageComposer({
               <Mic className={cn('h-5 w-5', listening && 'animate-pulse')} />
             </button>
           )}
-          <button
-            type="submit"
-            title={sendLabel}
-            aria-label={sendLabel}
-            disabled={!canSend}
-            className="grid h-10 w-10 shrink-0 place-items-center rounded-xl bg-primary-600 text-white shadow-sm transition-colors hover:bg-primary-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary-500 focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:bg-primary-300 disabled:opacity-60 dark:disabled:bg-primary-900"
-          >
-            {sending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />}
-          </button>
+          <IconTooltip label={sendLabel} className="shrink-0">
+            <button
+              type="submit"
+              aria-label={sendLabel}
+              disabled={!canSend}
+              className="grid h-10 w-10 place-items-center rounded-xl bg-primary-600 text-white shadow-sm transition-colors hover:bg-primary-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary-500 focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:bg-primary-300 disabled:opacity-60 dark:disabled:bg-primary-900"
+            >
+              {sending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />}
+            </button>
+          </IconTooltip>
         </div>
       </div>
     </form>

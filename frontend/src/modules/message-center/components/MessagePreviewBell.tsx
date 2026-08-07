@@ -18,14 +18,27 @@ const previewTypeStyle: Record<PreviewType, { label: string; dot: string; labelC
   conversation: { label: '私信', dot: 'bg-blue-600', labelClass: 'text-blue-600 dark:text-blue-400' },
   notice: { label: '通知', dot: 'bg-orange-500', labelClass: 'text-orange-600 dark:text-orange-400' },
   thread: { label: '答疑', dot: 'bg-fuchsia-600', labelClass: 'text-fuchsia-600 dark:text-fuchsia-400' },
+  forum: { label: '论坛', dot: 'bg-emerald-600', labelClass: 'text-emerald-600 dark:text-emerald-400' },
 };
 
-const stripPreviewType = (summary: string) => summary.replace(/^(私信|通知|答疑)\s*·\s*/, '');
+const stripPreviewType = (summary: string) => summary.replace(/^(私信|通知|答疑|论坛)\s*·\s*/, '');
 
 function previewTab(type: PreviewType, isTeacher: boolean): string {
   if (type === 'conversation') return 'private';
   if (type === 'notice') return 'notices';
-  return isTeacher ? 'answers' : 'questions';
+  if (type === 'thread') return isTeacher ? 'answers' : 'questions';
+  return 'forum';
+}
+
+function previewTargetID(item: MessagePreviewItem): string {
+  if (item.type !== 'forum') return item.navigation_id ?? item.target_id ?? item.id;
+  return item.navigation_id ?? item.post_id ?? item.target_id ?? item.id;
+}
+
+function previewItemKey(item: MessagePreviewItem): string {
+  return [item.type, item.id, item.navigation_id, item.target_id, item.post_id, item.reply_id, item.occurred_at]
+    .filter(Boolean)
+    .join(':');
 }
 
 interface MessagePreviewBellProps {
@@ -48,7 +61,7 @@ export const MessagePreviewBell: React.FC<MessagePreviewBellProps> = ({ cacheKey
   } = useMessageCenterSummary({ cacheKey });
   const messagesPath = isTeacher ? '/teacher/messages' : '/messages';
   const unread = summary
-    ? summary.conversation_count + summary.notice_count + summary.thread_count
+    ? summary.conversation_count + summary.notice_count + summary.thread_count + (summary.forum_count ?? 0)
     : 0;
   const items = useMemo(() => [...(summary?.items ?? [])]
     .sort((left, right) => {
@@ -85,7 +98,7 @@ export const MessagePreviewBell: React.FC<MessagePreviewBellProps> = ({ cacheKey
   const openItem = (item: MessagePreviewItem) => {
     const query = new URLSearchParams({
       tab: previewTab(item.type, isTeacher),
-      id: item.id,
+      id: previewTargetID(item),
     });
     setOpen(false);
     navigate(`${messagesPath}?${query.toString()}`);
@@ -174,7 +187,7 @@ export const MessagePreviewBell: React.FC<MessagePreviewBellProps> = ({ cacheKey
                 const type = previewTypeStyle[item.type];
                 return (
                   <button
-                    key={`${item.type}-${item.id}`}
+                    key={previewItemKey(item)}
                     type="button"
                     onClick={() => openItem(item)}
                     className="flex w-full items-center gap-2 px-3 py-2 text-left hover:bg-surface-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-primary-500 dark:hover:bg-surface-800"

@@ -31,6 +31,7 @@ type Summary struct {
 	ConversationCount int           `json:"conversation_count"`
 	NoticeCount       int           `json:"notice_count"`
 	ThreadCount       int           `json:"thread_count"`
+	ForumCount        int           `json:"forum_count"`
 	Items             []PreviewItem `json:"items"`
 }
 
