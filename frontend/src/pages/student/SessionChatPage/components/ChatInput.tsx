@@ -9,7 +9,8 @@ interface ChatInputProps {
   selectedImages: File[];
   previewUrls: string[];
   isStreaming: boolean;
-  isUploading: boolean;
+  isSending: boolean;
+  contentLocked?: boolean;
   disabled?: boolean;
   // 文件上传相关
   files: FileUploadItem[];
@@ -29,7 +30,8 @@ export const ChatInput = React.memo<ChatInputProps>(
     selectedImages,
     previewUrls,
     isStreaming,
-    isUploading,
+    isSending,
+    contentLocked,
     disabled,
     files,
     isFileParsing,
@@ -43,10 +45,17 @@ export const ChatInput = React.memo<ChatInputProps>(
   }) => {
     const imageInputRef = useRef<HTMLInputElement>(null);
     const fileInputRef = useRef<HTMLInputElement>(null);
+    const hasAttachments = previewUrls.length > 0 || files.length > 0;
+    const isPreparingSend = isSending && !isStreaming;
+    const isBusy = isPreparingSend || isFileParsing;
+    const attachmentLocked = Boolean(
+      disabled || contentLocked || isSending || isStreaming || isFileParsing
+    );
 
     const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
       if (e.key === 'Enter' && !e.shiftKey) {
         e.preventDefault();
+        if (isBusy || isStreaming || disabled) return;
         onSend();
       }
     };
@@ -58,9 +67,6 @@ export const ChatInput = React.memo<ChatInputProps>(
     const handleFileButtonClick = () => {
       fileInputRef.current?.click();
     };
-
-    const hasAttachments = previewUrls.length > 0 || files.length > 0;
-    const isBusy = isUploading || isFileParsing;
 
     return (
       <div className="bg-white/80 dark:bg-surface-900/80 backdrop-blur-lg border-t border-surface-200 dark:border-surface-700 p-4">
@@ -80,7 +86,8 @@ export const ChatInput = React.memo<ChatInputProps>(
                     />
                     <button
                       onClick={() => onRemoveImage(index)}
-                      className="absolute -top-1.5 -right-1.5 p-0.5 bg-red-500 text-white rounded-full opacity-0 group-hover:opacity-100 transition-opacity"
+                      disabled={attachmentLocked}
+                      className="absolute -top-1.5 -right-1.5 p-0.5 bg-red-500 text-white rounded-full opacity-0 group-hover:opacity-100 transition-opacity disabled:pointer-events-none disabled:opacity-0"
                     >
                       <X className="w-3 h-3" />
                     </button>
@@ -114,7 +121,8 @@ export const ChatInput = React.memo<ChatInputProps>(
                     </div>
                     <button
                       onClick={() => onRemoveFile(index)}
-                      className="absolute -top-1.5 -right-1.5 p-0.5 bg-red-500 text-white rounded-full opacity-0 group-hover:opacity-100 transition-opacity"
+                      disabled={attachmentLocked}
+                      className="absolute -top-1.5 -right-1.5 p-0.5 bg-red-500 text-white rounded-full opacity-0 group-hover:opacity-100 transition-opacity disabled:pointer-events-none disabled:opacity-0"
                     >
                       <X className="w-3 h-3" />
                     </button>
@@ -124,7 +132,7 @@ export const ChatInput = React.memo<ChatInputProps>(
                 {isBusy && (
                   <div className="flex items-center space-x-2 text-sm text-surface-500">
                     <Loader2 className="w-4 h-4 animate-spin" />
-                    <span>{isUploading ? '上传中...' : '解析中...'}</span>
+                    <span>{isPreparingSend ? '上传并准备发送中...' : '解析中...'}</span>
                   </div>
                 )}
               </div>
@@ -153,7 +161,7 @@ export const ChatInput = React.memo<ChatInputProps>(
               <div className="flex items-center pl-3 pb-3 space-x-1">
                 <button
                   onClick={handleFileButtonClick}
-                  disabled={isStreaming || disabled}
+                  disabled={attachmentLocked}
                   className="p-2 rounded-lg hover:bg-surface-100 dark:hover:bg-surface-700 text-surface-400 hover:text-surface-600 dark:hover:text-surface-300 transition-colors disabled:opacity-50"
                   title="上传文档 (TXT, DOCX, MD, CSV)"
                 >
@@ -161,7 +169,7 @@ export const ChatInput = React.memo<ChatInputProps>(
                 </button>
                 <button
                   onClick={handleImageButtonClick}
-                  disabled={isStreaming || isUploading || disabled}
+                  disabled={attachmentLocked}
                   className="p-2 rounded-lg hover:bg-surface-100 dark:hover:bg-surface-700 text-surface-400 hover:text-surface-600 dark:hover:text-surface-300 transition-colors disabled:opacity-50"
                   title="上传图片"
                 >
@@ -177,19 +185,19 @@ export const ChatInput = React.memo<ChatInputProps>(
                 value={value}
                 onChange={(e) => onChange(e.target.value)}
                 onKeyDown={handleKeyDown}
-                disabled={isStreaming || disabled}
+                disabled={isStreaming || isSending || contentLocked || disabled}
               />
 
               {/* Voice & Send/Cancel Buttons */}
               <div className="flex items-center pr-2 pb-2 space-x-1">
                 <button
-                  disabled={isStreaming || disabled}
+                  disabled={isStreaming || isSending || contentLocked || disabled}
                   className="p-2 rounded-lg hover:bg-surface-200 dark:hover:bg-surface-700 text-surface-400 hover:text-surface-600 dark:hover:text-surface-300 transition-colors disabled:opacity-50"
                 >
                   <Mic className="w-5 h-5" />
                 </button>
 
-                {isStreaming ? (
+                {isStreaming || isSending ? (
                   <Button
                     size="icon"
                     variant="destructive"

@@ -149,17 +149,20 @@ func validateCanonicalChain(migrations []Migration) error {
 	}
 	seen := make(map[int64]string, len(migrations))
 	for _, item := range migrations {
+		if item.Version <= 0 {
+			return fmt.Errorf("canonical migration version must be positive, got %d", item.Version)
+		}
 		if _, exists := seen[item.Version]; exists {
 			return fmt.Errorf("canonical migrations contain duplicate version %d", item.Version)
 		}
 		seen[item.Version] = item.Name
 	}
-	if len(seen) != 11 {
-		return fmt.Errorf("ledger reconciliation requires the exact canonical chain 1-11, found %d migrations", len(seen))
+	if len(seen) < 11 {
+		return fmt.Errorf("ledger reconciliation requires the canonical prefix 1-11, found %d migrations", len(seen))
 	}
-	for version := int64(1); version <= 11; version++ {
+	for version := int64(1); version <= int64(len(seen)); version++ {
 		if _, ok := seen[version]; !ok {
-			return fmt.Errorf("canonical migration %d is missing", version)
+			return fmt.Errorf("canonical migration %d is missing; versions must be contiguous from 1", version)
 		}
 	}
 	if seen[11] != "forum_center" {

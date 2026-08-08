@@ -11,6 +11,24 @@ const sseLogger = logger.createContextLogger('SSE');
 const MAX_SSE_BUFFER_CHARS = 1024 * 1024;
 const MAX_SSE_EVENT_DATA_CHARS = 1024 * 1024;
 
+export interface SSEError {
+  code: string;
+  message: string;
+  status?: number;
+}
+
+class SSERequestError extends Error {
+  readonly code: string;
+  readonly status: number;
+
+  constructor(code: string, message: string, status: number) {
+    super(message);
+    this.name = 'SSERequestError';
+    this.code = code;
+    this.status = status;
+  }
+}
+
 /**
  * SSE 事件处理器
  */
@@ -20,11 +38,13 @@ export interface SSEHandlers {
   /** 流式响应完成 */
   onDone?: (messageId: string, agent: string | null) => void;
   /** 发生错误 */
-  onError?: (error: { code: string; message: string }) => void;
+  onError?: (error: SSEError) => void;
   /** 任务被取消 */
   onCancelled?: (messageId: string) => void;
   /** 收到任务信息 */
   onTaskInfo?: (taskId: string) => void;
+  /** 首次聊天已原子创建服务端会话 */
+  onSessionInfo?: (sessionId: string) => void;
   /** 连接打开 */
   onOpen?: () => void;
   /** 连接关闭 */
@@ -88,8 +108,15 @@ export function createSSEConnection(
       });
 
       if (!response.ok) {
-        const errorData = await response.json().catch(() => ({}));
-        throw new Error(errorData.detail || `HTTP ${response.status}`);
+        const rawError: unknown = await response.json().catch(() => ({}));
+        const errorData = isRecord(rawError) ? rawError : {};
+        throw new SSERequestError(
+          stringValue(errorData.code, `HTTP_${response.status}`),
+          stringValue(errorData.message) ||
+            stringValue(errorData.detail) ||
+            `HTTP ${response.status}`,
+          response.status
+        );
       }
 
       handlers.onOpen?.();
@@ -154,10 +181,18 @@ export function createSSEConnection(
       }
 
       sseLogger.error('SSE connection error', error);
-      handlers.onError?.({
-        code: 'CONNECTION_ERROR',
-        message: (error as Error).message || '连接失败',
-      });
+      if (error instanceof SSERequestError) {
+        handlers.onError?.({
+          code: error.code,
+          message: error.message,
+          status: error.status,
+        });
+      } else {
+        handlers.onError?.({
+          code: 'CONNECTION_ERROR',
+          message: (error as Error).message || '连接失败',
+        });
+      }
     } finally {
       close();
     }
@@ -234,6 +269,12 @@ function processEvent(
         if (typeof parsed.task_id === 'string' && parsed.task_id) {
           setTaskId(parsed.task_id);
           handlers.onTaskInfo?.(parsed.task_id);
+        }
+        break;
+
+      case 'session_info':
+        if (typeof parsed.session_id === 'string' && parsed.session_id) {
+          handlers.onSessionInfo?.(parsed.session_id);
         }
         break;
 

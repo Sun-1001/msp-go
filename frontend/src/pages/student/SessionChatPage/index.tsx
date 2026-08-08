@@ -3,26 +3,46 @@ import { useParams, useNavigate, useLocation } from 'react-router-dom';
 import { MainLayout } from '../../../components/layout/MainLayout';
 import { useAppDispatch, useAppSelector } from '../../../store';
 import {
-  createSessionAsync,
   fetchHistoryAsync,
+  reconcileHistoryAsync,
   fetchSessionsAsync,
   deleteSessionAsync,
   batchDeleteSessionsAsync,
   updateSessionModeAsync,
-  cancelCurrentTaskAsync,
   setCurrentSession,
   setMode,
+  clearCurrentSession,
+  invalidateSession,
+  prepareDraftSession,
+  freezeDraftFirstRequest,
+  materializeDraftSession,
+  completeDraftFirstTurn,
   selectCurrentSession,
   selectMessages,
   selectMode,
+  selectDraftSessionId,
+  selectDraftSessionTopic,
+  selectDraftSessionMode,
+  selectDraftFirstRequest,
+  selectDraftFirstTurnCompleted,
   selectStreamStatus,
   selectStreamingMessageId,
   selectSessionLoadingState,
+  selectSessionSendingState,
   selectSessionError,
+  selectHistorySessionId,
+  selectHistorySessionStatus,
+  selectReconcileState,
   selectSessions,
   selectSessionsLoadingState,
-  type ChatMode,
+  selectSessionsError,
+  selectModeUpdateState,
 } from '@/modules/session/store/sessionSlice';
+import type {
+  ChatMode,
+  DraftFirstRequest,
+  DraftSessionIdentity,
+} from '@/modules/session/types';
 import type { SSEController } from '../../../libs/http/sseClient';
 import { ChatHeader } from './components/ChatHeader';
 import { ChatSidebar } from './components/ChatSidebar';
@@ -30,17 +50,28 @@ import { ChatMessages } from './components/ChatMessages';
 import { ChatInput } from './components/ChatInput';
 import { ModeSelector } from './components/ModeSelector';
 import { QuickActions } from './components/QuickActions';
-import { useChatStream } from './hooks/useChatStream';
+import {
+  useChatStream,
+  type ChatSettlement,
+  type ChatTarget,
+} from './hooks/useChatStream';
 import { useImageUpload } from './hooks/useImageUpload';
 import { useFileUpload } from './hooks/useFileUpload';
 import { CHAT_MODES, QUICK_ACTIONS } from './constants.tsx';
 import type { ExerciseTutorLaunchState } from '../exerciseTutorLaunch';
+import { useToast } from '@/components/ui/Toast';
+import {
+  isDefinitiveDraftIdentityError,
+  isSessionNotFoundError,
+  type SessionRequestError,
+} from '@/modules/session/errors';
 
 export const SessionChatPage: React.FC = () => {
   const { sessionId } = useParams<{ sessionId?: string }>();
   const navigate = useNavigate();
   const location = useLocation();
   const dispatch = useAppDispatch();
+  const { toast } = useToast();
 
   // 从刷题页面跳转时携带的初始消息
   const locationState = location.state as Partial<ExerciseTutorLaunchState> | null;
@@ -50,12 +81,23 @@ export const SessionChatPage: React.FC = () => {
   const currentSession = useAppSelector(selectCurrentSession);
   const messages = useAppSelector(selectMessages);
   const currentMode = useAppSelector(selectMode);
+  const draftSessionId = useAppSelector(selectDraftSessionId);
+  const draftSessionTopic = useAppSelector(selectDraftSessionTopic);
+  const draftSessionMode = useAppSelector(selectDraftSessionMode);
+  const draftFirstRequest = useAppSelector(selectDraftFirstRequest);
+  const draftFirstTurnCompleted = useAppSelector(selectDraftFirstTurnCompleted);
   const streamStatus = useAppSelector(selectStreamStatus);
   const streamingMessageId = useAppSelector(selectStreamingMessageId);
   const loadingState = useAppSelector(selectSessionLoadingState);
+  const sendingState = useAppSelector(selectSessionSendingState);
   const error = useAppSelector(selectSessionError);
+  const historySessionId = useAppSelector(selectHistorySessionId);
+  const historySessionStatus = useAppSelector(selectHistorySessionStatus);
+  const reconcileState = useAppSelector(selectReconcileState);
   const sessions = useAppSelector(selectSessions);
   const sessionsLoadingState = useAppSelector(selectSessionsLoadingState);
+  const sessionsError = useAppSelector(selectSessionsError);
+  const modeUpdateState = useAppSelector(selectModeUpdateState);
 
   // Local state
   const [inputValue, setInputValue] = useState('');
@@ -64,19 +106,49 @@ export const SessionChatPage: React.FC = () => {
   const [isSelectMode, setIsSelectMode] = useState(false);
   const [selectedSessionIds, setSelectedSessionIds] = useState<string[]>([]);
   const [isBatchDeleting, setIsBatchDeleting] = useState(false);
-
   const messagesContainerRef = useRef<HTMLDivElement>(null);
   const sseControllerRef = useRef<SSEController | null>(null);
-  const initStarted = useRef(false);
   const scrollRafRef = useRef<number | null>(null);
+  const settlementAttemptRef = useRef(0);
+  const pageActiveRef = useRef(true);
 
+  const isDraftSession = !sessionId || sessionId === 'new';
+  const hasPreparedDraft = isDraftSession && draftSessionId !== null;
+  const hasCompletedDraft = hasPreparedDraft && draftFirstTurnCompleted;
+  const draftRecoveryPending = hasPreparedDraft && !draftFirstTurnCompleted;
+  const draftRequestLocked = draftRecoveryPending && draftFirstRequest !== null;
+  const showDraftWelcome = isDraftSession
+    && messages.length === 0;
   const currentModeConfig = CHAT_MODES.find((m) => m.id === currentMode)!;
   const isStreaming = streamStatus === 'streaming';
   const isLoading = loadingState === 'loading';
+  const isSending = sendingState === 'loading';
+  const isBusy = isSending || isStreaming;
+  const isModeUpdating = modeUpdateState === 'loading';
+  const isReconciling = reconcileState === 'loading';
+  const isDeleting = deletingSessionId !== null || isBatchDeleting;
+  const interactionBusy = isBusy || isModeUpdating || isReconciling || isDeleting;
+  const persistedSessionReady = !isDraftSession
+    && historySessionId === sessionId
+    && historySessionStatus === 'active';
+  const activeSessionId = isDraftSession
+    ? hasCompletedDraft ? draftSessionId : null
+    : persistedSessionReady
+      ? sessionId ?? null
+      : null;
+  const draftWelcome = `你好，当前为${currentModeConfig.name}。${currentModeConfig.description}。输入问题后将开始并保存本次对话。`;
+
+  const handleAttachmentError = useCallback((message: string) => {
+    toast({
+      type: 'error',
+      title: '附件无法添加',
+      description: message,
+    });
+  }, [toast]);
 
   // 自定义 hooks
-  const { selectedImages, previewUrls, isUploading, handleImageSelect, handleRemoveImage, clearImages } =
-    useImageUpload();
+  const { selectedImages, previewUrls, handleImageSelect, handleRemoveImage, clearImages } =
+    useImageUpload({ onError: handleAttachmentError });
 
   const {
     files: uploadedFiles,
@@ -85,14 +157,186 @@ export const SessionChatPage: React.FC = () => {
     handleRemoveFile,
     clearFiles,
     getParsedDocuments,
-  } = useFileUpload();
+  } = useFileUpload({ onError: handleAttachmentError });
 
-  const { handleSendMessage: sendMessage } = useChatStream({
-    currentSession,
+  const resolveChatTarget = useCallback((): ChatTarget | null => {
+    if (!isDraftSession) {
+      return sessionId
+        && historySessionId === sessionId
+        && historySessionStatus === 'active'
+        ? { kind: 'existing', sessionId }
+        : null;
+    }
+    if (draftSessionId && draftFirstTurnCompleted) {
+      return { kind: 'existing', sessionId: draftSessionId };
+    }
+
+    if (draftSessionId) {
+      return {
+        kind: 'draft',
+        sessionId: draftSessionId,
+        topic: draftSessionTopic ?? undefined,
+        mode: draftSessionMode ?? currentMode,
+        firstRequest: draftFirstRequest ?? undefined,
+      };
+    }
+
+    return {
+      kind: 'draft',
+      topic: locationState?.topic,
+      mode: locationState?.mode ?? currentMode,
+    };
+  }, [currentMode, draftFirstRequest, draftFirstTurnCompleted, draftSessionId, draftSessionMode, draftSessionTopic, historySessionId, historySessionStatus, isDraftSession, locationState, sessionId]);
+
+  const handleSessionPrepared = useCallback((identity: DraftSessionIdentity) => {
+    dispatch(prepareDraftSession(identity));
+  }, [dispatch]);
+
+  const handleFirstRequestPrepared = useCallback((preparedSessionId: string, request: DraftFirstRequest) => {
+    dispatch(freezeDraftFirstRequest({ sessionId: preparedSessionId, request }));
+  }, [dispatch]);
+
+  const handleSessionMaterialized = useCallback((materializedSessionId: string) => {
+    dispatch(materializeDraftSession(materializedSessionId));
+  }, [dispatch]);
+
+  const handleFirstTurnCompleted = useCallback((completedSessionId: string) => {
+    dispatch(completeDraftFirstTurn(completedSessionId));
+  }, [dispatch]);
+
+  const handleSendStart = useCallback(() => {
+    settlementAttemptRef.current += 1;
+  }, []);
+
+  const refreshSessionList = useCallback(() => {
+    void dispatch(fetchSessionsAsync({ force: true }));
+  }, [dispatch]);
+
+  const recoverMissingSession = useCallback((missingSessionId: string) => {
+    settlementAttemptRef.current += 1;
+    initialMessageHandled.current = false;
+    dispatch(invalidateSession(missingSessionId));
+    navigate('/session/new', { replace: true });
+    refreshSessionList();
+  }, [dispatch, navigate, refreshSessionList]);
+
+  const discardDraftRecovery = useCallback((discardedSessionId: string) => {
+    settlementAttemptRef.current += 1;
+    dispatch(invalidateSession(discardedSessionId));
+    refreshSessionList();
+  }, [dispatch, refreshSessionList]);
+
+  const handleChatSettled = useCallback((settlement: ChatSettlement) => {
+    const {
+      sessionId: settledSessionId,
+      outcome,
+      retryText,
+      errorMessage,
+      errorCode,
+      errorStatus,
+      isFirstTurn,
+    } = settlement;
+    const settlementAttempt = ++settlementAttemptRef.current;
+    if (outcome === 'done') {
+      if (!settledSessionId) return;
+      setInputValue((currentValue) => currentValue === retryText ? '' : currentValue);
+      refreshSessionList();
+      if (isDraftSession) navigate(`/session/${settledSessionId}`, { replace: true });
+      return;
+    }
+
+    if (retryText.trim()) {
+      setInputValue((currentValue) => currentValue || retryText);
+    }
+    const settlementError: SessionRequestError | undefined = errorMessage || errorCode || errorStatus
+      ? { message: errorMessage ?? '消息发送失败', code: errorCode, status: errorStatus }
+      : undefined;
+    if (
+      isFirstTurn &&
+      settledSessionId &&
+      isDefinitiveDraftIdentityError(settlementError)
+    ) {
+      toast({
+        type: 'error',
+        title: '首次会话无法继续',
+        description: errorMessage ?? '旧草稿已结束，输入和附件已保留，请重新发送',
+      });
+      discardDraftRecovery(settledSessionId);
+      return;
+    }
+    if (
+      !isFirstTurn &&
+      settledSessionId &&
+      isSessionNotFoundError(settlementError)
+    ) {
+      toast({
+        type: 'error',
+        title: '会话已失效',
+        description: '原会话已不存在，输入和附件已保留',
+      });
+      recoverMissingSession(settledSessionId);
+      return;
+    }
+    toast({
+      type: 'error',
+      title: outcome === 'cancelled' ? '响应已取消' : '消息发送未完成',
+      description: errorMessage ?? '输入和附件已保留，可以直接重试',
+    });
+
+    if (!settledSessionId) return;
+
+    refreshSessionList();
+    void dispatch(reconcileHistoryAsync({
+      sessionId: settledSessionId,
+      preserveDraftOnNotFound: isFirstTurn,
+    }))
+      .then((result) => {
+        if (
+          !pageActiveRef.current ||
+          settlementAttemptRef.current !== settlementAttempt
+        ) {
+          return;
+        }
+
+        if (reconcileHistoryAsync.fulfilled.match(result)) {
+          if (isFirstTurn && result.payload.firstTurnCompleted) {
+            setInputValue((currentValue) => currentValue === retryText ? '' : currentValue);
+            clearImages();
+            clearFiles();
+            navigate(`/session/${settledSessionId}`, { replace: true });
+          }
+          return;
+        }
+
+        if (reconcileHistoryAsync.rejected.match(result) && !result.meta.condition) {
+          if (isSessionNotFoundError(result.payload)) {
+            if (!isFirstTurn) recoverMissingSession(settledSessionId);
+            return;
+          }
+          toast({
+            type: 'error',
+            title: '历史同步失败',
+            description: result.payload?.message ?? '当前消息已保留，请稍后重试',
+          });
+        }
+      });
+  }, [clearFiles, clearImages, discardDraftRecovery, dispatch, isDraftSession, navigate, recoverMissingSession, refreshSessionList, toast]);
+
+  const {
+    handleSendMessage: sendMessage,
+    cancelCurrentSend,
+  } = useChatStream({
+    resolveChatTarget,
     isStreaming,
-    isUploading,
+    attachmentsPending: isFileParsing,
     selectedImages,
     sseControllerRef,
+    onSendStart: handleSendStart,
+    onSessionPrepared: handleSessionPrepared,
+    onFirstRequestPrepared: handleFirstRequestPrepared,
+    onSessionMaterialized: handleSessionMaterialized,
+    onFirstTurnCompleted: handleFirstTurnCompleted,
+    onChatSettled: handleChatSettled,
     onClearImages: clearImages,
     getParsedDocuments,
     onClearFiles: clearFiles,
@@ -128,48 +372,50 @@ export const SessionChatPage: React.FC = () => {
     scrollToBottom(streamStatus !== 'streaming');
   }, [messages, scrollToBottom, streamStatus]);
 
-  // 初始化会话
+  // 路由变化时加载正式会话历史。
   useEffect(() => {
-    const initSession = async () => {
-      if (sessionId && sessionId !== 'new') {
-        // 如果当前会话已匹配（如刚创建完 navigate 过来），跳过历史拉取，
-        // 避免与自动发送初始消息的 useEffect 产生竞态条件
-        if (currentSession?.id === sessionId) return;
-
-        dispatch(fetchHistoryAsync({ sessionId }));
-        const existingSession = sessions.find((s) => s.id === sessionId);
-        if (existingSession) {
-          dispatch(setCurrentSession(existingSession));
-        }
-      } else {
-        if (initStarted.current) return;
-        initStarted.current = true;
-
-        const launchMode = locationState?.mode ?? currentMode;
-        const result = await dispatch(createSessionAsync({
-          topic: locationState?.topic,
-          mode: launchMode,
-        }));
-        if (createSessionAsync.fulfilled.match(result)) {
-          navigate(`/session/${result.payload.session.id}`, {
-            replace: true,
-            state: locationState,
-          });
-          dispatch(fetchSessionsAsync({}));
-        }
+    if (!sessionId || sessionId === 'new') return;
+    const loadAttempt = ++settlementAttemptRef.current;
+    void dispatch(fetchHistoryAsync({ sessionId })).then((result) => {
+      if (
+        !pageActiveRef.current ||
+        settlementAttemptRef.current !== loadAttempt ||
+        !fetchHistoryAsync.rejected.match(result) ||
+        !isSessionNotFoundError(result.payload)
+      ) {
+        return;
       }
-    };
+      recoverMissingSession(sessionId);
+    });
+  }, [dispatch, recoverMissingSession, sessionId]);
 
-    initSession();
+  // 会话列表可能晚于历史返回，单独同步侧栏中的当前会话对象。
+  useEffect(() => {
+    if (!sessionId || sessionId === 'new' || currentSession?.id === sessionId) return;
+    const existingSession = sessions.find((session) => session.id === sessionId);
+    if (existingSession) {
+      dispatch(setCurrentSession(existingSession));
+    } else if (currentSession?.id) {
+      dispatch(setCurrentSession(null));
+    }
+  }, [currentSession?.id, dispatch, sessionId, sessions]);
+
+  // 新会话仅保留为前端草稿。
+  useEffect(() => {
+    if (sessionId && sessionId !== 'new') return;
+    settlementAttemptRef.current += 1;
+    initialMessageHandled.current = false;
+    dispatch(clearCurrentSession());
+    dispatch(setMode(locationState?.mode ?? currentMode));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sessionId]);
 
   // 清理 SSE 连接和 rAF
   useEffect(() => {
+    pageActiveRef.current = true;
     return () => {
-      const controller = sseControllerRef.current;
-      sseControllerRef.current = null;
-      controller?.close();
+      pageActiveRef.current = false;
+      settlementAttemptRef.current += 1;
       if (scrollRafRef.current !== null) {
         cancelAnimationFrame(scrollRafRef.current);
       }
@@ -179,120 +425,171 @@ export const SessionChatPage: React.FC = () => {
   // 发送消息
   const handleSendMessage = useCallback(
     async (customMessage?: string) => {
-      const messageContent = customMessage || inputValue;
-      await sendMessage(messageContent);
-      setInputValue('');
+      if (isModeUpdating || isReconciling) return false;
+      const messageContent = customMessage ?? inputValue;
+      return sendMessage(messageContent);
     },
-    [inputValue, sendMessage]
+    [inputValue, isModeUpdating, isReconciling, sendMessage]
   );
 
   // 从刷题页面跳转时，自动发送初始消息
   useEffect(() => {
     if (
-      sessionId &&
-      sessionId !== 'new' &&
-      currentSession?.id === sessionId &&
+      isDraftSession &&
       locationState?.initialMessage &&
       !initialMessageHandled.current &&
-      !isStreaming
+      !interactionBusy
     ) {
-      initialMessageHandled.current = true;
-      handleSendMessage(locationState.initialMessage);
-      // 清除 state 防止刷新后重复发送（用 replaceState 避免触发 React Router 重渲染）
-      window.history.replaceState(null, '', location.pathname);
+      const initialMessage = locationState.initialMessage;
+      // 延迟到当前 effect 稳定后发送，避免开发环境 StrictMode 回放取消首次请求。
+      const sendTimer = window.setTimeout(() => {
+        initialMessageHandled.current = true;
+        navigate(location.pathname, { replace: true, state: null });
+        void handleSendMessage(initialMessage).then((started) => {
+          if (!started && pageActiveRef.current) setInputValue(initialMessage);
+        });
+      }, 0);
+      return () => window.clearTimeout(sendTimer);
     }
-  }, [currentSession, locationState, isStreaming, handleSendMessage, location.pathname, sessionId]);
+  }, [handleSendMessage, interactionBusy, isDraftSession, location.pathname, locationState, navigate]);
 
   // 取消响应
   const handleCancelResponse = useCallback(() => {
-    sseControllerRef.current?.close();
-    dispatch(cancelCurrentTaskAsync());
-  }, [dispatch]);
+    cancelCurrentSend();
+  }, [cancelCurrentSend]);
 
   // 切换模式
   const handleModeChange = useCallback(
-    async (mode: ChatMode) => {
-      if (isStreaming) return;
-      dispatch(setMode(mode));
-      if (currentSession) {
-        dispatch(updateSessionModeAsync({ sessionId: currentSession.id, mode }));
+    (mode: ChatMode) => {
+      if (
+        interactionBusy ||
+        draftRecoveryPending ||
+        sessionsLoadingState === 'loading' ||
+        (!isDraftSession && !persistedSessionReady)
+      ) {
+        return;
       }
+      if (activeSessionId) {
+        void dispatch(updateSessionModeAsync({ sessionId: activeSessionId, mode }))
+          .then((result) => {
+            if (updateSessionModeAsync.fulfilled.match(result)) {
+              refreshSessionList();
+              return;
+            }
+            if (
+              pageActiveRef.current &&
+              updateSessionModeAsync.rejected.match(result) &&
+              !result.meta.condition
+            ) {
+              toast({
+                type: 'error',
+                title: '切换模式失败',
+                description: typeof result.payload === 'string' ? result.payload : '请稍后重试',
+              });
+            }
+          });
+        return;
+      }
+      dispatch(setMode(mode));
     },
-    [isStreaming, currentSession, dispatch]
+    [activeSessionId, dispatch, draftRecoveryPending, interactionBusy, isDraftSession, persistedSessionReady, refreshSessionList, sessionsLoadingState, toast]
   );
 
-  // 新建会话
-  const handleNewSession = useCallback(async () => {
-    if (isStreaming) return;
-    initStarted.current = false;
+  const resetToDraft = useCallback(() => {
+    settlementAttemptRef.current += 1;
+    initialMessageHandled.current = false;
+    dispatch(clearCurrentSession());
+    navigate('/session/new', { replace: true });
+  }, [dispatch, navigate]);
 
-    const result = await dispatch(createSessionAsync({ mode: currentMode }));
-    if (createSessionAsync.fulfilled.match(result)) {
-      initStarted.current = true;
-      navigate(`/session/${result.payload.session.id}`, { replace: true });
-      dispatch(fetchSessionsAsync({}));
-    }
-  }, [isStreaming, currentMode, dispatch, navigate]);
+  // 新建会话
+  const handleNewSession = useCallback(() => {
+    if (interactionBusy) return;
+    resetToDraft();
+  }, [interactionBusy, resetToDraft]);
 
   // 切换到历史会话
   const handleSelectSession = useCallback(
-    (sessionId: string) => {
-      if (isStreaming) return;
-      navigate(`/session/${sessionId}`);
+    (targetSessionId: string) => {
+      if (interactionBusy) return;
+      if (draftRecoveryPending && targetSessionId === draftSessionId) return;
+      settlementAttemptRef.current += 1;
+      navigate(`/session/${targetSessionId}`);
     },
-    [isStreaming, navigate]
+    [draftRecoveryPending, draftSessionId, interactionBusy, navigate]
   );
 
   // 删除会话
   const handleDeleteSession = useCallback(
-    async (sessionId: string) => {
-      setDeletingSessionId(sessionId);
-      await dispatch(deleteSessionAsync(sessionId));
+    async (targetSessionId: string) => {
+      if (interactionBusy) return;
+      setDeletingSessionId(targetSessionId);
+      const result = await dispatch(deleteSessionAsync(targetSessionId));
       setDeletingSessionId(null);
 
-      if (currentSession?.id === sessionId) {
-        handleNewSession();
+      if (!deleteSessionAsync.fulfilled.match(result)) {
+        toast({
+          type: 'error',
+          title: '删除会话失败',
+          description: typeof result.payload === 'string' ? result.payload : '请稍后重试',
+        });
+        return;
+      }
+      if (!isDraftSession && sessionId === targetSessionId) {
+        resetToDraft();
       }
     },
-    [dispatch, currentSession, handleNewSession]
+    [dispatch, interactionBusy, isDraftSession, resetToDraft, sessionId, toast]
   );
 
   // 批量删除会话
   const handleBatchDeleteSessions = useCallback(async () => {
-    if (selectedSessionIds.length === 0) return;
+    if (interactionBusy || selectedSessionIds.length === 0) return;
 
     setIsBatchDeleting(true);
-    await dispatch(batchDeleteSessionsAsync(selectedSessionIds));
+    const result = await dispatch(batchDeleteSessionsAsync(selectedSessionIds));
     setIsBatchDeleting(false);
+
+    if (!batchDeleteSessionsAsync.fulfilled.match(result)) {
+      toast({
+        type: 'error',
+        title: '批量删除失败',
+        description: typeof result.payload === 'string' ? result.payload : '请稍后重试',
+      });
+      return;
+    }
     setSelectedSessionIds([]);
     setIsSelectMode(false);
 
-    if (currentSession && selectedSessionIds.includes(currentSession.id)) {
-      handleNewSession();
+    if (!isDraftSession && sessionId && selectedSessionIds.includes(sessionId)) {
+      resetToDraft();
     }
-  }, [selectedSessionIds, dispatch, currentSession, handleNewSession]);
+  }, [interactionBusy, selectedSessionIds, dispatch, isDraftSession, resetToDraft, sessionId, toast]);
 
   // 切换选择模式
   const handleToggleSelectMode = useCallback(() => {
+    if (interactionBusy) return;
     setIsSelectMode((prev) => !prev);
     setSelectedSessionIds([]);
-  }, []);
+  }, [interactionBusy]);
 
   // 切换会话选中状态
   const handleToggleSessionSelection = useCallback((sessionId: string) => {
+    if (interactionBusy) return;
     setSelectedSessionIds((prev) =>
       prev.includes(sessionId) ? prev.filter((id) => id !== sessionId) : [...prev, sessionId]
     );
-  }, []);
+  }, [interactionBusy]);
 
   // 全选/取消全选
   const handleSelectAllSessions = useCallback(() => {
+    if (interactionBusy) return;
     if (selectedSessionIds.length === sessions.length) {
       setSelectedSessionIds([]);
     } else {
       setSelectedSessionIds(sessions.map((s) => s.id));
     }
-  }, [selectedSessionIds, sessions]);
+  }, [interactionBusy, selectedSessionIds, sessions]);
 
   return (
     <MainLayout>
@@ -301,12 +598,14 @@ export const SessionChatPage: React.FC = () => {
         <ChatSidebar
           isOpen={sidebarOpen}
           sessions={sessions}
-          currentSessionId={currentSession?.id}
+          currentSessionId={isDraftSession ? draftSessionId ?? undefined : sessionId}
           isSelectMode={isSelectMode}
           selectedSessionIds={selectedSessionIds}
           deletingSessionId={deletingSessionId}
           isBatchDeleting={isBatchDeleting}
           loading={sessionsLoadingState === 'loading'}
+          error={sessionsError}
+          interactionDisabled={interactionBusy}
           onToggleSidebar={() => setSidebarOpen((prev) => !prev)}
           onNewSession={handleNewSession}
           onSelectSession={handleSelectSession}
@@ -329,14 +628,21 @@ export const SessionChatPage: React.FC = () => {
                 modes={CHAT_MODES}
                 currentMode={currentMode}
                 onModeChange={handleModeChange}
-                disabled={isStreaming}
+                disabled={
+                  interactionBusy ||
+                  draftRecoveryPending ||
+                  sessionsLoadingState === 'loading' ||
+                  (!isDraftSession && !persistedSessionReady)
+                }
               />
             }
           />
 
           {/* 消息列表 */}
           <ChatMessages
-            messages={messages}
+            messages={showDraftWelcome ? [] : messages}
+            draftWelcome={showDraftWelcome ? draftWelcome : undefined}
+            draftModeName={showDraftWelcome ? currentModeConfig.name : undefined}
             streamingMessageId={streamingMessageId}
             isLoading={isLoading}
             error={error}
@@ -344,7 +650,12 @@ export const SessionChatPage: React.FC = () => {
           />
 
           {/* 快捷操作 */}
-          {messages.length === 0 && !isLoading && (
+          {(showDraftWelcome || messages.length === 0) &&
+            !isLoading &&
+            !interactionBusy &&
+            !draftRequestLocked &&
+            !isFileParsing &&
+            (isDraftSession || persistedSessionReady) && (
             <QuickActions actions={QUICK_ACTIONS} onActionClick={handleSendMessage} />
           )}
 
@@ -354,8 +665,9 @@ export const SessionChatPage: React.FC = () => {
             selectedImages={selectedImages}
             previewUrls={previewUrls}
             isStreaming={isStreaming}
-            isUploading={isUploading}
-            disabled={!currentSession}
+            isSending={isSending}
+            contentLocked={draftRequestLocked}
+            disabled={interactionBusy || isLoading || (!isDraftSession && !persistedSessionReady)}
             files={uploadedFiles}
             isFileParsing={isFileParsing}
             onChange={setInputValue}

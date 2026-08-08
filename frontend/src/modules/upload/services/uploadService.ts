@@ -18,9 +18,15 @@ export interface UploadResponse {
  * 上传图片
  *
  * @param file 图片文件
+ * @param onProgress 上传进度回调
+ * @param signal 取消上传的信号
  * @returns 上传结果
  */
-export async function uploadImage(file: File, onProgress?: (percent: number) => void): Promise<UploadResponse> {
+export async function uploadImage(
+  file: File,
+  onProgress?: (percent: number) => void,
+  signal?: AbortSignal
+): Promise<UploadResponse> {
   const formData = new FormData();
   formData.append('file', file);
 
@@ -30,6 +36,7 @@ export async function uploadImage(file: File, onProgress?: (percent: number) => 
       'Content-Type': 'multipart/form-data',
     },
     timeout: 60000, // 60 秒
+    signal,
     onUploadProgress: onProgress
       ? (progressEvent) => {
           const total = progressEvent.total ?? file.size;

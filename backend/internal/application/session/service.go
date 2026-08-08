@@ -20,16 +20,45 @@ var ErrNotFound = errors.New("session not found")
 // ErrInvalidAttachment is returned when a chat attachment URL is outside the upload image boundary.
 var ErrInvalidAttachment = errors.New("invalid attachment")
 
+// ErrInvalidMode is returned when a session mode is outside the supported set.
+var ErrInvalidMode = errors.New("invalid session mode")
+
+// ErrMessageTooLarge is returned when a chat message exceeds the AI input boundary.
+var ErrMessageTooLarge = errors.New("chat message exceeds size limit")
+
+// ErrEmptyMessage is returned when a chat message has no visible content.
+var ErrEmptyMessage = errors.New("chat message is empty")
+
+// ErrInvalidSessionID is returned when a client-created draft session ID is not a UUID v4.
+var ErrInvalidSessionID = errors.New("invalid session id")
+
+// ErrSessionIDConflict is returned when a draft ID is already bound to another request.
+var ErrSessionIDConflict = errors.New("session id conflicts with an existing session")
+
+// ErrStartChatInProgress is returned when an idempotent replay reaches a first chat still being processed.
+var ErrStartChatInProgress = errors.New("first chat is still being processed")
+
+// ErrFirstChatCannotResume is returned when later messages make it unsafe to
+// append a missing first reply out of chronological order.
+var ErrFirstChatCannotResume = errors.New("first chat can no longer be resumed")
+
 // Repository is the persistence surface required by session use cases.
 type Repository interface {
 	CreateSession(context.Context, LearningSession, Message) error
+	CreateSessionWithMessages(context.Context, LearningSession, []Message) (bool, error)
+	CreateFirstChat(context.Context, LearningSession, []Message, FirstChatRequest) (bool, error)
 	GetSession(context.Context, string, string) (LearningSession, bool, error)
+	GetFirstChatRequest(context.Context, string) (FirstChatRequest, bool, error)
+	ClaimFirstChat(context.Context, string, string, time.Time, time.Time) (bool, error)
+	ReleaseFirstChat(context.Context, string, string, time.Time) (bool, error)
+	CompleteFirstChat(context.Context, FirstChatCompletion) (bool, error)
+	GetMessage(context.Context, string, string) (Message, bool, error)
 	InsertMessage(context.Context, Message) error
 	InsertMeteredAssistantMessage(context.Context, string, Message, string) error
 	ListMessages(context.Context, string, int, int) ([]Message, int, error)
-	ListSessions(context.Context, string, int, int) ([]SessionListItem, int, error)
+	ListSessions(context.Context, string, int, int, bool) ([]SessionListItem, int, error)
 	EndSession(context.Context, string, string, time.Time) (EndState, bool, error)
-	UpdateSessionTopic(context.Context, string, string, string) (string, bool, error)
+	UpdateSessionMode(context.Context, string, string, string) (*string, bool, error)
 	DeleteSession(context.Context, string, string) (bool, error)
 	BatchDeleteSessions(context.Context, []string, string) (int, error)
 }
@@ -40,6 +69,7 @@ type LearningSession struct {
 	StudentID    string
 	IsActive     bool
 	CurrentTopic *string
+	Mode         string
 	StartedAt    time.Time
 	EndedAt      *time.Time
 }
@@ -53,6 +83,27 @@ type Message struct {
 	Agent       *string
 	Attachments []string
 	CreatedAt   time.Time
+}
+
+// FirstChatRequest stores the immutable identity and processing lease for a
+// session's atomic first chat request.
+type FirstChatRequest struct {
+	SessionID          string
+	RequestHash        string
+	AssistantMessageID string
+	ClaimToken         string
+	ClaimExpiresAt     time.Time
+	CompletedAt        *time.Time
+}
+
+// FirstChatCompletion atomically completes a claimed first reply and its
+// optional quota ledger entry.
+type FirstChatCompletion struct {
+	StudentID  string
+	ClaimToken string
+	UsageDate  string
+	Message    Message
+	Metered    bool
 }
 
 // SessionListItem stores a session row plus message count.
@@ -94,9 +145,12 @@ type MessageResponse struct {
 
 // HistoryResponse is the Python-compatible GET /session/{id}/history response.
 type HistoryResponse struct {
-	Messages []MessageResponse `json:"messages"`
-	Total    int               `json:"total"`
-	HasMore  bool              `json:"has_more"`
+	SessionID string            `json:"session_id"`
+	Status    string            `json:"status"`
+	Mode      string            `json:"mode"`
+	Messages  []MessageResponse `json:"messages"`
+	Total     int               `json:"total"`
+	HasMore   bool              `json:"has_more"`
 }
 
 // SessionListResponse is the Python-compatible GET /session/list response.
@@ -110,6 +164,7 @@ type SessionResponse struct {
 	SessionID    string  `json:"session_id"`
 	UserID       string  `json:"user_id"`
 	Topic        *string `json:"topic"`
+	Mode         string  `json:"mode"`
 	Status       string  `json:"status"`
 	StartedAt    string  `json:"started_at"`
 	EndedAt      *string `json:"ended_at"`
@@ -157,11 +212,12 @@ type ChatAgent interface {
 
 // ChatAgentInput carries session context into the configured agent runtime.
 type ChatAgentInput struct {
-	SessionID   string
-	StudentID   string
-	Message     string
-	Attachments []string
-	History     []Message
+	SessionID         string
+	StudentID         string
+	Message           string
+	SystemInstruction string
+	Attachments       []string
+	History           []Message
 }
 
 // ChatAgentOutput stores the generated assistant message.
@@ -224,6 +280,10 @@ func (s *Service) CreateSession(ctx context.Context, userID string, topic *strin
 	if mode == "" {
 		mode = "chat"
 	}
+	mode, err := validateSessionMode(mode)
+	if err != nil {
+		return CreateSessionResponse{}, err
+	}
 	now := s.now()
 	sessionID, err := s.newID()
 	if err != nil {
@@ -239,6 +299,7 @@ func (s *Service) CreateSession(ctx context.Context, userID string, topic *strin
 		StudentID:    userID,
 		IsActive:     true,
 		CurrentTopic: topic,
+		Mode:         mode,
 		StartedAt:    now,
 	}
 	welcome := Message{
@@ -272,6 +333,12 @@ func (s *Service) CreateSession(ctx context.Context, userID string, topic *strin
 
 // ProcessChat stores the user message and generates a compatible assistant SSE payload.
 func (s *Service) ProcessChat(ctx context.Context, sessionID string, userID string, message string, attachments []string) (ChatResult, error) {
+	if strings.TrimSpace(message) == "" {
+		return ChatResult{}, ErrEmptyMessage
+	}
+	if len(message) > maxChatMessageBytes {
+		return ChatResult{}, ErrMessageTooLarge
+	}
 	attachments, err := normalizeChatAttachments(attachments)
 	if err != nil {
 		return ChatResult{}, err
@@ -283,10 +350,23 @@ func (s *Service) ProcessChat(ctx context.Context, sessionID string, userID stri
 	if !ok || !current.IsActive {
 		return ChatResult{}, ErrNotFound
 	}
+	firstChat, hasFirstChat, err := s.repo.GetFirstChatRequest(ctx, sessionID)
+	if err != nil {
+		return ChatResult{}, err
+	}
+	if hasFirstChat && firstChat.CompletedAt == nil {
+		return ChatResult{}, ErrStartChatInProgress
+	}
+	systemInstruction := sessionModeInstruction(current.Mode)
+	historyByteBudget, ok := chatHistoryByteBudget(message, systemInstruction, attachments)
+	if !ok {
+		return ChatResult{}, ErrMessageTooLarge
+	}
 	history, err := s.recentHistory(ctx, sessionID)
 	if err != nil {
 		return ChatResult{}, err
 	}
+	history = selectRecentChatHistory(history, historyByteBudget)
 	if s.guard != nil {
 		lease, err := s.guard.Acquire(ctx, userID, "session_chat", message, true)
 		if err != nil {
@@ -294,56 +374,22 @@ func (s *Service) ProcessChat(ctx context.Context, sessionID string, userID stri
 		}
 		defer releaseAILease(lease)
 	}
-	now := s.now()
-	userMessageID, err := s.newID()
+	ids, err := s.newChatMessageIDs()
 	if err != nil {
 		return ChatResult{}, err
 	}
-	assistantMessageID, err := s.newID()
-	if err != nil {
-		return ChatResult{}, err
-	}
-	taskID, err := s.newID()
-	if err != nil {
-		return ChatResult{}, err
-	}
+	userCreatedAt := s.now()
 	if err := s.repo.InsertMessage(ctx, Message{
-		ID:          userMessageID,
+		ID:          ids.UserMessageID,
 		SessionID:   sessionID,
 		Role:        "user",
 		Content:     message,
 		Attachments: attachments,
-		CreatedAt:   now,
+		CreatedAt:   userCreatedAt,
 	}); err != nil {
 		return ChatResult{}, err
 	}
-	output, metered := s.generateAssistant(ctx, ChatAgentInput{
-		SessionID:   sessionID,
-		StudentID:   userID,
-		Message:     message,
-		Attachments: attachments,
-		History:     history,
-	})
-	agent := output.Agent
-	if agent == "" {
-		agent = "tutor"
-	}
-	assistantMessage := Message{
-		ID:        assistantMessageID,
-		SessionID: sessionID,
-		Role:      "assistant",
-		Content:   output.Content,
-		Agent:     &agent,
-		CreatedAt: now,
-	}
-	if metered {
-		if err := s.repo.InsertMeteredAssistantMessage(ctx, userID, assistantMessage, airiskapp.UsageDate(now)); err != nil {
-			return ChatResult{}, err
-		}
-	} else if err := s.repo.InsertMessage(ctx, assistantMessage); err != nil {
-		return ChatResult{}, err
-	}
-	return ChatResult{TaskID: taskID, MessageID: assistantMessageID, Agent: agent, Content: output.Content}, nil
+	return s.completeChat(ctx, current, userID, message, attachments, history, systemInstruction, userCreatedAt, ids)
 }
 
 func normalizeChatAttachments(attachments []string) ([]string, error) {
@@ -365,17 +411,21 @@ func normalizeChatAttachments(attachments []string) ([]string, error) {
 }
 
 func (s *Service) recentHistory(ctx context.Context, sessionID string) ([]Message, error) {
-	const limit = 30
-	messages, total, err := s.repo.ListMessages(ctx, sessionID, limit, 0)
+	messages, total, err := s.repo.ListMessages(ctx, sessionID, maxChatHistoryMessages, 0)
 	if err != nil {
 		return nil, err
 	}
-	if total <= limit {
+	if total <= maxChatHistoryMessages {
 		return messages, nil
 	}
-	messages, _, err = s.repo.ListMessages(ctx, sessionID, limit, total-limit)
+	messages, _, err = s.repo.ListMessages(ctx, sessionID, maxChatHistoryMessages, total-maxChatHistoryMessages)
 	if err != nil {
 		return nil, err
+	}
+	// The page boundary can land on an assistant reply whose user question is
+	// just outside the window. Do not send that orphaned reply to the model.
+	if len(messages) > 0 && normalizedChatRole(messages[0].Role) == "assistant" {
+		messages = messages[1:]
 	}
 	return messages, nil
 }
@@ -415,10 +465,12 @@ func releaseAILease(lease airiskapp.Lease) {
 
 // GetHistory returns a page of session messages.
 func (s *Service) GetHistory(ctx context.Context, sessionID string, userID string, limit int, offset int) (HistoryResponse, error) {
-	if _, ok, err := s.repo.GetSession(ctx, sessionID, userID); err != nil {
+	session, ok, err := s.repo.GetSession(ctx, sessionID, userID)
+	if err != nil {
 		return HistoryResponse{}, err
-	} else if !ok {
-		return HistoryResponse{Messages: []MessageResponse{}, Total: 0, HasMore: false}, nil
+	}
+	if !ok {
+		return HistoryResponse{}, ErrNotFound
 	}
 	limit = clampInt(limit, 1, 100, 50)
 	if offset < 0 {
@@ -429,19 +481,22 @@ func (s *Service) GetHistory(ctx context.Context, sessionID string, userID strin
 		return HistoryResponse{}, err
 	}
 	return HistoryResponse{
-		Messages: toMessageResponses(messages),
-		Total:    total,
-		HasMore:  offset+limit < total,
+		SessionID: session.ID,
+		Status:    sessionStatus(session.IsActive),
+		Mode:      session.Mode,
+		Messages:  toMessageResponses(messages),
+		Total:     total,
+		HasMore:   offset+limit < total,
 	}, nil
 }
 
 // GetSessions returns the user's session list.
-func (s *Service) GetSessions(ctx context.Context, userID string, limit int, offset int) (SessionListResponse, error) {
+func (s *Service) GetSessions(ctx context.Context, userID string, limit int, offset int, withUserMessages bool) (SessionListResponse, error) {
 	limit = clampInt(limit, 1, 50, 20)
 	if offset < 0 {
 		offset = 0
 	}
-	rows, total, err := s.repo.ListSessions(ctx, userID, limit, offset)
+	rows, total, err := s.repo.ListSessions(ctx, userID, limit, offset, withUserMessages)
 	if err != nil {
 		return SessionListResponse{}, err
 	}
@@ -467,17 +522,20 @@ func (s *Service) EndSession(ctx context.Context, sessionID string, userID strin
 	return EndResponse{Status: "ended", Message: "会话已成功结束"}, nil
 }
 
-// UpdateSessionMode updates the session topic to the mode label.
+// UpdateSessionMode changes the session mode without changing its topic.
 func (s *Service) UpdateSessionMode(ctx context.Context, sessionID string, userID string, mode string) (UpdateModeResponse, error) {
-	topicValue := modeTopic(mode)
-	topic, ok, err := s.repo.UpdateSessionTopic(ctx, sessionID, userID, topicValue)
+	mode, err := validateSessionMode(mode)
+	if err != nil {
+		return UpdateModeResponse{}, err
+	}
+	topic, ok, err := s.repo.UpdateSessionMode(ctx, sessionID, userID, mode)
 	if err != nil {
 		return UpdateModeResponse{}, err
 	}
 	if !ok {
 		return UpdateModeResponse{}, ErrNotFound
 	}
-	return UpdateModeResponse{SessionID: sessionID, Mode: mode, Topic: &topic}, nil
+	return UpdateModeResponse{SessionID: sessionID, Mode: mode, Topic: topic}, nil
 }
 
 // DeleteSession deletes one owned session.
@@ -533,6 +591,7 @@ func toSessionResponse(row SessionListItem) SessionResponse {
 		SessionID:    session.ID,
 		UserID:       session.StudentID,
 		Topic:        ptrutil.Clone(session.CurrentTopic),
+		Mode:         session.Mode,
 		Status:       sessionStatus(session.IsActive),
 		StartedAt:    timefmt.DateTimeMicros(session.StartedAt),
 		EndedAt:      timefmt.OptionalDateTimeMicros(session.EndedAt),
@@ -545,6 +604,15 @@ func sessionStatus(active bool) string {
 		return "active"
 	}
 	return "completed"
+}
+
+func validateSessionMode(mode string) (string, error) {
+	switch mode {
+	case "study", "chat", "practice", "explain":
+		return mode, nil
+	default:
+		return "", ErrInvalidMode
+	}
 }
 
 func welcomeMessage(mode string) string {
@@ -560,18 +628,16 @@ func welcomeMessage(mode string) string {
 	}
 }
 
-func modeTopic(mode string) string {
+func sessionModeInstruction(mode string) string {
 	switch mode {
 	case "study":
-		return "学习模式"
+		return "当前会话处于学习模式。请循序渐进地讲授知识，先确认学生已有基础，再分步骤解释、检查理解并给出下一步学习建议。"
 	case "practice":
-		return "练习模式"
+		return "当前会话处于练习模式。请以练习和即时反馈为主，优先引导学生自己作答，再根据回答提供提示、纠错和巩固题。"
 	case "explain":
-		return "讲解模式"
-	case "chat":
-		return "聊天模式"
+		return "当前会话处于讲解模式。请深入解释概念、公式来源和推理过程，使用必要的例子与反例，并指出常见误区。"
 	default:
-		return mode
+		return "当前会话处于聊天模式。请直接、清晰地回答学生的数学问题，并在信息不足时先询问必要条件。"
 	}
 }
 

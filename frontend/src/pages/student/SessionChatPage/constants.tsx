@@ -1,4 +1,4 @@
-import type { ChatMode } from '@/modules/session/store/sessionSlice';
+import type { ChatMode } from '@/modules/session/types';
 import { GraduationCap, MessageCircle, Target, Lightbulb, Calculator, TrendingUp, Brain, HelpCircle } from 'lucide-react';
 
 export interface ModeConfig {
