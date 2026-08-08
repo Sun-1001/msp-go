@@ -829,7 +829,10 @@ func validateConfig(cfg Config) error {
 }
 
 func toMessages(input sessionapp.ChatAgentInput) []adk.Message {
-	messages := make([]adk.Message, 0, len(input.History)+1)
+	messages := make([]adk.Message, 0, len(input.History)+2)
+	if instruction := strings.TrimSpace(input.SystemInstruction); instruction != "" {
+		messages = append(messages, schema.SystemMessage(instruction))
+	}
 	for _, history := range input.History {
 		content := strings.TrimSpace(history.Content)
 		if content == "" {

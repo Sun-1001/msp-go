@@ -87,7 +87,7 @@ docker compose up -d backend frontend
 
 默认生产链路不运行 Python 或 Alembic。
 
-迁移 runner 不随 API 自动执行。合并包含 `backend/migrations/*.up.sql` 的变更后，必须在启动新版本 API 前执行一次迁移，并确认重复执行没有待应用版本：
+迁移 runner 不随 API 自动执行。合并包含 `backend/migrations/*.up.sql` 的变更后，必须在启动新版本 API 前执行一次迁移，并确认重复执行没有待应用版本。已有环境不得在旧 API 仍接收写请求时直接执行迁移，应使用更新脚本先停止应用、完成备份，再迁移并启动新版本：
 
 ```powershell
 Set-Location backend
@@ -104,11 +104,11 @@ FROM public.go_schema_migrations
 ORDER BY version;
 ```
 
-当前生产迁移链由 `0001` 至 `0011` 十一个迁移组成。每日一题及其班级自动提醒、公众号专用事件位于已发布的 `0005_daily_question`；`0006` 至 `0008` 交付画像能力；每日题一致性通过 `0009_daily_question_integrity` 向前追加；错题本完整闭环由 `0010_mistake_review_tasks` 交付；消息中心内的全站论坛、互动通知和索引由 `0011_forum_center` 交付。远端共享迁移账本只到 version 9，因此升级应先应用 `0010`，再应用 `0011`。
+当前迁移链由 `0001` 至 `0012` 十二个迁移组成。每日一题及其班级自动提醒、公众号专用事件位于 `0005_daily_question`；`0006` 至 `0008` 交付画像能力；每日题一致性通过 `0009_daily_question_integrity` 向前追加；错题本完整闭环由 `0010_mistake_review_tasks` 交付；消息中心内的全站论坛、互动通知和索引由 `0011_forum_center` 交付；`0012_learning_session_mode` 为 AI 学习会话增加独立模式字段。
 
-全新空库第一次 migration runner 应记录版本 `1` 至 `11`；远端 version 9 数据库应依次应用 version 10 和 11，version 10 数据库只应用 version 11，紧接着重复执行应为 `applied_count=0`。迁移 10 只为每个学生、每道题最新仍未解决的错误回填任务；迁移 11 创建论坛表和互动通知表。迁移会扫描作答事实，校准画像和 DKT，建立索引和外键，并补齐全部已提交作答的题面快照，因此应停止应用写入、完成可恢复备份后在维护窗口执行。旧普通作答的原始题目版本无法恢复，只使用迁移时最佳证据稳定化，不据此重算掌握度。新 API 必须在迁移成功后一次性切换，不能与仍写空快照的旧实例长期混跑。
+全新空库第一次 migration runner 应记录版本 `1` 至 `12`；version 11 数据库只应用 version 12，紧接着重复执行应为 `applied_count=0`。迁移 10 扫描作答事实并补齐错题闭环，迁移 11 创建论坛表和互动通知表，迁移 12 为既有会话确定性回填模式并建立取值约束。执行任何待应用迁移前都应停止应用写入、完成可恢复备份，并在维护窗口迁移；新 API 必须在迁移成功后一次性切换，不能与仍按旧字段语义写入的实例长期混跑。
 
-迁移后应确认版本 11 已记录，论坛表、论坛通知未读索引和 `forum_posts` 精选字段均已生效；同时确认所有已提交 attempt 的五个必需快照字段非空，知识点均引用真实节点，`mastery_vector` 为数值范围 `0..1` 的对象，复合归属外键、幂等索引和 `ck_content_attempts_review_question_snapshot` 均已生效，且临时 `msp_0011_*`、`msp_0012_*` 函数均不存在。曾完整执行未发布草稿 version 10 至 13 的本地数据库已经具备最终结构，但账本与当前单文件链不兼容；禁止删除 version 10 后重放合并迁移，必须先备份、核对最终结构，再在排他锁内实施仅迁移元数据的收敛；曾以旧错题草稿占用 version 11 的数据库必须使用迁移 README 中的专用校准流程。
+迁移后应确认版本 12 已记录，论坛结构与错题完整性约束均已生效，`learning_sessions.mode` 非空且只允许 `study`、`chat`、`practice`、`explain`。同时确认临时 `msp_0011_*`、`msp_0012_*` 函数均不存在。曾完整执行未发布草稿 version 10 至 13 的本地数据库已经具备部分最终结构，但账本与当前迁移链可能不兼容；禁止删除版本记录后盲目重放，必须先备份、核对最终结构，再按迁移 README 中经过评审的专用校准流程处理。
 
 重整前执行过旧开发迁移 `0001` 至 `0015` 的数据库不属于可原地升级目标。migration runner 会校验迁移版本、名称和未知记录，并在账本与当前代码不一致时拒绝继续。可丢弃的开发库应删除并重建；任何不可丢弃的库必须先停止发布，完成实际 schema、业务数据和 `go_schema_migrations` 核对，再设计专门的数据保留迁移，禁止删除版本记录后重放基线。
 
@@ -123,12 +123,13 @@ ORDER BY version;
 | 层级 | 默认超时 |
 | --- | ---: |
 | 普通 Go API 总请求预算 | 30 秒 |
-| 同步 AI 生成接口总请求预算 | 55 秒 |
+| 练习、每日题准备和画像 AI 接口总请求预算 | 55 秒 |
+| AI 学习会话聊天总请求预算 | 130 秒 |
 | 前端生成请求 Axios 超时 | 60 秒 |
 | Nginx `/api/` 上游响应读取超时 | 300 秒 |
 | Go HTTP `WriteTimeout` | 310 秒 |
 
-`EXERCISE_GENERATION_REQUEST_TIMEOUT_SECONDS` 是 `/exercise/generate`、`/daily-question/today/prepare` 和 `/portrait/generate` 三个同步长时间生成接口共享的总请求预算。生产环境通常应保持默认 55 秒；画像模型默认 45 秒，后端会保留剩余预算用于模板降级和保存。前端练习与画像生成请求默认等待 60 秒；如需把后端预算配置到 60 秒以上，必须同步调整对应前端请求超时，如需超过 300 秒还必须同步调整所有边缘代理。Nginx 的 300 秒仅是代理安全上限，不代表业务请求应持续运行 300 秒。
+`EXERCISE_GENERATION_REQUEST_TIMEOUT_SECONDS` 只用于 `/exercise/generate`、`/daily-question/today/prepare` 和 `/portrait/generate`，默认 55 秒。`SESSION_CHAT_REQUEST_TIMEOUT_SECONDS` 独立用于精确的 `POST /session/start-chat` 和 `POST /session/{session_id}/chat`，默认 130 秒；该预算覆盖最长 60 秒内容审核、最长 60 秒导师调用，并为降级回复和消息保存保留余量。会话聊天使用 SSE，不受前端生成请求的 60 秒 Axios 超时约束；已有更短的父级 context 仍会优先结束请求。若将任一后端预算配置到 300 秒以上，必须同步调整所有边缘代理和 Go HTTP 写入超时。Nginx 的 300 秒仅是代理安全上限，不代表业务请求应持续运行 300 秒。
 
 - `/api/` 指向 Go API；
 - 微信回调 `GET/POST /api/v1/integrations/wechat/official-account/callback` 必须通过公网 HTTPS 原样转发到 Go API，不能要求站内 JWT；该路由使用微信签名和时间戳校验请求；

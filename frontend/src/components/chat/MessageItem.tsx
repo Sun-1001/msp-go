@@ -156,6 +156,7 @@ export const MessageItem = React.memo<MessageItemProps>(
     if (prevProps.id !== nextProps.id) return false;
     if (prevProps.content !== nextProps.content) return false;
     if (prevProps.role !== nextProps.role) return false;
+    if (prevProps.modeName !== nextProps.modeName) return false;
     if (prevProps.isLoading !== nextProps.isLoading) return false;
     if (prevProps.isStreamingContent !== nextProps.isStreamingContent) return false;
     // attachments: 引用比较 + 逐项比较，避免 JSON.stringify 开销

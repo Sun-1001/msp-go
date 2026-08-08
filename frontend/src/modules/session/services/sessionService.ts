@@ -7,13 +7,16 @@
 import { apiClient } from '@/libs/http/apiClient';
 import { createSSEConnection, cancelTask, type SSEHandlers, type SSEController } from '@/libs/http/sseClient';
 import { logger } from '@/libs/utils/logger';
+import type { SessionMode } from '@/modules/session/types';
+
+export type { SessionMode } from '@/modules/session/types';
 
 const sessionLogger = logger.createContextLogger('SessionService');
 
 // ========== 类型定义 ==========
 
-/** 会话模式 */
-export type SessionMode = 'study' | 'chat' | 'practice' | 'explain';
+/** 会话状态 */
+export type SessionStatus = 'active' | 'completed' | 'paused';
 
 /** 消息响应 */
 export interface MessageResponse {
@@ -30,8 +33,8 @@ export interface CreateSessionResponse {
   session_id: string;
   user_id: string;
   topic: string | null;
-  mode: string;
-  status: string;
+  mode: SessionMode;
+  status: SessionStatus;
   created_at: string;
   welcome_message: MessageResponse;
 }
@@ -41,7 +44,8 @@ export interface SessionResponse {
   session_id: string;
   user_id: string;
   topic: string | null;
-  status: 'active' | 'completed' | 'paused';
+  mode: SessionMode;
+  status: SessionStatus;
   started_at: string;
   ended_at: string | null;
   message_count: number;
@@ -53,8 +57,23 @@ export interface SessionListResponse {
   total: number;
 }
 
+export interface GetSessionsOptions {
+  withUserMessages?: boolean;
+}
+
+export interface StartChatStreamRequest {
+  sessionId: string;
+  topic?: string;
+  mode: SessionMode;
+  message: string;
+  attachments?: string[];
+}
+
 /** 历史消息响应 */
 export interface HistoryResponse {
+  session_id: string;
+  status: SessionStatus;
+  mode: SessionMode;
   messages: MessageResponse[];
   total: number;
   has_more: boolean;
@@ -63,7 +82,7 @@ export interface HistoryResponse {
 /** 更新模式响应 */
 export interface UpdateModeResponse {
   session_id: string;
-  mode: string;
+  mode: SessionMode;
   topic: string | null;
 }
 
@@ -80,6 +99,25 @@ export interface BatchDeleteResponse {
   message: string;
 }
 
+const MAX_HISTORY_PAGE_SIZE = 100;
+
+const fetchHistoryPage = async (
+  sessionId: string,
+  limit: number,
+  offset: number
+): Promise<HistoryResponse> => {
+  sessionLogger.debug('Fetching history', { sessionId, limit, offset });
+
+  const response = await apiClient.get<HistoryResponse>(
+    `/session/${sessionId}/history`,
+    {
+      params: { limit, offset },
+    }
+  );
+
+  return response.data;
+};
+
 // ========== 服务实现 ==========
 
 export const sessionService = {
@@ -92,18 +130,63 @@ export const sessionService = {
    */
   async createSession(
     topic?: string,
-    mode: SessionMode = 'chat'
+    mode: SessionMode = 'chat',
+    signal?: AbortSignal
   ): Promise<CreateSessionResponse> {
     sessionLogger.debug('Creating session', { topic, mode });
 
-    const response = await apiClient.post<CreateSessionResponse>('/session/start', {
-      topic,
-      mode,
-    });
+    const response = await apiClient.post<CreateSessionResponse>(
+      '/session/start',
+      { topic, mode },
+      { signal }
+    );
 
     sessionLogger.info('Session created', { sessionId: response.data.session_id });
 
     return response.data;
+  },
+
+  /**
+   * 原子创建草稿会话及首条用户消息，再以 SSE 接收导师回复。
+   */
+  startChatStream(
+    request: StartChatStreamRequest,
+    handlers: SSEHandlers
+  ): SSEController {
+    sessionLogger.debug('Starting first chat stream', {
+      mode: request.mode,
+      messageLength: request.message.length,
+    });
+
+    return createSSEConnection(
+      '/api/v1/session/start-chat',
+      {
+        session_id: request.sessionId,
+        topic: request.topic,
+        mode: request.mode,
+        message: request.message,
+        attachments: request.attachments || null,
+      },
+      {
+        ...handlers,
+        onSessionInfo: (sessionId) => {
+          sessionLogger.info('First chat session materialized', { sessionId });
+          handlers.onSessionInfo?.(sessionId);
+        },
+        onOpen: () => {
+          sessionLogger.debug('First chat stream opened');
+          handlers.onOpen?.();
+        },
+        onClose: () => {
+          sessionLogger.debug('First chat stream closed');
+          handlers.onClose?.();
+        },
+        onError: (error) => {
+          sessionLogger.error('First chat stream error', { error });
+          handlers.onError?.(error);
+        },
+      }
+    );
   },
 
   /**
@@ -165,16 +248,30 @@ export const sessionService = {
     limit: number = 50,
     offset: number = 0
   ): Promise<HistoryResponse> {
-    sessionLogger.debug('Fetching history', { sessionId, limit, offset });
+    return fetchHistoryPage(sessionId, limit, offset);
+  },
 
-    const response = await apiClient.get<HistoryResponse>(
-      `/session/${sessionId}/history`,
-      {
-        params: { limit, offset },
-      }
-    );
+  /**
+   * 获取最近一页会话历史。
+   *
+   * 保留 getHistory 的原始分页语义，并在服务边界内处理总数变化，
+   * 避免页面加载和异常对账只取到长会话最早的消息。
+   */
+  async getLatestHistory(
+    sessionId: string,
+    limit: number = MAX_HISTORY_PAGE_SIZE
+  ): Promise<HistoryResponse> {
+    const pageSize = Math.min(Math.max(Math.trunc(limit), 1), MAX_HISTORY_PAGE_SIZE);
+    const firstPage = await fetchHistoryPage(sessionId, pageSize, 0);
+    if (!firstPage.has_more) return firstPage;
 
-    return response.data;
+    const latestOffset = Math.max(firstPage.total - pageSize, 0);
+    const latestPage = await fetchHistoryPage(sessionId, pageSize, latestOffset);
+    if (!latestPage.has_more) return latestPage;
+
+    // 消息可能在两次请求之间继续落库；最多重算一次最新偏移。
+    const refreshedOffset = Math.max(latestPage.total - pageSize, 0);
+    return fetchHistoryPage(sessionId, pageSize, refreshedOffset);
   },
 
   /**
@@ -186,12 +283,17 @@ export const sessionService = {
    */
   async getSessions(
     limit: number = 20,
-    offset: number = 0
+    offset: number = 0,
+    options: GetSessionsOptions = {}
   ): Promise<SessionListResponse> {
-    sessionLogger.debug('Fetching sessions', { limit, offset });
+    sessionLogger.debug('Fetching sessions', { limit, offset, ...options });
 
     const response = await apiClient.get<SessionListResponse>('/session/list', {
-      params: { limit, offset },
+      params: {
+        limit,
+        offset,
+        with_user_messages: options.withUserMessages || undefined,
+      },
     });
 
     return response.data;

@@ -42,6 +42,7 @@ type Config struct {
 	CORSAllowHeaders       []string
 	RequestTimeout         time.Duration
 	ExerciseGenTimeout     time.Duration
+	SessionChatTimeout     time.Duration
 	ReadHeaderTimeout      time.Duration
 	ReadTimeout            time.Duration
 	WriteTimeout           time.Duration
@@ -159,6 +160,7 @@ func Load() (Config, error) {
 		CORSAllowHeaders:          envList("CORS_ALLOW_HEADERS", []string{"Authorization", "Content-Type", "Accept", "Origin", "X-Requested-With", "X-CSRF-Token"}),
 		RequestTimeout:            envSeconds("REQUEST_TIMEOUT_DEFAULT", 30*time.Second),
 		ExerciseGenTimeout:        envSeconds("EXERCISE_GENERATION_REQUEST_TIMEOUT_SECONDS", 55*time.Second),
+		SessionChatTimeout:        envSeconds("SESSION_CHAT_REQUEST_TIMEOUT_SECONDS", 130*time.Second),
 		ReadHeaderTimeout:         envSeconds("HTTP_READ_HEADER_TIMEOUT", 5*time.Second),
 		ReadTimeout:               envSeconds("HTTP_READ_TIMEOUT", 35*time.Second),
 		WriteTimeout:              envSeconds("HTTP_WRITE_TIMEOUT", 310*time.Second),
@@ -250,6 +252,9 @@ func Load() (Config, error) {
 	}
 	if cfg.ExerciseGenTimeout <= 0 {
 		return Config{}, errors.New("EXERCISE_GENERATION_REQUEST_TIMEOUT_SECONDS must be greater than 0")
+	}
+	if cfg.SessionChatTimeout <= 0 {
+		return Config{}, errors.New("SESSION_CHAT_REQUEST_TIMEOUT_SECONDS must be greater than 0")
 	}
 	if cfg.DBPoolSize <= 0 {
 		return Config{}, errors.New("DB_POOL_SIZE must be greater than 0")

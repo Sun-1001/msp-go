@@ -5,6 +5,8 @@ import type { SessionMessage } from '../../../../types';
 
 interface ChatMessagesProps {
   messages: SessionMessage[];
+  draftWelcome?: string;
+  draftModeName?: string;
   streamingMessageId: string | null;
   isLoading: boolean;
   error: string | null;
@@ -12,7 +14,7 @@ interface ChatMessagesProps {
 }
 
 export const ChatMessages = React.memo<ChatMessagesProps>(
-  ({ messages, streamingMessageId, isLoading, error, messagesContainerRef }) => {
+  ({ messages, draftWelcome, draftModeName, streamingMessageId, isLoading, error, messagesContainerRef }) => {
     return (
       <div
         ref={messagesContainerRef}
@@ -32,6 +34,13 @@ export const ChatMessages = React.memo<ChatMessagesProps>(
               <span>{error}</span>
             </div>
           </div>
+        ) : draftWelcome && messages.length === 0 ? (
+          <MessageItem
+            id="draft-welcome"
+            role="assistant"
+            content={draftWelcome}
+            modeName={draftModeName ?? 'AI 助手'}
+          />
         ) : (
           messages.map((message) => (
             <MessageItem
@@ -39,7 +48,7 @@ export const ChatMessages = React.memo<ChatMessagesProps>(
               id={message.id}
               role={message.role === 'user' ? 'student' : message.role}
               content={message.content}
-              modeName="聊天模式"
+              modeName="AI 助手"
               isLoading={message.id === streamingMessageId && message.content === ''}
               isStreamingContent={message.id === streamingMessageId && message.content !== ''}
               attachments={message.attachments}

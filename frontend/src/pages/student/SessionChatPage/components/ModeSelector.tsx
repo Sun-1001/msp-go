@@ -1,7 +1,7 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { ChevronDown } from 'lucide-react';
 import { cn } from '../../../../libs/utils/cn';
-import type { ChatMode } from '@/modules/session/store/sessionSlice';
+import type { ChatMode } from '@/modules/session/types';
 import type { ModeConfig } from '../constants.tsx';
 
 interface ModeSelectorProps {

@@ -35,7 +35,7 @@ func main() {
 		"deleted_rows", result.DeletedRows,
 	)
 	if result.Applied {
-		logger.Info("run the ordinary migration command twice to apply forum_center and verify idempotency")
+		logger.Info("run the ordinary migration command twice to apply all pending canonical migrations and verify idempotency")
 	}
 }
 

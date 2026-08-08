@@ -107,7 +107,20 @@ func NewHandler(cfg config.Config, logger *slog.Logger, checker health.Checker, 
 }
 
 func requestTimeout(cfg config.Config, r *http.Request) time.Duration {
+	if isSessionChatRequest(r, cfg.APIV1Prefix) {
+		return sessionChatTimeout(cfg)
+	}
 	if isLongRunningAIRequest(r, cfg.APIV1Prefix) {
+		return cfg.ExerciseGenTimeout
+	}
+	return cfg.RequestTimeout
+}
+
+func sessionChatTimeout(cfg config.Config) time.Duration {
+	if cfg.SessionChatTimeout > 0 {
+		return cfg.SessionChatTimeout
+	}
+	if cfg.ExerciseGenTimeout > 0 {
 		return cfg.ExerciseGenTimeout
 	}
 	return cfg.RequestTimeout
@@ -122,9 +135,20 @@ func isLongRunningAIRequest(r *http.Request, apiPrefix string) bool {
 		apiPrefix + "/daily-question/today/prepare",
 		apiPrefix + "/portrait/generate":
 		return true
-	default:
+	}
+	return false
+}
+
+func isSessionChatRequest(r *http.Request, apiPrefix string) bool {
+	if r.Method != http.MethodPost {
 		return false
 	}
+	if r.URL.Path == apiPrefix+"/session/start-chat" {
+		return true
+	}
+	sessionPath := strings.TrimPrefix(r.URL.Path, apiPrefix+"/session/")
+	parts := strings.Split(sessionPath, "/")
+	return len(parts) == 2 && parts[0] != "" && parts[1] == "chat"
 }
 
 func muxWithFallbacks(mux *http.ServeMux) http.Handler {

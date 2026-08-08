@@ -1,10 +1,14 @@
 import { useState, useCallback, useRef, useEffect } from 'react';
 import { uploadService } from '@/modules/upload/services/uploadService';
+import { MAX_CHAT_IMAGES } from '@/modules/session/limits';
 
-export const useImageUpload = () => {
+interface UseImageUploadOptions {
+  onError?: (message: string) => void;
+}
+
+export const useImageUpload = ({ onError }: UseImageUploadOptions = {}) => {
   const [selectedImages, setSelectedImages] = useState<File[]>([]);
   const [previewUrls, setPreviewUrls] = useState<string[]>([]);
-  const [isUploading, setIsUploading] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const previewUrlsRef = useRef<string[]>([]);
 
@@ -13,19 +17,27 @@ export const useImageUpload = () => {
     const files = e.target.files;
     if (!files || files.length === 0) return;
 
-    const newFiles: File[] = [];
-    const newUrls: string[] = [];
+    const validFiles: File[] = [];
+    let validationError: string | undefined;
 
     for (let i = 0; i < files.length; i++) {
       const file = files[i];
       const validation = uploadService.validateImageFile(file);
       if (validation.valid) {
-        newFiles.push(file);
-        newUrls.push(URL.createObjectURL(file));
-      } else {
-        console.error(validation.error);
+        validFiles.push(file);
+      } else if (!validationError) {
+        validationError = validation.error;
       }
     }
+
+    const remainingSlots = Math.max(MAX_CHAT_IMAGES - selectedImages.length, 0);
+    const newFiles = validFiles.slice(0, remainingSlots);
+    const newUrls = newFiles.map((file) => URL.createObjectURL(file));
+
+    if (validFiles.length > remainingSlots) {
+      validationError = `每次最多上传 ${MAX_CHAT_IMAGES} 张图片`;
+    }
+    if (validationError) onError?.(validationError);
 
     setSelectedImages((prev) => [...prev, ...newFiles]);
     setPreviewUrls((prev) => {
@@ -38,7 +50,7 @@ export const useImageUpload = () => {
     if (fileInputRef.current) {
       fileInputRef.current.value = '';
     }
-  }, []);
+  }, [onError, selectedImages.length]);
 
   // 移除选中的图片
   const handleRemoveImage = useCallback((index: number) => {
@@ -71,8 +83,6 @@ export const useImageUpload = () => {
   return {
     selectedImages,
     previewUrls,
-    isUploading,
-    setIsUploading,
     fileInputRef,
     handleImageSelect,
     handleRemoveImage,
