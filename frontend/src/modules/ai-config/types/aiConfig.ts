@@ -147,6 +147,7 @@ export interface LLMModel {
   model_id: string;
   default_temperature: number;
   default_max_tokens: number | null;
+  /** @deprecated Top P is ignored by the runtime. */
   default_top_p: number | null;
   default_timeout: number;
   default_max_retries: number;
@@ -205,6 +206,7 @@ export interface AgentModelConfig {
   model_key: string | null;
   temperature_override: number | null;
   max_tokens_override: number | null;
+  /** @deprecated Top P is ignored by the runtime. */
   top_p_override: number | null;
   timeout_override: number | null;
   max_retries_override: number | null;
@@ -226,7 +228,6 @@ export interface UpdateAgentConfigRequest {
   model_id?: string;
   temperature_override?: number | null;
   max_tokens_override?: number | null;
-  top_p_override?: number | null;
   timeout_override?: number | null;
   max_retries_override?: number | null;
   extra_config?: Record<string, unknown>;
