@@ -75,27 +75,6 @@ wait_for_postgres() {
     return 1
 }
 
-wait_for_service() {
-    local service="$1" max_attempts="$2"
-    local attempt container_id state
-    for ((attempt = 1; attempt <= max_attempts; attempt++)); do
-        container_id="$(compose ps -q "$service" 2>/dev/null || true)"
-        if [ -n "$container_id" ]; then
-            state="$(docker inspect --format '{{if .State.Health}}{{.State.Health.Status}}{{else}}{{.State.Status}}{{end}}' "$container_id" 2>/dev/null || true)"
-            case "$state" in
-                healthy|running) return 0 ;;
-                unhealthy|dead|exited)
-                    compose logs --tail=50 "$service" >&2 || true
-                    return 1
-                    ;;
-            esac
-        fi
-        sleep 2
-    done
-    compose logs --tail=50 "$service" >&2 || true
-    return 1
-}
-
 service_container_id() {
     compose ps -a -q "$1" 2>/dev/null || true
 }
@@ -178,15 +157,15 @@ compose config > "$BACKUP_DIR/docker-compose.resolved.yml"
     printf 'frontend_was_running=%s\n' "$FRONTEND_WAS_RUNNING"
 } > "$BACKUP_DIR/previous-images.txt"
 
-echo -e "${BLUE}[1/6] 检查 PostgreSQL...${NC}"
+echo -e "${BLUE}[1/5] 检查 PostgreSQL...${NC}"
 compose up -d postgres redis
 wait_for_postgres "${POSTGRES_WAIT_ATTEMPTS:-30}"
 
-echo -e "${BLUE}[2/6] 拉取目标镜像...${NC}"
+echo -e "${BLUE}[2/5] 拉取目标镜像...${NC}"
 docker pull "${BACKEND_IMAGE}:${VERSION}"
 docker pull "${FRONTEND_IMAGE}:${VERSION}"
 
-echo -e "${BLUE}[3/6] 停止应用写入并备份...${NC}"
+echo -e "${BLUE}[3/5] 停止应用写入并备份...${NC}"
 compose stop backend frontend
 if ! backup_postgres "$BACKUP_DIR/postgres.dump"; then
     echo -e "${RED}PostgreSQL 备份失败，未执行迁移${NC}" >&2
@@ -205,22 +184,15 @@ fi
 
 export BACKEND_IMAGE FRONTEND_IMAGE IMAGE_VERSION="$VERSION"
 
-echo -e "${BLUE}[4/6] 执行数据库迁移...${NC}"
+echo -e "${BLUE}[4/5] 执行数据库迁移...${NC}"
 compose exec -T postgres sh -ec 'psql -v ON_ERROR_STOP=1 -U "${POSTGRES_USER:-postgres}" -d "${POSTGRES_DB:-${POSTGRES_USER:-postgres}}" -c "CREATE EXTENSION IF NOT EXISTS vector"'
 if ! compose run --rm --no-deps backend msp-migrate; then
     echo -e "${RED}数据库迁移失败，应用保持停止；备份位于 ${BACKUP_DIR}${NC}" >&2
     exit 1
 fi
 
-echo -e "${BLUE}[5/6] 启动目标版本...${NC}"
+echo -e "${BLUE}[5/5] 启动目标版本...${NC}"
 compose up -d backend frontend
-
-echo -e "${BLUE}[6/6] 检查应用健康状态...${NC}"
-if ! wait_for_service backend "${BACKEND_WAIT_ATTEMPTS:-45}" || ! wait_for_service frontend "${FRONTEND_WAIT_ATTEMPTS:-30}"; then
-    compose stop backend frontend || true
-    echo -e "${RED}应用健康检查失败，应用已停止；备份位于 ${BACKUP_DIR}${NC}" >&2
-    exit 1
-fi
 
 persist_image_version
 echo -e "${GREEN}=== 更新完成 ===${NC}"

@@ -244,7 +244,7 @@ go test ./internal/adapter/llm/einoagent -run 'TestLiveMathSolver' -count=1 -v
 
 - 使用 `scripts/update.sh --version <镜像标签>` 或按“确认数据库、拉取镜像、停止应用写入、备份数据、迁移、启动新应用”的顺序更新。脚本确认 PostgreSQL 可用并拉取新镜像时旧应用仍保持运行，随后只停止 backend/frontend，不停止数据库和 Redis。
 - 更新脚本在迁移前创建权限收紧的 `backups/<时间戳>/`，保存 `.env`、解析后的 Compose 配置、旧镜像引用及不可变镜像 ID、PostgreSQL custom-format dump，以及存在时的 `uploads.tar.gz`。可通过 `BACKUP_ROOT` 修改备份根目录。该目录被 Git 忽略，但包含生产凭据和业务数据，仍需限制访问并按运维保留策略清理。
-- `postgres.dump` 失败或为空时脚本不会执行迁移，并尝试重新启动原应用容器；迁移失败或新版本健康检查失败时应用保持停止，避免在未知 schema 或不健康状态下继续提供服务。
+- `postgres.dump` 失败或为空时脚本不会执行迁移，并尝试重新启动原应用容器；迁移失败时应用保持停止，避免在未知 schema 状态下继续提供服务。目标版本启动后脚本不再以容器健康状态作为停服门禁，更新结果通过 `docker compose ps` 展示，并应继续执行认证和核心业务 smoke。
 - `uploads/` 不在默认路径时，通过 `MSP_UPLOADS_BACKUP_DIR` 指定宿主机持久化目录。使用 S3/七牛等外部对象存储时，仍需遵循对应供应商的版本与备份策略。
 - 数据迁移不提供自动 down migration；失败时恢复备份，或发布经过评审的补偿性 forward migration。
 - 应用镜像回滚前必须确认旧版本能够读取当前数据库结构。
