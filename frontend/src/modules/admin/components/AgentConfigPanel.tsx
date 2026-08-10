@@ -44,16 +44,21 @@ interface AgentConfigFormData {
   model_key: string;
   temperature_override: string;
   max_tokens_override: string;
-  top_p_override: string;
   timeout_override: string;
   max_retries_override: string;
 }
+
+const parameterOverrideDefaults = {
+  temperature: '1.0',
+  maxTokens: '4096',
+  timeoutSeconds: '1800',
+  maxRetries: '3',
+} as const;
 
 const defaultFormData: AgentConfigFormData = {
   model_key: '',
   temperature_override: '',
   max_tokens_override: '',
-  top_p_override: '',
   timeout_override: '',
   max_retries_override: '',
 };
@@ -82,7 +87,6 @@ export const AgentConfigPanel: React.FC<AgentConfigPanelProps> = ({
           model_key: resolveAgentModelKey(config, models),
           temperature_override: config.temperature_override?.toString() || '',
           max_tokens_override: config.max_tokens_override?.toString() || '',
-          top_p_override: config.top_p_override?.toString() || '',
           timeout_override: config.timeout_override?.toString() || '',
           max_retries_override: config.max_retries_override?.toString() || '',
         };
@@ -140,7 +144,6 @@ export const AgentConfigPanel: React.FC<AgentConfigPanelProps> = ({
         max_tokens_override: data.max_tokens_override
           ? parseInt(data.max_tokens_override, 10)
           : null,
-        top_p_override: data.top_p_override ? parseFloat(data.top_p_override) : null,
         timeout_override: data.timeout_override ? parseInt(data.timeout_override, 10) : null,
         max_retries_override: data.max_retries_override
           ? parseInt(data.max_retries_override, 10)
@@ -285,7 +288,7 @@ export const AgentConfigPanel: React.FC<AgentConfigPanelProps> = ({
                     <div className="flex items-center gap-2 mb-4">
                       <Settings className="w-4 h-4 text-surface-500" />
                       <span className="text-sm font-medium text-surface-700 dark:text-surface-300">
-                        参数覆盖（留空使用模型默认值）
+                        参数覆盖（留空使用服务商模型默认值）
                       </span>
                     </div>
 
@@ -303,7 +306,7 @@ export const AgentConfigPanel: React.FC<AgentConfigPanelProps> = ({
                           onChange={(e) =>
                             updateField(agentType.type, 'temperature_override', e.target.value)
                           }
-                          placeholder="0.7"
+                          placeholder={parameterOverrideDefaults.temperature}
                           className="w-full"
                         />
                       </div>
@@ -319,24 +322,7 @@ export const AgentConfigPanel: React.FC<AgentConfigPanelProps> = ({
                           onChange={(e) =>
                             updateField(agentType.type, 'max_tokens_override', e.target.value)
                           }
-                          placeholder="2048"
-                          className="w-full"
-                        />
-                      </div>
-                      <div>
-                        <label className="block text-xs text-surface-500 dark:text-surface-400 mb-1">
-                          Top P
-                        </label>
-                        <Input
-                          type="number"
-                          step="0.1"
-                          min="0"
-                          max="1"
-                          value={data.top_p_override}
-                          onChange={(e) =>
-                            updateField(agentType.type, 'top_p_override', e.target.value)
-                          }
-                          placeholder="0.9"
+                          placeholder={parameterOverrideDefaults.maxTokens}
                           className="w-full"
                         />
                       </div>
@@ -347,12 +333,12 @@ export const AgentConfigPanel: React.FC<AgentConfigPanelProps> = ({
                         <Input
                           type="number"
                           min="1"
-                          max="600"
+                          max="1800"
                           value={data.timeout_override}
                           onChange={(e) =>
                             updateField(agentType.type, 'timeout_override', e.target.value)
                           }
-                          placeholder="60"
+                          placeholder={parameterOverrideDefaults.timeoutSeconds}
                           className="w-full"
                         />
                       </div>
@@ -368,7 +354,7 @@ export const AgentConfigPanel: React.FC<AgentConfigPanelProps> = ({
                           onChange={(e) =>
                             updateField(agentType.type, 'max_retries_override', e.target.value)
                           }
-                          placeholder="3"
+                          placeholder={parameterOverrideDefaults.maxRetries}
                           className="w-full"
                         />
                       </div>

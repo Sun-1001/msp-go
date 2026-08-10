@@ -71,23 +71,7 @@ func NewAnswerOCR(ctx context.Context, cfg Config) (answerocrapp.Recognizer, err
 	if err := validateConfig(cfg); err != nil {
 		return nil, err
 	}
-	temperature := float32(cfg.Temperature)
-	modelConfig := &einoopenai.ChatModelConfig{
-		APIKey:      strings.TrimSpace(cfg.APIKey),
-		BaseURL:     strings.TrimSpace(cfg.BaseURL),
-		Model:       strings.TrimSpace(cfg.Model),
-		Timeout:     cfg.Timeout,
-		HTTPClient:  modelHTTPClient(cfg),
-		Temperature: &temperature,
-	}
-	if cfg.MaxTokens > 0 {
-		modelConfig.MaxTokens = &cfg.MaxTokens
-	}
-	if cfg.TopP != nil {
-		topP := float32(*cfg.TopP)
-		modelConfig.TopP = &topP
-	}
-	chatModel, err := einoopenai.NewChatModel(ctx, modelConfig)
+	chatModel, err := einoopenai.NewChatModel(ctx, chatModelConfig(cfg))
 	if err != nil {
 		return nil, fmt.Errorf("create Eino answer OCR model: %w", err)
 	}

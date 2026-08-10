@@ -131,6 +131,10 @@ go run ./cmd/migrate  # 重复执行应无待应用版本
 
 不要提交 `.env`、API key、密码或真实用户数据。
 
+后台 AI provider 的 `base_url` 可以填写纯主机根地址或完整 API base；纯主机地址会自动补 `/v1`，只要地址中已有路径就会原样使用，因此 `/v1`、`/proxy/v1`、`/v1beta/openai` 均不会被重复改写。非流式调用会自动兼容 Chat Completions 与 Responses，推理模型按大小写不敏感的 `gpt-5*`、`o1*`、`o3*`、`o4*` 前缀识别，也兼容 `provider/model` 命名空间，并优先尝试 Responses。连接测试对推理模型使用 `max_completion_tokens=32`，对旧式 Chat provider 保留 `max_tokens=32`。
+
+管理端的智能体参数覆盖不再提供或发送 Top P。新发现模型保存 Temperature `1.0`、Max Tokens `4096`、超时 `1800` 秒和最大重试 `3` 次作为配置基线；其中 Temperature、Max Tokens 和最大重试默认不启用，输入留空时前两项不写入 provider 请求且应用层不重试，只有显式覆盖才生效。超时留空时使用模型的 `1800` 秒总请求时限；这与 Cherry Studio 流式请求收到数据后重新计时的 idle timeout 并不完全等价。Agent 的 `MaxIterations` 固定使用独立默认值 `8`，不得再从重试次数推导。数值和开关语义参考 Cherry Studio 当前的 [Assistant 默认设置](https://github.com/CherryHQ/cherry-studio/blob/12498d68ecb4fb261670843ca7a8e4e64a37526a/src/shared/data/types/assistant.ts)、[请求超时](https://github.com/CherryHQ/cherry-studio/blob/12498d68ecb4fb261670843ca7a8e4e64a37526a/src/main/ai/constants.ts) 和 [模型重试策略](https://github.com/CherryHQ/cherry-studio/blob/12498d68ecb4fb261670843ca7a8e4e64a37526a/docs/references/ai/model-retry.md)。`0014_ai_generation_defaults` 会清空历史 Top P，并只校准仍使用旧默认值的模型；显式自定义的其他数值不变。数据库中的旧 Top P 列和后端兼容 JSON 字段暂时保留，但运行时一律忽略。
+
 ## 微信公众号测试号联调
 
 公众号回调由微信服务器从公网发起，不能直接填写 `localhost`。本地联调需要同时运行 PostgreSQL、Redis、Go API 和临时 HTTPS 隧道；前端在测试学生或教师绑定时需要运行。建议先使用微信公众平台接口测试号，正式公众号仍需单独验收主体权限。下文以默认 `API_V1_PREFIX=/api/v1` 为例；若修改了该配置，所有回调和调试 API 路径都要同步替换前缀。

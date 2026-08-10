@@ -209,12 +209,9 @@ export const ChannelModelFetchDialog: React.FC<ChannelModelFetchDialogProps> = (
     restoreFocusRef.current = document.activeElement instanceof HTMLElement
       ? document.activeElement
       : null;
-    const previousOverflow = document.body.style.overflow;
-    document.body.style.overflow = 'hidden';
     const frame = window.requestAnimationFrame(() => searchInputRef.current?.focus());
     return () => {
       window.cancelAnimationFrame(frame);
-      document.body.style.overflow = previousOverflow;
       restoreFocusRef.current?.focus();
     };
   }, []);

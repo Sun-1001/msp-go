@@ -177,14 +177,18 @@ export const ChannelFormModal: React.FC<ChannelFormModalProps> = ({
     if (!isOpen) return;
     const previousOverflow = document.body.style.overflow;
     document.body.style.overflow = 'hidden';
+    return () => {
+      document.body.style.overflow = previousOverflow;
+    };
+  }, [isOpen]);
+
+  useEffect(() => {
+    if (!isOpen) return;
     const handleKeyDown = (event: KeyboardEvent) => {
       if (event.key === 'Escape' && !isSubmitting && !modelFetchSession) onClose();
     };
     window.addEventListener('keydown', handleKeyDown);
-    return () => {
-      window.removeEventListener('keydown', handleKeyDown);
-      document.body.style.overflow = previousOverflow;
-    };
+    return () => window.removeEventListener('keydown', handleKeyDown);
   }, [isOpen, isSubmitting, modelFetchSession, onClose]);
 
   useEffect(() => {
