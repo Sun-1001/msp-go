@@ -32,9 +32,9 @@ type Service interface {
 	GetSolution(context.Context, string, string, string, string, *int64, string, string) (exerciseapp.SolutionResponse, error)
 }
 
-// Authenticator decodes Go/Python-compatible access tokens.
+// Authenticator validates access tokens against current account state.
 type Authenticator interface {
-	DecodeAccessToken(string) (authapp.Principal, bool)
+	DecodeActiveAccessToken(context.Context, string) (authapp.Principal, bool, error)
 }
 
 // AIRequestGuard applies AI-only access, content, and concurrency controls.
@@ -378,12 +378,12 @@ func (h *Handler) acquireAILease(w http.ResponseWriter, r *http.Request, student
 }
 
 func (h *Handler) requirePrincipal(w http.ResponseWriter, r *http.Request) (authapp.Principal, bool) {
-	return httpauth.RequireBearerAccess(w, r, h.auth.DecodeAccessToken, nil, "", writeExerciseError)
+	return httpauth.RequireBearerAccessContext(w, r, h.auth.DecodeActiveAccessToken, nil, "", writeExerciseError)
 }
 
 func (h *Handler) requireStudent(w http.ResponseWriter, r *http.Request) (authapp.Principal, bool) {
-	return httpauth.RequireBearerAccess(
-		w, r, h.auth.DecodeAccessToken, authapp.IsStudent,
+	return httpauth.RequireBearerAccessContext(
+		w, r, h.auth.DecodeActiveAccessToken, authapp.IsStudent,
 		"权限不足，需要学生身份", writeExerciseError,
 	)
 }

@@ -106,6 +106,7 @@ func (r UserRepository) ReviewPasswordResetRequest(ctx context.Context, update a
 			tag, err := tx.DB().Exec(ctx, `
 				UPDATE public.users
 				SET hashed_password = $2,
+					auth_version = auth_version + 1,
 					updated_at = $3
 				WHERE id = $1`,
 				userID,

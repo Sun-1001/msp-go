@@ -27,7 +27,7 @@ type Service interface {
 
 // Authenticator decodes access tokens.
 type Authenticator interface {
-	DecodeAccessToken(string) (authapp.Principal, bool)
+	DecodeActiveAccessToken(context.Context, string) (authapp.Principal, bool, error)
 }
 
 // Handler serves /admin/risk-control endpoints.
@@ -174,10 +174,10 @@ func (h *Handler) listEvents(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) requireAdmin(w http.ResponseWriter, r *http.Request) (authapp.Principal, bool) {
-	return httpauth.RequireBearerAccess(
+	return httpauth.RequireBearerAccessContext(
 		w,
 		r,
-		h.auth.DecodeAccessToken,
+		h.auth.DecodeActiveAccessToken,
 		func(principal authapp.Principal) bool { return principal.Role == user.RoleAdmin },
 		"需要管理员权限",
 		writeRiskError,

@@ -27,9 +27,9 @@ type Service interface {
 	GetReviewTasks(context.Context, string, mistakeapp.ReviewTaskQuery) (mistakeapp.ReviewTaskListResponse, error)
 }
 
-// Authenticator decodes Go/Python-compatible access tokens.
+// Authenticator validates access tokens against current account state.
 type Authenticator interface {
-	DecodeAccessToken(string) (authapp.Principal, bool)
+	DecodeActiveAccessToken(context.Context, string) (authapp.Principal, bool, error)
 }
 
 // Handler serves /mistakes endpoints.
@@ -235,8 +235,8 @@ func (h *Handler) reviewTasks(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) requirePrincipal(w http.ResponseWriter, r *http.Request) (authapp.Principal, bool) {
-	return httpauth.RequireBearerAccess(
-		w, r, h.auth.DecodeAccessToken, authapp.IsStudent,
+	return httpauth.RequireBearerAccessContext(
+		w, r, h.auth.DecodeActiveAccessToken, authapp.IsStudent,
 		"权限不足，需要学生身份", writeMistakeError,
 	)
 }

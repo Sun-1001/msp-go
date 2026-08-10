@@ -29,9 +29,9 @@ type Service interface {
 	GetChapters(context.Context) ([]string, error)
 }
 
-// Authenticator decodes Go/Python-compatible access tokens.
+// Authenticator validates access tokens against current account state.
 type Authenticator interface {
-	DecodeAccessToken(string) (authapp.Principal, bool)
+	DecodeActiveAccessToken(context.Context, string) (authapp.Principal, bool, error)
 }
 
 // Handler serves /progress endpoints.
@@ -224,14 +224,14 @@ func (h *Handler) chapters(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) requirePrincipal(w http.ResponseWriter, r *http.Request) (authapp.Principal, bool) {
-	return httpauth.RequireBearerAccess(w, r, h.auth.DecodeAccessToken, nil, "", writeProgressError)
+	return httpauth.RequireBearerAccessContext(w, r, h.auth.DecodeActiveAccessToken, nil, "", writeProgressError)
 }
 
 func (h *Handler) requireStudent(w http.ResponseWriter, r *http.Request, forbiddenMessage string) (authapp.Principal, bool) {
-	return httpauth.RequireBearerAccess(
+	return httpauth.RequireBearerAccessContext(
 		w,
 		r,
-		h.auth.DecodeAccessToken,
+		h.auth.DecodeActiveAccessToken,
 		func(principal authapp.Principal) bool {
 			return authapp.HasAnyRole(principal, user.RoleStudent)
 		},

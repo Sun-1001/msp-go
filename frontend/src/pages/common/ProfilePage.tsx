@@ -12,12 +12,14 @@ import { User, Mail, School, Lock, ArrowLeft, Loader2, CheckCircle, XCircle } fr
 import { getApiErrorMessage } from '@/libs/http/apiClient';
 import { passwordChangeSchema, type PasswordChangeFormData } from '@/libs/validation/schemas';
 import { authService } from '@/modules/auth/services/authService';
+import { useAuth } from '@/modules/auth/hooks/useAuth';
 import { xidianService, type XidianBindingStatus, type XidianCaptchaChallenge } from '@/modules/xidian/services/xidianService';
 import { WechatBindingSection } from '@/modules/wechat/components/WechatBindingSection';
 
 export const ProfilePage: React.FC = () => {
   const user = useAppSelector(selectCurrentUser);
   const navigate = useNavigate();
+  const { handleLogout, isLoggingOut } = useAuth();
 
   // 修改密码表单状态
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -53,6 +55,7 @@ export const ProfilePage: React.FC = () => {
       });
       setSubmitStatus({ type: 'success', message: response.message || '密码修改成功' });
       reset();
+      await handleLogout();
     } catch (error: unknown) {
       const errorMessage = error instanceof Error
         ? error.message
@@ -309,7 +312,7 @@ export const ProfilePage: React.FC = () => {
                   type="password"
                   placeholder="请输入当前密码"
                   {...register('currentPassword')}
-                  disabled={isSubmitting}
+                  disabled={isSubmitting || isLoggingOut}
                 />
                 {errors.currentPassword && (
                   <p className="text-sm text-red-500">{errors.currentPassword.message}</p>
@@ -321,7 +324,7 @@ export const ProfilePage: React.FC = () => {
                   type="password"
                   placeholder="请输入新密码"
                   {...register('newPassword')}
-                  disabled={isSubmitting}
+                  disabled={isSubmitting || isLoggingOut}
                 />
                 {errors.newPassword && (
                   <p className="text-sm text-red-500">{errors.newPassword.message}</p>
@@ -333,7 +336,7 @@ export const ProfilePage: React.FC = () => {
                   type="password"
                   placeholder="请再次输入新密码"
                   {...register('confirmNewPassword')}
-                  disabled={isSubmitting}
+                  disabled={isSubmitting || isLoggingOut}
                 />
                 {errors.confirmNewPassword && (
                   <p className="text-sm text-red-500">{errors.confirmNewPassword.message}</p>
@@ -359,7 +362,7 @@ export const ProfilePage: React.FC = () => {
               )}
 
               <div className="pt-2">
-                <Button type="submit" disabled={isSubmitting}>
+                <Button type="submit" disabled={isSubmitting || isLoggingOut}>
                   {isSubmitting ? (
                     <>
                       <Loader2 className="w-4 h-4 mr-2 animate-spin" />

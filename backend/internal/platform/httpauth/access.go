@@ -2,7 +2,10 @@ package httpauth
 
 import (
 	"context"
+	"log/slog"
 	"net/http"
+
+	"mathstudy/backend/internal/platform/redact"
 )
 
 const (
@@ -11,36 +14,7 @@ const (
 	forbiddenCode       = "FORBIDDEN"
 )
 
-// RequireBearerAccess decodes a bearer token and optionally enforces an authorization predicate.
-func RequireBearerAccess[T any](
-	w http.ResponseWriter,
-	r *http.Request,
-	decode func(string) (T, bool),
-	allow func(T) bool,
-	forbiddenMessage string,
-	writeError func(http.ResponseWriter, int, string, string),
-) (T, bool) {
-	var zero T
-	token, ok := BearerToken(r)
-	if !ok {
-		writeBearerUnauthorized(w, writeError)
-		return zero, false
-	}
-
-	principal, ok := decode(token)
-	if !ok {
-		writeBearerUnauthorized(w, writeError)
-		return zero, false
-	}
-	if allow != nil && !allow(principal) {
-		writeError(w, http.StatusForbidden, forbiddenCode, forbiddenMessage)
-		return zero, false
-	}
-	return principal, true
-}
-
-// RequireBearerAccessContext is the request-aware variant used when decoding
-// also checks current server-side account state.
+// RequireBearerAccessContext validates a bearer token against current server-side account state.
 func RequireBearerAccessContext[T any](
 	w http.ResponseWriter,
 	r *http.Request,
@@ -48,7 +22,7 @@ func RequireBearerAccessContext[T any](
 	allow func(T) bool,
 	forbiddenMessage string,
 	writeError func(http.ResponseWriter, int, string, string),
-	onDecodeError func(error),
+	onDecodeError ...func(error),
 ) (T, bool) {
 	var zero T
 	token, ok := BearerToken(r)
@@ -59,8 +33,10 @@ func RequireBearerAccessContext[T any](
 
 	principal, ok, err := decode(r.Context(), token)
 	if err != nil {
-		if onDecodeError != nil {
-			onDecodeError(err)
+		if len(onDecodeError) > 0 && onDecodeError[0] != nil {
+			onDecodeError[0](err)
+		} else {
+			slog.Default().Error("validate active access token failed", "error", redact.String(err.Error()))
 		}
 		writeError(w, http.StatusInternalServerError, "INTERNAL_ERROR", "验证登录状态失败，请稍后重试")
 		return zero, false

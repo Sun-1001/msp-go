@@ -35,9 +35,9 @@ type Service interface {
 	SaveMessageFile(context.Context, io.Reader, uploadapp.FileMeta) (uploadapp.Response, error)
 }
 
-// Authenticator decodes Go/Python-compatible access tokens.
+// Authenticator validates access tokens against current account state.
 type Authenticator interface {
-	DecodeAccessToken(string) (authapp.Principal, bool)
+	DecodeActiveAccessToken(context.Context, string) (authapp.Principal, bool, error)
 }
 
 // Handler serves /upload endpoints.
@@ -166,19 +166,19 @@ func (h *Handler) upload(w http.ResponseWriter, r *http.Request, maxSize int64, 
 }
 
 func (h *Handler) requirePrincipal(w http.ResponseWriter, r *http.Request) (authapp.Principal, bool) {
-	return httpauth.RequireBearerAccess(w, r, h.auth.DecodeAccessToken, nil, "", writeUploadError)
+	return httpauth.RequireBearerAccessContext(w, r, h.auth.DecodeActiveAccessToken, nil, "", writeUploadError)
 }
 
 func (h *Handler) requireTeacher(w http.ResponseWriter, r *http.Request) (authapp.Principal, bool) {
-	return httpauth.RequireBearerAccess(
-		w, r, h.auth.DecodeAccessToken, authapp.IsTeacherOrAdmin,
+	return httpauth.RequireBearerAccessContext(
+		w, r, h.auth.DecodeActiveAccessToken, authapp.IsTeacherOrAdmin,
 		"权限不足，需要教师权限", writeUploadError,
 	)
 }
 
 func (h *Handler) requireMessageFileUploader(w http.ResponseWriter, r *http.Request) (authapp.Principal, bool) {
-	return httpauth.RequireBearerAccess(
-		w, r, h.auth.DecodeAccessToken,
+	return httpauth.RequireBearerAccessContext(
+		w, r, h.auth.DecodeActiveAccessToken,
 		func(principal authapp.Principal) bool {
 			return authapp.IsStudent(principal) || principal.Role == user.RoleTeacher
 		},

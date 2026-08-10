@@ -29,9 +29,9 @@ type Service interface {
 	GetStats(context.Context, string) (resourceapp.Stats, error)
 }
 
-// Authenticator decodes Go/Python-compatible access tokens.
+// Authenticator validates access tokens against current account state.
 type Authenticator interface {
-	DecodeAccessToken(string) (authapp.Principal, bool)
+	DecodeActiveAccessToken(context.Context, string) (authapp.Principal, bool, error)
 }
 
 // Handler serves /resources endpoints.
@@ -260,12 +260,12 @@ func (h *Handler) toggleFavorite(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) requirePrincipal(w http.ResponseWriter, r *http.Request) (authapp.Principal, bool) {
-	return httpauth.RequireBearerAccess(w, r, h.auth.DecodeAccessToken, nil, "", writeResourceError)
+	return httpauth.RequireBearerAccessContext(w, r, h.auth.DecodeActiveAccessToken, nil, "", writeResourceError)
 }
 
 func (h *Handler) requireTeacher(w http.ResponseWriter, r *http.Request) (authapp.Principal, bool) {
-	return httpauth.RequireBearerAccess(
-		w, r, h.auth.DecodeAccessToken, authapp.IsTeacherOrAdmin,
+	return httpauth.RequireBearerAccessContext(
+		w, r, h.auth.DecodeActiveAccessToken, authapp.IsTeacherOrAdmin,
 		"权限不足，需要教师权限", writeResourceError,
 	)
 }

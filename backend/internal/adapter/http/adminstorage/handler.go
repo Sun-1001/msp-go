@@ -20,9 +20,9 @@ type Service interface {
 	TestConnection(context.Context, adminstorageapp.UpdateInput) (adminstorageapp.TestResponse, error)
 }
 
-// Authenticator decodes Go/Python-compatible access tokens.
+// Authenticator validates access tokens against current account state.
 type Authenticator interface {
-	DecodeAccessToken(string) (authapp.Principal, bool)
+	DecodeActiveAccessToken(context.Context, string) (authapp.Principal, bool, error)
 }
 
 // Handler serves administrator object-storage settings endpoints.
@@ -98,8 +98,8 @@ func (h *Handler) testConnection(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) requireAdmin(w http.ResponseWriter, r *http.Request) (authapp.Principal, bool) {
-	return httpauth.RequireBearerAccess(
-		w, r, h.auth.DecodeAccessToken, authapp.IsAdmin,
+	return httpauth.RequireBearerAccessContext(
+		w, r, h.auth.DecodeActiveAccessToken, authapp.IsAdmin,
 		"权限不足，需要管理员权限", writeAdminStorageError,
 	)
 }

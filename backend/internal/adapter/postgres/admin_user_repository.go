@@ -76,6 +76,7 @@ func (r UserRepository) UpdateUser(ctx context.Context, userID string, update ad
 		SET
 			display_name = COALESCE($2, display_name),
 			hashed_password = COALESCE($3, hashed_password),
+			auth_version = auth_version + CASE WHEN $3 IS NULL THEN 0 ELSE 1 END,
 			updated_at = $4
 		WHERE id = $1
 		RETURNING `+userColumns,
@@ -93,6 +94,7 @@ func (r UserRepository) UpdateUserStatus(ctx context.Context, userID string, sta
 		UPDATE public.users
 		SET status = $2::public.userstatus,
 			is_active = $3,
+			auth_version = auth_version + 1,
 			updated_at = $4
 		WHERE id = $1
 		RETURNING `+userColumns,

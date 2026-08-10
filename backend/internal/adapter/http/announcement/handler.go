@@ -26,7 +26,7 @@ type Service interface {
 
 // Authenticator decodes access tokens.
 type Authenticator interface {
-	DecodeAccessToken(string) (authapp.Principal, bool)
+	DecodeActiveAccessToken(context.Context, string) (authapp.Principal, bool, error)
 }
 
 // Handler serves administrator and recipient announcement endpoints.
@@ -148,17 +148,17 @@ func (h *Handler) dismiss(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) requireAdmin(w http.ResponseWriter, r *http.Request) (authapp.Principal, bool) {
-	return httpauth.RequireBearerAccess(
-		w, r, h.auth.DecodeAccessToken, authapp.IsAdmin,
+	return httpauth.RequireBearerAccessContext(
+		w, r, h.auth.DecodeActiveAccessToken, authapp.IsAdmin,
 		"权限不足，需要管理员权限", writeAnnouncementError,
 	)
 }
 
 func (h *Handler) requireRecipient(w http.ResponseWriter, r *http.Request) (authapp.Principal, bool) {
-	return httpauth.RequireBearerAccess(
+	return httpauth.RequireBearerAccessContext(
 		w,
 		r,
-		h.auth.DecodeAccessToken,
+		h.auth.DecodeActiveAccessToken,
 		func(principal authapp.Principal) bool {
 			return authapp.HasAnyRole(principal, user.RoleStudent, user.RoleTeacher)
 		},

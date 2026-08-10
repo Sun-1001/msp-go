@@ -52,15 +52,17 @@ type AuthResult struct {
 
 // Principal is the authenticated user context extracted from an access token.
 type Principal struct {
-	UserID string
-	Role   user.Role
+	UserID      string
+	Role        user.Role
+	AuthVersion int64
 }
 
 // RefreshPrincipal is the authenticated refresh-token context.
 type RefreshPrincipal struct {
-	UserID    string
-	JTI       string
-	ExpiresAt time.Time
+	UserID      string
+	AuthVersion int64
+	JTI         string
+	ExpiresAt   time.Time
 }
 
 // PasswordResetRequest contains data for a new password reset request.
@@ -169,7 +171,7 @@ func (s *Service) Authenticate(ctx context.Context, username, password string) (
 		}
 		return AuthResult{Success: false, Error: "用户名或密码错误"}, nil
 	}
-	if !account.IsActive {
+	if !account.IsActive || account.Status != user.StatusActive {
 		return AuthResult{Success: false, Error: "账户已被禁用"}, nil
 	}
 	if s.limiter != nil {
@@ -268,7 +270,7 @@ func (s *Service) GetUserByID(ctx context.Context, userID string) (user.User, bo
 
 // RefreshTokens verifies the user still exists and is active, then rotates both token types.
 func (s *Service) RefreshTokens(ctx context.Context, principal RefreshPrincipal) (string, string, bool, error) {
-	if principal.UserID == "" || principal.JTI == "" {
+	if principal.UserID == "" || principal.JTI == "" || principal.AuthVersion < 1 {
 		return "", "", false, nil
 	}
 	if active, err := s.refreshSessions.Consume(ctx, principal.UserID, principal.JTI); err != nil {
@@ -281,7 +283,7 @@ func (s *Service) RefreshTokens(ctx context.Context, principal RefreshPrincipal)
 	if err != nil {
 		return "", "", false, fmt.Errorf("get user by id: %w", err)
 	}
-	if !ok || !account.IsActive {
+	if !ok || !account.IsActive || account.Status != user.StatusActive || account.AuthVersion != principal.AuthVersion {
 		return "", "", false, nil
 	}
 	result, err := s.tokensForUser(ctx, account)
@@ -291,20 +293,17 @@ func (s *Service) RefreshTokens(ctx context.Context, principal RefreshPrincipal)
 	return result.AccessToken, result.RefreshToken, true, nil
 }
 
-// DecodeAccessToken returns a principal for a valid access token.
-func (s *Service) DecodeAccessToken(token string) (Principal, bool) {
+func (s *Service) decodeAccessToken(token string) (Principal, bool) {
 	claims, err := s.tokens.Decode(token)
 	if err != nil || claims.Type != "access" || claims.Subject == "" {
 		return Principal{}, false
 	}
-	return Principal{UserID: claims.Subject, Role: claims.Role}, true
+	return Principal{UserID: claims.Subject, Role: claims.Role, AuthVersion: claims.AuthVersion}, true
 }
 
-// DecodeActiveAccessToken verifies the token and the account's current active state.
-// Message-center routes use this method so account suspension takes effect before
-// an already-issued access token expires.
+// DecodeActiveAccessToken verifies the token against current account authorization state.
 func (s *Service) DecodeActiveAccessToken(ctx context.Context, token string) (Principal, bool, error) {
-	principal, ok := s.DecodeAccessToken(token)
+	principal, ok := s.decodeAccessToken(token)
 	if !ok {
 		return Principal{}, false, nil
 	}
@@ -312,7 +311,7 @@ func (s *Service) DecodeActiveAccessToken(ctx context.Context, token string) (Pr
 	if err != nil {
 		return Principal{}, false, fmt.Errorf("get access-token user: %w", err)
 	}
-	if !found || !account.IsActive || account.Role != principal.Role {
+	if !found || !account.IsActive || account.Status != user.StatusActive || account.Role != principal.Role || account.AuthVersion != principal.AuthVersion {
 		return Principal{}, false, nil
 	}
 	return principal, true, nil
@@ -330,7 +329,12 @@ func (s *Service) DecodeRefreshToken(token string) (RefreshPrincipal, string, bo
 	if claims.Subject == "" {
 		return RefreshPrincipal{}, "Token 中缺少用户信息", false
 	}
-	return RefreshPrincipal{UserID: claims.Subject, JTI: claims.JTI, ExpiresAt: claims.Expires}, "", true
+	return RefreshPrincipal{
+		UserID:      claims.Subject,
+		AuthVersion: claims.AuthVersion,
+		JTI:         claims.JTI,
+		ExpiresAt:   claims.Expires,
+	}, "", true
 }
 
 // RevokeRefreshToken removes one refresh token from the server-side session store.
@@ -437,11 +441,11 @@ func (s *Service) PasswordResetStatus(ctx context.Context, username, email strin
 }
 
 func (s *Service) tokensForUser(ctx context.Context, account user.User) (AuthResult, error) {
-	accessToken, err := s.tokens.CreateAccessToken(account.ID, account.Role)
+	accessToken, err := s.tokens.CreateAccessToken(account.ID, account.Role, account.AuthVersion)
 	if err != nil {
 		return AuthResult{}, fmt.Errorf("create access token: %w", err)
 	}
-	refreshToken, err := s.tokens.CreateRefreshToken(account.ID)
+	refreshToken, err := s.tokens.CreateRefreshToken(account.ID, account.AuthVersion)
 	if err != nil {
 		return AuthResult{}, fmt.Errorf("create refresh token: %w", err)
 	}

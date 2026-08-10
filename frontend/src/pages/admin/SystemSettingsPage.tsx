@@ -21,6 +21,7 @@ import {
   RefreshCw,
 } from 'lucide-react';
 import { authService } from '@/modules/auth/services/authService';
+import { useAuth } from '@/modules/auth/hooks/useAuth';
 import { passwordSchema } from '@/libs/validation';
 import {
   systemSettingService,
@@ -388,6 +389,7 @@ const GeneralInfoCard: React.FC = () => {
 
 // 修改密码卡片组件
 const ChangePasswordCard: React.FC = () => {
+  const { handleLogout, isLoggingOut } = useAuth('/admin');
   const [oldPassword, setOldPassword] = useState('');
   const [newPassword, setNewPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
@@ -424,6 +426,7 @@ const ChangePasswordCard: React.FC = () => {
       setOldPassword('');
       setNewPassword('');
       setConfirmPassword('');
+      await handleLogout();
     } catch (err) {
       setError(getApiErrorMessage(err, '密码修改失败，请稍后重试'));
     } finally {
@@ -497,7 +500,7 @@ const ChangePasswordCard: React.FC = () => {
             />
           </div>
 
-          <Button type="submit" disabled={isLoading}>
+          <Button type="submit" disabled={isLoading || isLoggingOut}>
             <Key className="w-4 h-4 mr-2" />
             {isLoading ? '修改中...' : '修改密码'}
           </Button>

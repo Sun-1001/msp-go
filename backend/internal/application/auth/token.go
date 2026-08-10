@@ -26,17 +26,18 @@ const (
 
 var errInvalidToken = errors.New("invalid token")
 
-// TokenClaims contains the JWT claims shared with the Python backend.
+// TokenClaims contains the validated claims used by the current authentication boundary.
 type TokenClaims struct {
-	Subject string
-	Role    user.Role
-	Type    string
-	JTI     string
-	Issued  time.Time
-	Expires time.Time
+	Subject     string
+	Role        user.Role
+	AuthVersion int64
+	Type        string
+	JTI         string
+	Issued      time.Time
+	Expires     time.Time
 }
 
-// TokenService creates and verifies HMAC JWTs compatible with the Python PyJWT setup.
+// TokenService creates and verifies HMAC JWTs used by the Go API.
 type TokenService struct {
 	secret     []byte
 	algorithm  string
@@ -78,14 +79,26 @@ func newTokenServiceWithClock(secret, algorithm string, accessTTL, refreshTTL ti
 	return service, nil
 }
 
-// CreateAccessToken returns a signed access token with a lower-case role claim.
-func (s TokenService) CreateAccessToken(subject string, role user.Role) (string, error) {
-	return s.createToken(subject, "access", s.accessTTL, map[string]any{"role": string(role)})
+// CreateAccessToken returns a signed access token bound to the account's current auth version.
+func (s TokenService) CreateAccessToken(subject string, role user.Role, authVersion int64) (string, error) {
+	if err := validateTokenIdentity(subject, authVersion); err != nil {
+		return "", err
+	}
+	if _, err := user.ParseRole(string(role)); err != nil {
+		return "", errors.New("access token role is invalid")
+	}
+	return s.createToken(subject, "access", s.accessTTL, map[string]any{
+		"role":         string(role),
+		"auth_version": authVersion,
+	})
 }
 
-// CreateRefreshToken returns a signed refresh token.
-func (s TokenService) CreateRefreshToken(subject string) (string, error) {
-	return s.createToken(subject, "refresh", s.refreshTTL, nil)
+// CreateRefreshToken returns a signed refresh token bound to the account's current auth version.
+func (s TokenService) CreateRefreshToken(subject string, authVersion int64) (string, error) {
+	if err := validateTokenIdentity(subject, authVersion); err != nil {
+		return "", err
+	}
+	return s.createToken(subject, "refresh", s.refreshTTL, map[string]any{"auth_version": authVersion})
 }
 
 // Decode verifies a token and returns its compatible claims.
@@ -134,6 +147,10 @@ func (s TokenService) Decode(token string) (TokenClaims, error) {
 	if !ok || s.now().After(expires) {
 		return TokenClaims{}, errInvalidToken
 	}
+	authVersion, ok := integerClaim(rawClaims["auth_version"])
+	if !ok || authVersion < 1 {
+		return TokenClaims{}, errInvalidToken
+	}
 
 	var role user.Role
 	if roleValue, ok := rawClaims["role"].(string); ok && roleValue != "" {
@@ -143,14 +160,18 @@ func (s TokenService) Decode(token string) (TokenClaims, error) {
 		}
 		role = parsedRole
 	}
+	if tokenType == "access" && role == "" {
+		return TokenClaims{}, errInvalidToken
+	}
 
 	return TokenClaims{
-		Subject: subject,
-		Role:    role,
-		Type:    tokenType,
-		JTI:     jti,
-		Issued:  issued,
-		Expires: expires,
+		Subject:     subject,
+		Role:        role,
+		AuthVersion: authVersion,
+		Type:        tokenType,
+		JTI:         jti,
+		Issued:      issued,
+		Expires:     expires,
 	}, nil
 }
 
@@ -268,4 +289,28 @@ func numericDate(value any) (time.Time, bool) {
 	default:
 		return time.Time{}, false
 	}
+}
+
+func integerClaim(value any) (int64, bool) {
+	switch typed := value.(type) {
+	case json.Number:
+		parsed, err := typed.Int64()
+		return parsed, err == nil
+	case int64:
+		return typed, true
+	case int:
+		return int64(typed), true
+	default:
+		return 0, false
+	}
+}
+
+func validateTokenIdentity(subject string, authVersion int64) error {
+	if strings.TrimSpace(subject) == "" {
+		return errors.New("jwt subject is empty")
+	}
+	if authVersion < 1 {
+		return errors.New("jwt auth version must be positive")
+	}
+	return nil
 }

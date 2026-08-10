@@ -68,6 +68,7 @@ type User struct {
 	Username       string
 	Email          string
 	HashedPassword string
+	AuthVersion    int64
 	Role           Role
 	DisplayName    *string
 	AvatarURL      *string

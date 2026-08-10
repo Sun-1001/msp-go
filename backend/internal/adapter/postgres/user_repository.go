@@ -17,6 +17,7 @@ const userColumns = `
 	username,
 	email,
 	hashed_password,
+	auth_version,
 	role::text,
 	display_name,
 	avatar_url,
@@ -114,11 +115,13 @@ func (r UserRepository) Create(ctx context.Context, input user.CreateUser) (user
 	return account, nil
 }
 
-// UpdatePassword updates the password hash and timestamp for one user.
+// UpdatePassword updates the password hash and invalidates every issued token.
 func (r UserRepository) UpdatePassword(ctx context.Context, userID string, hashedPassword string) error {
 	tag, err := r.DB().Exec(ctx, `
 		UPDATE public.users
-		SET hashed_password = $2, updated_at = $3
+		SET hashed_password = $2,
+			auth_version = auth_version + 1,
+			updated_at = $3
 		WHERE id = $1`,
 		userID,
 		hashedPassword,
@@ -260,6 +263,7 @@ func scanOptionalUser(row rowScanner) (user.User, bool, error) {
 		&account.Username,
 		&account.Email,
 		&account.HashedPassword,
+		&account.AuthVersion,
 		&roleValue,
 		&displayName,
 		&avatarURL,

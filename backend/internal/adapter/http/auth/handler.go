@@ -34,7 +34,7 @@ type Service interface {
 	ChangePassword(context.Context, string, string, string) (bool, string, error)
 	GetUserByID(context.Context, string) (user.User, bool, error)
 	RefreshTokens(context.Context, authapp.RefreshPrincipal) (string, string, bool, error)
-	DecodeAccessToken(string) (authapp.Principal, bool)
+	DecodeActiveAccessToken(context.Context, string) (authapp.Principal, bool, error)
 	DecodeRefreshToken(string) (authapp.RefreshPrincipal, string, bool)
 	RevokeRefreshToken(context.Context, string) error
 	RegistrationSettings(context.Context) (authapp.RegistrationSettings, error)
@@ -307,6 +307,7 @@ func (h *Handler) changePassword(w http.ResponseWriter, r *http.Request) {
 		writeAuthError(w, http.StatusBadRequest, "BAD_REQUEST", message)
 		return
 	}
+	h.clearAuthCookies(w)
 	httpjson.Write(w, http.StatusOK, messageResponse{Message: message})
 }
 
@@ -437,7 +438,7 @@ func (h *Handler) forgotPasswordStatus(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) requirePrincipal(w http.ResponseWriter, r *http.Request) (authapp.Principal, bool) {
-	return httpauth.RequireBearerAccess(w, r, h.service.DecodeAccessToken, nil, "", writeAuthError)
+	return httpauth.RequireBearerAccessContext(w, r, h.service.DecodeActiveAccessToken, nil, "", writeAuthError)
 }
 
 func (h *Handler) setAuthCookies(w http.ResponseWriter, refreshToken string) bool {
