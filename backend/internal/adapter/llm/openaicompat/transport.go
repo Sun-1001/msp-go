@@ -2,6 +2,7 @@ package openaicompat
 
 import (
 	"bytes"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -142,7 +143,8 @@ func (t *Transport) RoundTrip(request *http.Request) (*http.Response, error) {
 		return t.base.RoundTrip(chatRequest)
 	}
 	cacheKey := endpointCacheKey(request.URL, model)
-	if t.cache.load(cacheKey) == endpointResponses {
+	selected := t.cache.load(cacheKey)
+	if selected == endpointResponses || (selected == endpointUnknown && IsReasoningModel(model)) {
 		return t.tryResponsesFirst(chatRequest, body, cacheKey)
 	}
 	return t.tryChatFirst(chatRequest, body, cacheKey)
@@ -227,6 +229,28 @@ func inspectChatRequest(body []byte) (string, bool, error) {
 	return model, payload.Stream, nil
 }
 
+// IsReasoningModel reports whether the model belongs to a reasoning family restricted by the upstream SDK.
+func IsReasoningModel(model string) bool {
+	model = strings.ToLower(strings.TrimSpace(model))
+	if index := strings.LastIndexByte(model, '/'); index >= 0 {
+		model = model[index+1:]
+	}
+	if hasReasoningModelPrefix(model) {
+		return true
+	}
+	if index := strings.LastIndexByte(model, ':'); index >= 0 {
+		return hasReasoningModelPrefix(model[index+1:])
+	}
+	return false
+}
+
+func hasReasoningModelPrefix(model string) bool {
+	return strings.HasPrefix(model, "gpt-5") ||
+		strings.HasPrefix(model, "o1") ||
+		strings.HasPrefix(model, "o3") ||
+		strings.HasPrefix(model, "o4")
+}
+
 func endpointUnsupported(response *http.Response) (bool, error) {
 	if response == nil {
 		return false, errors.New("provider returned no response")
@@ -234,19 +258,80 @@ func endpointUnsupported(response *http.Response) (bool, error) {
 	switch response.StatusCode {
 	case http.StatusNotFound, http.StatusMethodNotAllowed, http.StatusGone, http.StatusNotImplemented:
 		return true, nil
-	case http.StatusBadRequest:
+	case http.StatusBadRequest, http.StatusUnprocessableEntity:
 		body, err := readLimited(response.Body, maxErrorBodySize)
 		if err != nil {
 			return false, fmt.Errorf("read provider error response: %w", err)
 		}
 		response.Body = io.NopCloser(bytes.NewReader(body))
 		response.ContentLength = int64(len(body))
-		text := strings.ToLower(string(body))
-		mentionsEndpoint := strings.Contains(text, "endpoint") || strings.Contains(text, "route") || strings.Contains(text, "path") || strings.Contains(text, "chat/completions") || strings.Contains(text, "responses api")
-		unsupported := strings.Contains(text, "not supported") || strings.Contains(text, "unsupported") || strings.Contains(text, "not implemented") || strings.Contains(text, "unknown")
-		return mentionsEndpoint && unsupported, nil
+		return explicitEndpointUnsupported(strings.ToLower(providerErrorText(body))), nil
 	default:
 		return false, nil
+	}
+}
+
+func explicitEndpointUnsupported(text string) bool {
+	text = strings.ToLower(text)
+	for _, parameter := range []string{"parameter", "field", "temperature", "top_p", "max_tokens", "max_completion_tokens", "max_output_tokens", "response_format", "tool_choice"} {
+		if strings.Contains(text, parameter) {
+			return false
+		}
+	}
+	mentionsProtocol := strings.Contains(text, "responses api") || strings.Contains(text, "/responses") || strings.Contains(text, "chat completions") || strings.Contains(text, "chat/completions")
+	unsupported := strings.Contains(text, "not supported") ||
+		strings.Contains(text, "does not support") ||
+		strings.Contains(text, "doesn't support") ||
+		strings.Contains(text, "unsupported") ||
+		strings.Contains(text, "not implemented") ||
+		strings.Contains(text, "not available") ||
+		strings.Contains(text, "unknown")
+	exclusiveSubject := strings.Contains(text, "model is only") ||
+		strings.Contains(text, "model only") ||
+		strings.Contains(text, "model can only") ||
+		strings.Contains(text, "model must use") ||
+		strings.Contains(text, "model requires") ||
+		strings.Contains(text, "endpoint is only") ||
+		strings.Contains(text, "endpoint only") ||
+		strings.Contains(text, "route is only") ||
+		strings.Contains(text, "route only")
+	if mentionsProtocol && (exclusiveSubject || unsupported) {
+		return true
+	}
+	mentionsRoute := strings.Contains(text, "endpoint") || strings.Contains(text, "route") || strings.Contains(text, "path")
+	if !mentionsRoute || !unsupported {
+		return false
+	}
+	return true
+}
+
+func providerErrorText(body []byte) string {
+	var payload any
+	if err := json.Unmarshal(body, &payload); err != nil {
+		return string(body)
+	}
+	parts := make([]string, 0, 4)
+	collectProviderErrorStrings(payload, &parts)
+	if len(parts) == 0 {
+		return string(body)
+	}
+	return strings.Join(parts, " ")
+}
+
+func collectProviderErrorStrings(value any, parts *[]string) {
+	switch typed := value.(type) {
+	case string:
+		if text := strings.TrimSpace(typed); text != "" {
+			*parts = append(*parts, text)
+		}
+	case []any:
+		for _, item := range typed {
+			collectProviderErrorStrings(item, parts)
+		}
+	case map[string]any:
+		for _, item := range typed {
+			collectProviderErrorStrings(item, parts)
+		}
 	}
 }
 

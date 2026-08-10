@@ -8,6 +8,7 @@ import (
 	"math"
 	"net"
 	"net/http"
+	"net/url"
 	"sort"
 	"strings"
 	"time"
@@ -91,16 +92,16 @@ const questionGeneratorInstruction = `你是高等数学学习平台的题目生
 
 // Config stores Eino runtime settings for the tutor agent.
 type Config struct {
-	Enabled       bool
-	BaseURL       string
-	APIKey        string
-	Model         string
-	Timeout       time.Duration
-	Temperature   float64
-	MaxTokens     int
-	TopP          *float64
-	MaxIterations int
-	HTTPClient    *http.Client
+	Enabled         bool
+	BaseURL         string
+	APIKey          string
+	Model           string
+	Timeout         time.Duration
+	Temperature     float64
+	OmitTemperature bool
+	MaxTokens       int
+	MaxIterations   int
+	HTTPClient      *http.Client
 }
 
 // Agent adapts Eino ADK to the session ChatAgent interface.
@@ -332,23 +333,7 @@ func newChatModelAgent(ctx context.Context, cfg Config, spec chatAgentSpec) (*Ag
 	if err := validateConfig(cfg); err != nil {
 		return nil, err
 	}
-	temperature := float32(cfg.Temperature)
-	modelConfig := &einoopenai.ChatModelConfig{
-		APIKey:      strings.TrimSpace(cfg.APIKey),
-		BaseURL:     strings.TrimSpace(cfg.BaseURL),
-		Model:       strings.TrimSpace(cfg.Model),
-		Timeout:     cfg.Timeout,
-		HTTPClient:  modelHTTPClient(cfg),
-		Temperature: &temperature,
-	}
-	if cfg.MaxTokens > 0 {
-		modelConfig.MaxTokens = &cfg.MaxTokens
-	}
-	if cfg.TopP != nil {
-		topP := float32(*cfg.TopP)
-		modelConfig.TopP = &topP
-	}
-	chatModel, err := einoopenai.NewChatModel(ctx, modelConfig)
+	chatModel, err := einoopenai.NewChatModel(ctx, chatModelConfig(cfg))
 	if err != nil {
 		return nil, fmt.Errorf("create Eino chat model: %w", err)
 	}
@@ -701,16 +686,21 @@ func (g exerciseQuestionGenerator) GenerateQuestion(ctx context.Context, input e
 }
 
 func configFromRuntime(runtime adminaiconfigapp.RuntimeConfig) Config {
+	temperature := 0.0
+	omitTemperature := runtime.Temperature == nil
+	if runtime.Temperature != nil {
+		temperature = *runtime.Temperature
+	}
 	return Config{
-		Enabled:       true,
-		BaseURL:       runtime.BaseURL,
-		APIKey:        runtime.APIKey,
-		Model:         runtime.Model,
-		Timeout:       runtime.Timeout,
-		Temperature:   runtime.Temperature,
-		MaxTokens:     runtime.MaxTokens,
-		TopP:          runtime.TopP,
-		MaxIterations: runtime.MaxIterations,
+		Enabled:         true,
+		BaseURL:         runtime.BaseURL,
+		APIKey:          runtime.APIKey,
+		Model:           runtime.Model,
+		Timeout:         runtime.Timeout,
+		Temperature:     temperature,
+		OmitTemperature: omitTemperature,
+		MaxTokens:       runtime.MaxTokens,
+		MaxIterations:   runtime.MaxIterations,
 	}
 }
 
@@ -798,6 +788,43 @@ func modelHTTPClient(cfg Config) *http.Client {
 	return openaicompat.WrapClient(client)
 }
 
+func chatModelConfig(cfg Config) *einoopenai.ChatModelConfig {
+	modelName := strings.TrimSpace(cfg.Model)
+	modelConfig := &einoopenai.ChatModelConfig{
+		APIKey:     strings.TrimSpace(cfg.APIKey),
+		BaseURL:    openAIAPIBaseURL(cfg.BaseURL),
+		Model:      modelName,
+		Timeout:    cfg.Timeout,
+		HTTPClient: modelHTTPClient(cfg),
+	}
+	if openaicompat.IsReasoningModel(modelName) {
+		if cfg.MaxTokens > 0 {
+			modelConfig.MaxCompletionTokens = &cfg.MaxTokens
+		}
+		return modelConfig
+	}
+	if !cfg.OmitTemperature {
+		temperature := float32(cfg.Temperature)
+		modelConfig.Temperature = &temperature
+	}
+	if cfg.MaxTokens > 0 {
+		modelConfig.MaxTokens = &cfg.MaxTokens
+	}
+	return modelConfig
+}
+
+func openAIAPIBaseURL(value string) string {
+	baseURL := strings.TrimRight(strings.TrimSpace(value), "/")
+	if baseURL == "" {
+		return baseURL
+	}
+	parsed, err := url.Parse(baseURL)
+	if err != nil || strings.Trim(parsed.Path, "/") != "" {
+		return baseURL
+	}
+	return baseURL + "/v1"
+}
+
 func validateConfig(cfg Config) error {
 	if !cfg.Enabled {
 		return errors.New("eino agent is disabled")
@@ -816,7 +843,7 @@ func validateConfig(cfg Config) error {
 	if cfg.Timeout <= 0 {
 		return errors.New("eino timeout must be greater than zero")
 	}
-	if cfg.Temperature < 0 || cfg.Temperature > 2 {
+	if !cfg.OmitTemperature && (cfg.Temperature < 0 || cfg.Temperature > 2) {
 		return errors.New("eino temperature must be between 0 and 2")
 	}
 	if cfg.MaxTokens < 0 {

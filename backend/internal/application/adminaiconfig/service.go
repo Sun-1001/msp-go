@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"math/big"
 	"net/http"
+	"net/url"
 	"sort"
 	"strings"
 	"sync"
@@ -23,17 +24,20 @@ import (
 )
 
 const (
-	defaultTemperature       = 0.7
-	defaultTimeout           = 60
-	defaultMaxRetries        = 2
-	providerKeyringPrefix    = "msp-provider-keyring:v1:"
-	defaultProviderKeyMethod = "round_robin"
-	maxProviderAPIKeys       = 100
-	maxProviderAPIKeyBytes   = 64 << 10
-	maxProviderKeyringBytes  = 512 << 10
-	defaultChannelPriority   = 0
-	defaultChannelWeight     = 100
-	maxChannelRoutingValue   = 1000
+	defaultTemperature        = 1.0
+	defaultMaxTokens          = 4096
+	defaultTimeout            = 30 * 60
+	defaultMaxRetries         = 3
+	defaultAgentMaxIterations = 8
+	maxGenerationTimeout      = 30 * 60
+	providerKeyringPrefix     = "msp-provider-keyring:v1:"
+	defaultProviderKeyMethod  = "round_robin"
+	maxProviderAPIKeys        = 100
+	maxProviderAPIKeyBytes    = 64 << 10
+	maxProviderKeyringBytes   = 512 << 10
+	defaultChannelPriority    = 0
+	defaultChannelWeight      = 100
+	maxChannelRoutingValue    = 1000
 )
 
 var (
@@ -400,9 +404,8 @@ type RuntimeConfig struct {
 	LogicalModel  string
 	Priority      int
 	Weight        int
-	Temperature   float64
+	Temperature   *float64
 	MaxTokens     int
-	TopP          *float64
 	Timeout       time.Duration
 	MaxRetries    int
 	MaxIterations int
@@ -741,7 +744,7 @@ func (s *Service) UpdateAgentConfig(ctx context.Context, agentType string, reque
 			break
 		}
 	}
-	if err := validateOptionalGenerationOverrides(request.TemperatureOverride, request.MaxTokensOverride, request.TopPOverride, request.TimeoutOverride, request.MaxRetriesOverride); err != nil {
+	if err := validateOptionalGenerationOverrides(request.TemperatureOverride, request.MaxTokensOverride, request.TimeoutOverride, request.MaxRetriesOverride); err != nil {
 		return AgentModelConfig{}, err
 	}
 	id, err := s.newID()
@@ -755,7 +758,7 @@ func (s *Service) UpdateAgentConfig(ctx context.Context, agentType string, reque
 		ModelKey:            modelKey,
 		TemperatureOverride: request.TemperatureOverride,
 		MaxTokensOverride:   request.MaxTokensOverride,
-		TopPOverride:        request.TopPOverride,
+		TopPOverride:        nil,
 		TimeoutOverride:     request.TimeoutOverride,
 		MaxRetriesOverride:  request.MaxRetriesOverride,
 		ExtraConfig:         normalizeObjectMap(request.ExtraConfig),
@@ -915,7 +918,7 @@ func (s *Service) RuntimeConfigs(ctx context.Context, agentType string) ([]Runti
 	if len(ordered) == 0 {
 		return nil, false, nil
 	}
-	retries := ordered[0].Model.DefaultMaxRetries
+	retries := 0
 	if config.MaxRetriesOverride != nil {
 		retries = *config.MaxRetriesOverride
 	}
@@ -946,20 +949,10 @@ func (s *Service) runtimeConfigFromCandidate(config AgentModelConfig, candidate 
 	if err != nil {
 		return RuntimeConfig{}, false
 	}
-	temperature := model.DefaultTemperature
-	if config.TemperatureOverride != nil {
-		temperature = *config.TemperatureOverride
-	}
+	temperature := ptrutil.Clone(config.TemperatureOverride)
 	maxTokens := 0
-	if model.DefaultMaxTokens != nil {
-		maxTokens = *model.DefaultMaxTokens
-	}
 	if config.MaxTokensOverride != nil {
 		maxTokens = *config.MaxTokensOverride
-	}
-	topP := model.DefaultTopP
-	if config.TopPOverride != nil {
-		topP = config.TopPOverride
 	}
 	timeoutSeconds := model.DefaultTimeout
 	if config.TimeoutOverride != nil {
@@ -969,7 +962,7 @@ func (s *Service) runtimeConfigFromCandidate(config AgentModelConfig, candidate 
 		ChannelID:     provider.ID,
 		ProviderCode:  provider.Code,
 		ProviderName:  provider.Name,
-		BaseURL:       baseURL,
+		BaseURL:       openAIAPIBaseURL(baseURL),
 		APIKey:        apiKey,
 		Model:         model.ModelID,
 		LogicalModel:  modelKey,
@@ -977,10 +970,9 @@ func (s *Service) runtimeConfigFromCandidate(config AgentModelConfig, candidate 
 		Weight:        provider.Weight,
 		Temperature:   temperature,
 		MaxTokens:     maxTokens,
-		TopP:          topP,
 		Timeout:       time.Duration(timeoutSeconds) * time.Second,
 		MaxRetries:    retries,
-		MaxIterations: max(1, retries+1),
+		MaxIterations: defaultAgentMaxIterations,
 	}, true
 }
 
@@ -1053,8 +1045,13 @@ func (s *Service) modelInputFromRequest(request CreateModelRequest) (ModelInput,
 	if err := validateModelNameAndID(name, modelID); err != nil {
 		return ModelInput{}, err
 	}
-	if err := validateGenerationDefaults(request.DefaultTemperature, request.DefaultMaxTokens, request.DefaultTopP, request.DefaultTimeout, request.DefaultMaxRetries); err != nil {
+	if err := validateGenerationDefaults(request.DefaultTemperature, request.DefaultMaxTokens, request.DefaultTimeout, request.DefaultMaxRetries); err != nil {
 		return ModelInput{}, err
+	}
+	maxTokens := request.DefaultMaxTokens
+	if maxTokens == nil {
+		value := defaultMaxTokens
+		maxTokens = &value
 	}
 	return ModelInput{
 		ID:                 id,
@@ -1062,8 +1059,8 @@ func (s *Service) modelInputFromRequest(request CreateModelRequest) (ModelInput,
 		Name:               name,
 		ModelID:            modelID,
 		DefaultTemperature: ptrutil.ValueOrDefault(request.DefaultTemperature, defaultTemperature),
-		DefaultMaxTokens:   request.DefaultMaxTokens,
-		DefaultTopP:        request.DefaultTopP,
+		DefaultMaxTokens:   maxTokens,
+		DefaultTopP:        nil,
 		DefaultTimeout:     ptrutil.ValueOrDefault(request.DefaultTimeout, defaultTimeout),
 		DefaultMaxRetries:  ptrutil.ValueOrDefault(request.DefaultMaxRetries, defaultMaxRetries),
 		Capabilities:       normalizeObjectMap(request.Capabilities),
@@ -1238,12 +1235,14 @@ func (s *Service) modelInputs(providerID string, models []ModelCreateSimple) ([]
 		if err != nil {
 			return nil, err
 		}
+		maxTokens := defaultMaxTokens
 		inputs = append(inputs, ModelInput{
 			ID:                 id,
 			ProviderID:         providerID,
 			Name:               name,
 			ModelID:            modelID,
 			DefaultTemperature: defaultTemperature,
+			DefaultMaxTokens:   &maxTokens,
 			DefaultTimeout:     defaultTimeout,
 			DefaultMaxRetries:  defaultMaxRetries,
 			Capabilities:       map[string]any{},
@@ -1271,13 +1270,13 @@ func modelUpdateFromRequest(request UpdateModelRequest) (ModelUpdate, error) {
 		}
 		update.ModelID = &value
 	}
-	if err := validateGenerationDefaults(request.DefaultTemperature, request.DefaultMaxTokens, request.DefaultTopP, request.DefaultTimeout, request.DefaultMaxRetries); err != nil {
+	if err := validateGenerationDefaults(request.DefaultTemperature, request.DefaultMaxTokens, request.DefaultTimeout, request.DefaultMaxRetries); err != nil {
 		return ModelUpdate{}, err
 	}
 	update.DefaultTemperature = request.DefaultTemperature
 	update.DefaultMaxTokens = request.DefaultMaxTokens
 	update.DefaultMaxTokensSet = request.DefaultMaxTokens != nil
-	update.DefaultTopP = request.DefaultTopP
+	update.DefaultTopP = nil
 	update.DefaultTopPSet = request.DefaultTopP != nil
 	update.DefaultTimeout = request.DefaultTimeout
 	update.DefaultMaxRetries = request.DefaultMaxRetries
@@ -1329,12 +1328,17 @@ func (s *Service) fetchModels(ctx context.Context, baseURL string, apiKey string
 }
 
 func (s *Service) chatCompletionProbe(ctx context.Context, baseURL string, apiKey string, modelID string) error {
-	body, _ := json.Marshal(map[string]any{
-		"model":       modelID,
-		"messages":    []map[string]string{{"role": "user", "content": "ping"}},
-		"max_tokens":  1,
-		"temperature": 0,
-	})
+	payload := map[string]any{
+		"model":    modelID,
+		"messages": []map[string]string{{"role": "user", "content": "ping"}},
+	}
+	if isReasoningModel(modelID) {
+		payload["max_completion_tokens"] = 32
+	} else {
+		payload["max_tokens"] = 32
+		payload["temperature"] = 0
+	}
+	body, _ := json.Marshal(payload)
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, joinProviderURL(baseURL, "/v1/chat/completions"), bytes.NewReader(body))
 	if err != nil {
 		return err
@@ -1358,6 +1362,39 @@ func normalizeBaseURL(value string) (string, error) {
 		return "", badRequest("base_url " + err.Error())
 	}
 	return baseURL, nil
+}
+
+func openAIAPIBaseURL(value string) string {
+	baseURL := strings.TrimRight(strings.TrimSpace(value), "/")
+	if baseURL == "" {
+		return baseURL
+	}
+	parsed, err := url.Parse(baseURL)
+	if err != nil || strings.Trim(parsed.Path, "/") != "" {
+		return baseURL
+	}
+	return baseURL + "/v1"
+}
+
+func isReasoningModel(model string) bool {
+	model = strings.ToLower(strings.TrimSpace(model))
+	if index := strings.LastIndexByte(model, '/'); index >= 0 {
+		model = model[index+1:]
+	}
+	if hasReasoningModelPrefix(model) {
+		return true
+	}
+	if index := strings.LastIndexByte(model, ':'); index >= 0 {
+		return hasReasoningModelPrefix(model[index+1:])
+	}
+	return false
+}
+
+func hasReasoningModelPrefix(model string) bool {
+	return strings.HasPrefix(model, "gpt-5") ||
+		strings.HasPrefix(model, "o1") ||
+		strings.HasPrefix(model, "o3") ||
+		strings.HasPrefix(model, "o4")
 }
 
 func normalizeProviderCode(value string) string {
@@ -1408,22 +1445,19 @@ func validateChannelWeight(weight int) error {
 	return nil
 }
 
-func validateGenerationDefaults(temperature *float64, maxTokens *int, topP *float64, timeout *int, retries *int) error {
-	return validateOptionalGenerationOverrides(temperature, maxTokens, topP, timeout, retries)
+func validateGenerationDefaults(temperature *float64, maxTokens *int, timeout *int, retries *int) error {
+	return validateOptionalGenerationOverrides(temperature, maxTokens, timeout, retries)
 }
 
-func validateOptionalGenerationOverrides(temperature *float64, maxTokens *int, topP *float64, timeout *int, retries *int) error {
+func validateOptionalGenerationOverrides(temperature *float64, maxTokens *int, timeout *int, retries *int) error {
 	if temperature != nil && (*temperature < 0 || *temperature > 2) {
 		return badRequest("temperature 必须在 0 到 2 之间")
 	}
 	if maxTokens != nil && *maxTokens < 0 {
 		return badRequest("max_tokens 必须大于等于 0")
 	}
-	if topP != nil && (*topP < 0 || *topP > 1) {
-		return badRequest("top_p 必须在 0 到 1 之间")
-	}
-	if timeout != nil && (*timeout <= 0 || *timeout > 600) {
-		return badRequest("timeout 必须在 1 到 600 秒之间")
+	if timeout != nil && (*timeout <= 0 || *timeout > maxGenerationTimeout) {
+		return badRequest("timeout 必须在 1 到 1800 秒之间")
 	}
 	if retries != nil && (*retries < 0 || *retries > 10) {
 		return badRequest("max_retries 必须在 0 到 10 之间")
@@ -1452,8 +1486,11 @@ func normalizeObjectMap(value map[string]any) map[string]any {
 
 func joinProviderURL(baseURL string, apiPath string) string {
 	base := strings.TrimRight(strings.TrimSpace(baseURL), "/")
-	if strings.HasSuffix(base, "/v1") && strings.HasPrefix(apiPath, "/v1/") {
-		return base + strings.TrimPrefix(apiPath, "/v1")
+	if strings.HasPrefix(apiPath, "/v1/") {
+		parsed, err := url.Parse(base)
+		if err == nil && strings.Trim(parsed.Path, "/") != "" {
+			return base + strings.TrimPrefix(apiPath, "/v1")
+		}
 	}
 	return base + apiPath
 }
