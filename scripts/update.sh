@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Backup and update an existing MathStudyPlatform deployment.
+# Backup and upgrade an existing MathStudyPlatform deployment.
 
 set -Eeuo pipefail
 umask 077
@@ -26,6 +26,7 @@ usage() {
 
 标签接受 latest、v1.0.0 或 sha-abcdef1。私有 GHCR 镜像可通过
 GHCR_USERNAME 和 GHCR_TOKEN 环境变量登录。
+此脚本仅支持已有完整部署；仓库不提供首次生产部署脚本。
 EOF
 }
 
@@ -129,9 +130,9 @@ else
     exit 1
 fi
 [ -f "$COMPOSE_FILE" ] || { echo -e "${RED}找不到 ${COMPOSE_FILE}${NC}" >&2; exit 1; }
-[ -f "$ENV_FILE" ] || { echo -e "${RED}找不到 ${ENV_FILE}，请先执行首次部署${NC}" >&2; exit 1; }
+[ -f "$ENV_FILE" ] || { echo -e "${RED}找不到 ${ENV_FILE}；此脚本仅支持已有部署，请先按部署指南完成初始安装${NC}" >&2; exit 1; }
 if [ -z "$(service_container_id backend)" ] || [ -z "$(service_container_id frontend)" ]; then
-    echo -e "${RED}未检测到完整的现有部署，请先使用 scripts/deploy.sh${NC}" >&2
+    echo -e "${RED}未检测到完整的现有部署；此脚本不支持首次部署${NC}" >&2
     exit 1
 fi
 if [ -n "${GHCR_TOKEN:-}" ]; then

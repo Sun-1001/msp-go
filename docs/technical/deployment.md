@@ -69,14 +69,22 @@ docker compose build
 docker compose up -d postgres redis
 ```
 
-数据库健康后执行 Go migration runner，再启动应用服务。首次生产部署使用 `scripts/deploy.sh`，已有环境更新使用 `scripts/update.sh`；两个脚本均直接拉取 GHCR 中独立的前后端镜像，并按这一顺序执行。私有 GHCR 包通过 `GHCR_USERNAME` 和 `GHCR_TOKEN` 环境变量登录，Token 不写入配置或日志。
+数据库健康后执行 Go migration runner，再启动应用服务。仓库仅保留 `scripts/update.sh` 作为已有环境升级入口，不提供首次生产部署脚本。首次部署由运维人员在完成 `.env` 和边缘代理配置后按下述顺序执行；私有 GHCR 包应先使用最小权限凭据登录，Token 不写入配置或日志。
 
 ```bash
-sudo bash ./scripts/deploy.sh --version v1.0.0 --domain math.example.com
+export IMAGE_VERSION=v1.0.0
+docker compose pull backend frontend
+docker compose up -d postgres redis
+# 确认 PostgreSQL 健康后继续
+docker compose exec -T postgres sh -ec 'psql -v ON_ERROR_STOP=1 -U "${POSTGRES_USER:-postgres}" -d "${POSTGRES_DB:-${POSTGRES_USER:-postgres}}" -c "CREATE EXTENSION IF NOT EXISTS vector"'
+docker compose run --rm --no-deps backend msp-migrate
+docker compose up -d backend frontend
+
+# 已有环境升级
 sudo bash ./scripts/update.sh --version v1.1.0
 ```
 
-首次部署脚本检测到已有 backend 或 frontend 容器时会拒绝继续，防止绕过更新备份。更新脚本要求完整的现有部署，会在停止应用写入后备份 PostgreSQL、`.env`、解析后的 Compose 配置、旧镜像 ID 和本地上传目录。两个脚本都在迁移前幂等启用 `vector` 扩展，因此 Compose 不再依赖独立的数据库初始化脚本。手工部署时可使用：
+更新脚本要求完整的现有部署，会在停止应用写入后备份 PostgreSQL、`.env`、解析后的 Compose 配置、旧镜像 ID 和本地上传目录。首次部署的手工流程与更新脚本都在迁移前幂等启用 `vector` 扩展，因此 Compose 不依赖独立的数据库初始化脚本。从源码手工部署时可使用：
 
 ```powershell
 Set-Location backend
@@ -138,7 +146,7 @@ ORDER BY version;
 - TLS、HSTS、CSP 和其他安全响应头由边缘代理统一设置；
 - `/metrics` 和详细健康信息只对管理网络开放。
 
-`scripts/deploy.sh` 只在首次部署且传入 `--domain` 时生成站点配置；`scripts/update.sh` 不修改 Nginx。已经部署的服务器不会因代码更新自动改写 `/etc/nginx`；应先用 `sudo nginx -T` 确认实际生效的站点文件，再将 `/api/` location 中的 `proxy_read_timeout` 调整为 `300s`，随后执行：
+首次部署时需由运维人员基于 `nginx-site.conf` 配置站点；`scripts/update.sh` 不修改 Nginx。已经部署的服务器不会因代码更新自动改写 `/etc/nginx`；应先用 `sudo nginx -T` 确认实际生效的站点文件，再将 `/api/` location 中的 `proxy_read_timeout` 调整为 `300s`，随后执行：
 
 ```bash
 sudo nginx -t
