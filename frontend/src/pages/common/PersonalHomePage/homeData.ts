@@ -28,6 +28,7 @@ interface StudentOverviewResponse {
 
 interface StudentMasteryTopic {
   topic: string;
+  name?: string;
   mastery: number;
   exercises: number;
   confidence: number;
@@ -175,7 +176,7 @@ function buildStudentActions(mastery: StudentMasteryResponse | null): HomeAction
       const masteryPercent = clampPercent(topic.mastery * 100);
       return {
         id: `${topic.topic}-${index}`,
-        title: topic.topic,
+        title: topic.name || topic.topic,
         description: topic.exercises > 0
           ? `已完成 ${topic.exercises} 次练习，适合继续巩固`
           : '从基础练习开始建立理解',

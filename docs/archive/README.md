@@ -25,3 +25,4 @@
 | 文档 | 归档原因 |
 |------|----------|
 | [2026-07-17 全仓代码与性能优化审计](performance/code-performance-optimization-audit-2026-07-17.md) | 记录静态审查、覆盖率、微基准和前端包体基线；当前行动项已同步到 TODO |
+| [2026-10-08 学生学习反馈验收](quality/learning-feedback-evaluation-2026-10-08.md) | 合成教学数据、真实模型样本、画像与练习反馈改进，以及验收边界 |

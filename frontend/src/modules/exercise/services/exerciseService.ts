@@ -6,12 +6,14 @@
 
 import { apiClient } from '@/libs/http/apiClient';
 import { logger } from '@/libs/utils/logger';
+import type { LearningFeedback } from '@/types/learningFeedback';
 
 const exerciseLogger = logger.createContextLogger('ExerciseService');
 
 // ========== 类型定义 ==========
 
 export interface Question {
+  learningFeedback?: LearningFeedback;
   id: string;
   title: string;
   content: string; // LaTeX
@@ -28,6 +30,7 @@ export interface Question {
 export type GenerateQuestionType = 'multiple_choice' | 'short_answer';
 
 export interface ExerciseQuestionResponse {
+  learning_feedback?: LearningFeedback;
   id: string;
   title: string;
   content: string;
@@ -165,6 +168,7 @@ export const mapExerciseQuestion = (
   hintsAvailable: data.hints_available,
   estimatedTimeSeconds: data.estimated_time_seconds,
   options: data.options,
+  learningFeedback: data.learning_feedback,
 });
 
 // ========== API 调用 ==========

@@ -1,0 +1,22 @@
+/** Recent assessment evidence, independent of the selected statistics range. */
+export interface LearningFeedback {
+  concept_id: string;
+  concept_name: string;
+  stage: 'diagnostic' | 'repair' | 'consolidate' | 'verify' | 'retention' | 'transfer';
+  label: string;
+  reason: string;
+  next_step: string;
+  success_criterion: string;
+  recommended_difficulty: number;
+  estimated_mastery: number | null;
+  confidence: number;
+  recent_attempts: number;
+  independent_attempts: number;
+  independent_correct: number;
+  delayed_correct: number;
+  recent_accuracy: number | null;
+  dominant_error?: string;
+  focus_error?: string;
+  window_days: number;
+  as_of: string;
+}

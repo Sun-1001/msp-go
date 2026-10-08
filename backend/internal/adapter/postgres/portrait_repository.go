@@ -139,10 +139,11 @@ func (r PortraitRepository) GetRangeStats(ctx context.Context, userID string, st
 // ListMasteryStates returns the persisted DKT inputs used for the shared read-side projection.
 func (r PortraitRepository) ListMasteryStates(ctx context.Context, userID string) ([]portraitapp.MasteryState, error) {
 	rows, err := r.DB().Query(ctx, `
-		SELECT concept_id, mastery_prob, last_attempt_at
-		FROM public.student_concept_dkt_states
-		WHERE student_id = $1
-		ORDER BY concept_id`,
+		SELECT state.concept_id, kn.name, state.mastery_prob, state.last_attempt_at
+		FROM public.student_concept_dkt_states state
+		JOIN public.knowledge_nodes kn ON kn.id = state.concept_id
+		WHERE state.student_id = $1
+		ORDER BY state.concept_id`,
 		userID,
 	)
 	if err != nil {
@@ -154,7 +155,7 @@ func (r PortraitRepository) ListMasteryStates(ctx context.Context, userID string
 	for rows.Next() {
 		var state portraitapp.MasteryState
 		var lastAttemptAt pgtype.Timestamp
-		if err := rows.Scan(&state.ConceptID, &state.Mastery, &lastAttemptAt); err != nil {
+		if err := rows.Scan(&state.ConceptID, &state.Name, &state.Mastery, &lastAttemptAt); err != nil {
 			return nil, err
 		}
 		state.LastAttemptAt = timestampPtr(lastAttemptAt)

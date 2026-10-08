@@ -6,6 +6,7 @@ import (
 	"sort"
 	"time"
 
+	"mathstudy/backend/internal/application/learningfeedback"
 	"mathstudy/backend/internal/application/learningrange"
 	"mathstudy/backend/internal/application/masteryprojection"
 	"mathstudy/backend/internal/platform/numutil"
@@ -80,17 +81,18 @@ type PortraitMetric struct {
 
 // PortraitTopic describes a current knowledge strength or priority gap.
 type PortraitTopic struct {
-	ConceptID         string   `json:"concept_id"`
-	Name              string   `json:"name"`
-	Mastery           float64  `json:"mastery"`
-	ClassAverage      *float64 `json:"class_average"`
-	ExceededPercent   *float64 `json:"exceeded_percent"`
-	AttemptCount      int      `json:"attempt_count"`
-	Confidence        float64  `json:"confidence"`
-	SampleSize        int      `json:"sample_size"`
-	Available         bool     `json:"available"`
-	ComparisonBasis   string   `json:"comparison_basis"`
-	UnavailableReason string   `json:"unavailable_reason,omitempty"`
+	ConceptID         string                     `json:"concept_id"`
+	Name              string                     `json:"name"`
+	Mastery           float64                    `json:"mastery"`
+	ClassAverage      *float64                   `json:"class_average"`
+	ExceededPercent   *float64                   `json:"exceeded_percent"`
+	AttemptCount      int                        `json:"attempt_count"`
+	Confidence        float64                    `json:"confidence"`
+	SampleSize        int                        `json:"sample_size"`
+	Available         bool                       `json:"available"`
+	ComparisonBasis   string                     `json:"comparison_basis"`
+	UnavailableReason string                     `json:"unavailable_reason,omitempty"`
+	LearningFeedback  *learningfeedback.Feedback `json:"learning_feedback,omitempty"`
 }
 
 // PortraitClassContext explains the comparison cohort without exposing peer identities.
@@ -109,7 +111,8 @@ func (s *Service) GetPortraitInsights(ctx context.Context, userID string, rangeT
 	if err != nil {
 		return PortraitInsightsResponse{}, ErrInvalidPortraitRange
 	}
-	window := learningrange.Resolve(s.now(), kind)
+	now := s.now()
+	window := learningrange.Resolve(now, kind)
 	studentIDs, teacherID, inClass, err := s.repo.ListClassStudentIDs(ctx, userID)
 	if err != nil {
 		return PortraitInsightsResponse{}, err
@@ -159,8 +162,59 @@ func (s *Service) GetPortraitInsights(ctx context.Context, userID string, rangeT
 		return PortraitInsightsResponse{}, err
 	}
 	metrics := portraitMetrics(userID, studentIDs, personalActivity, comparisonActivity, inClass)
-	strengths, improvements, observations := portraitTopics(s.now(), userID, studentIDs, states, nodeNames, inClass)
-	actions := portraitActions(improvements, actionProgresses, nodeNames)
+	strengths, improvements, observations := portraitTopics(now, userID, studentIDs, states, nodeNames, inClass)
+	recommendations := improvements
+	if len(recommendations) == 0 {
+		recommendations = observations
+	}
+	if len(recommendations) == 0 {
+		recommendations = strengths
+	}
+	actions := portraitActions(recommendations, actionProgresses, nodeNames)
+	if len(strengths)+len(improvements)+len(observations) == 0 && len(actionProgresses) == 0 {
+		actions = []PortraitAction{{Type: "practice", Title: "开始诊断练习", Description: "选择一个知识点，先用基础新题积累学习证据。", Status: "not_started"}}
+	}
+	if reader, ok := s.repo.(learningfeedback.Reader); ok {
+		ids := []string{}
+		seen := map[string]bool{}
+		for _, topics := range [][]PortraitTopic{improvements, observations, strengths} {
+			for _, topic := range topics {
+				if !seen[topic.ConceptID] {
+					ids = append(ids, topic.ConceptID)
+					seen[topic.ConceptID] = true
+				}
+			}
+		}
+		for _, action := range actions {
+			if action.ConceptID != nil && !seen[*action.ConceptID] {
+				ids = append(ids, *action.ConceptID)
+				seen[*action.ConceptID] = true
+			}
+		}
+		snapshots, err := reader.ReadLearningFeedback(ctx, userID, ids, now)
+		if err != nil {
+			return PortraitInsightsResponse{}, err
+		}
+		feedbacks := map[string]*learningfeedback.Feedback{}
+		for id, snapshot := range snapshots {
+			feedback := learningfeedback.Build(snapshot, now)
+			feedbacks[id] = &feedback
+		}
+		for _, topics := range [][]PortraitTopic{strengths, improvements, observations} {
+			for index := range topics {
+				topics[index].LearningFeedback = feedbacks[topics[index].ConceptID]
+			}
+		}
+		for index := range actions {
+			if actions[index].ConceptID != nil {
+				actions[index].LearningFeedback = feedbacks[*actions[index].ConceptID]
+				if actions[index].LearningFeedback != nil {
+					actions[index].Title = actions[index].LearningFeedback.Label + "：" + actions[index].LearningFeedback.ConceptName
+					actions[index].Description = actions[index].LearningFeedback.NextStep
+				}
+			}
+		}
+	}
 	activeStudents := 0
 	for _, stat := range comparisonActivity {
 		if stat.AttemptCount > 0 {

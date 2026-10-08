@@ -58,7 +58,7 @@ type StatisticsResponse = {
   error_type_distribution: Record<string, { count: number; percentage: number }>;
 };
 
-type MasteryTopic = { topic: string; mastery: number; exercises: number; confidence: number };
+type MasteryTopic = { topic: string; name?: string; mastery: number; exercises: number; confidence: number };
 
 type MasteryResponse = { topics: MasteryTopic[]; model: string };
 
@@ -514,7 +514,7 @@ const AnalyticsPageInner: React.FC = () => {
                       <div key={index} className="space-y-2">
                         <div className="flex items-center justify-between">
                           <div className="flex items-center gap-2">
-                            <span className="font-medium text-surface-900 dark:text-surface-100">{topic.topic}</span>
+                            <span className="font-medium text-surface-900 dark:text-surface-100">{topic.name || topic.topic}</span>
                             {topic.exercises > 0 && (
                               <Badge variant="outline" className="text-xs">{topic.exercises}题</Badge>
                             )}

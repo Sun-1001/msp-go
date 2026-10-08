@@ -52,6 +52,9 @@ export const AIPracticeConfigurator: FC<AIPracticeConfiguratorProps> = ({
   onRetryKnowledge,
 }) => {
   const hasKnowledgeOptions = knowledgeOptions.length > 0;
+  const availableDifficulties = difficultyOptions.some((option) => Number(option.value) === difficulty)
+    ? difficultyOptions
+    : [{ value: String(difficulty), label: `建议难度 ${Math.round(difficulty * 100)}%` }, ...difficultyOptions];
   const isPending = isLoadingKnowledge || isGenerating;
   const errorMessage = typeof error === 'string' ? error : error?.message;
   const canRetryKnowledge = Boolean(error) && !hasKnowledgeOptions && !isLoadingKnowledge;
@@ -112,7 +115,7 @@ export const AIPracticeConfigurator: FC<AIPracticeConfiguratorProps> = ({
           </label>
           <Select
             id="ai-practice-difficulty"
-            options={difficultyOptions}
+            options={availableDifficulties}
             value={String(difficulty)}
             onChange={(value) => onDifficultyChange(Number(value))}
             disabled={isLoadingKnowledge || isGenerating}

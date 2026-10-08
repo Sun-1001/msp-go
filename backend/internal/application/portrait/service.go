@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"mathstudy/backend/internal/application/learningfeedback"
 	"mathstudy/backend/internal/application/learningrange"
 	"mathstudy/backend/internal/application/masteryprojection"
 	"mathstudy/backend/internal/platform/maputil"
@@ -41,6 +42,7 @@ type RangeStats struct {
 // MasteryState contains the persisted inputs needed to project current DKT mastery.
 type MasteryState struct {
 	ConceptID     string
+	Name          string
 	Mastery       float64
 	LastAttemptAt *time.Time
 }
@@ -109,13 +111,15 @@ type ActivityWindowData struct {
 // MasterySnapshotData contains current DKT state, independent from the activity range.
 type MasterySnapshotData struct {
 	MasteryVector map[string]float64
+	ConceptNames  map[string]string
 }
 
 // GeneratorInput keeps range activity and current mastery semantics explicit for LLM adapters.
 type GeneratorInput struct {
-	Activity        ActivityWindowData
-	MasterySnapshot MasterySnapshotData
-	FallbackContent string
+	Activity         ActivityWindowData
+	MasterySnapshot  MasterySnapshotData
+	FallbackContent  string
+	LearningFeedback []learningfeedback.Feedback
 }
 
 // Generator creates a narrative portrait from profile data.
@@ -192,11 +196,15 @@ func (s *Service) GeneratePortrait(ctx context.Context, userID string, rangeType
 		return GenerateResponse{}, err
 	}
 	currentMastery := maputil.CloneFloatMap(profile.MasteryVector)
+	conceptNames := map[string]string{}
 	for _, state := range masteryStates {
 		currentMastery[state.ConceptID] = numutil.RoundPlaces(
 			masteryprojection.Current(state.Mastery, state.LastAttemptAt, snapshotNow),
 			4,
 		)
+		if state.Name != "" {
+			conceptNames[state.ConceptID] = state.Name
+		}
 	}
 	profile.TotalExercises = rangeStats.TotalExercises
 	profile.CorrectCount = rangeStats.CorrectCount
@@ -217,7 +225,31 @@ func (s *Service) GeneratePortrait(ctx context.Context, userID string, rangeType
 		},
 		MasterySnapshot: MasterySnapshotData{
 			MasteryVector: currentMastery,
+			ConceptNames:  conceptNames,
 		},
+	}
+	if reader, ok := s.repo.(learningfeedback.Reader); ok {
+		sort.Slice(masteryStates, func(i, j int) bool {
+			left := masteryprojection.Current(masteryStates[i].Mastery, masteryStates[i].LastAttemptAt, snapshotNow)
+			right := masteryprojection.Current(masteryStates[j].Mastery, masteryStates[j].LastAttemptAt, snapshotNow)
+			if left == right {
+				return masteryStates[i].ConceptID < masteryStates[j].ConceptID
+			}
+			return left < right
+		})
+		ids := make([]string, 0, min(6, len(masteryStates)))
+		for _, state := range masteryStates[:min(6, len(masteryStates))] {
+			ids = append(ids, state.ConceptID)
+		}
+		snapshots, err := reader.ReadLearningFeedback(ctx, userID, ids, snapshotNow)
+		if err != nil {
+			return GenerateResponse{}, err
+		}
+		for _, id := range ids {
+			if snapshot, ok := snapshots[id]; ok {
+				reportInput.LearningFeedback = append(reportInput.LearningFeedback, learningfeedback.Build(snapshot, snapshotNow))
+			}
+		}
 	}
 	reportInput.FallbackContent = buildPortraitContent(reportInput)
 	content := s.generatePortraitContent(ctx, reportInput)
@@ -356,7 +388,11 @@ func buildPortraitContent(input GeneratorInput) string {
 		builder.WriteString("\n## 当前知识点掌握状态\n")
 		builder.WriteString("以下为生成报告时读取的当前累计 DKT 状态，不代表本范围内的新增掌握度。\n")
 		for _, item := range sortedTop(mastery.MasteryVector, true, 10) {
-			builder.WriteString(fmt.Sprintf("- %s: %.0f%%\n", item.key, item.value*100))
+			name := mastery.ConceptNames[item.key]
+			if name == "" {
+				name = item.key
+			}
+			builder.WriteString(fmt.Sprintf("- %s: %.0f%%\n", name, item.value*100))
 		}
 	}
 
@@ -375,6 +411,13 @@ func buildPortraitContent(input GeneratorInput) string {
 	}
 
 	builder.WriteString("\n## 改进建议\n")
+	if len(input.LearningFeedback) > 0 {
+		builder.WriteString("以下依据近30天最多20次作答的题目首答与间隔证据，独立于上方统计范围；题数完成不等于已经掌握。首答不保证未使用提示。\n")
+		for _, feedback := range input.LearningFeedback {
+			builder.WriteString(fmt.Sprintf("- %s：%s。%s 下一步：%s 验证标准：%s\n", feedback.ConceptName, feedback.Label, feedback.Reason, feedback.NextStep, feedback.SuccessCriterion))
+		}
+		return builder.String()
+	}
 	if activity.TotalExercises == 0 {
 		builder.WriteString("- 先完成一组基础练习，积累可分析的学习记录。\n")
 	} else if correctRate < 0.6 {

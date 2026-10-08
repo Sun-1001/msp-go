@@ -2,6 +2,8 @@
  * 学生画像类型定义
  */
 
+import type { LearningFeedback } from '@/types/learningFeedback';
+
 export interface StudentPortrait {
   student_id: string;
   portrait_content: string | null;
@@ -46,6 +48,7 @@ export interface PortraitInsightMetric {
 }
 
 export interface PortraitInsightTopic {
+  learning_feedback?: LearningFeedback;
   concept_id: string;
   name: string;
   mastery: number;
@@ -60,6 +63,7 @@ export interface PortraitInsightTopic {
 }
 
 export interface PortraitInsightAction {
+  learning_feedback?: LearningFeedback;
   type: 'practice' | 'review';
   title: string;
   description: string;

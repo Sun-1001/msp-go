@@ -16,6 +16,8 @@ import (
 	"time"
 
 	answerocrapp "mathstudy/backend/internal/application/answerocr"
+	"mathstudy/backend/internal/application/learningfeedback"
+	"mathstudy/backend/internal/application/masteryprojection"
 	mathsolverapp "mathstudy/backend/internal/application/mathsolver"
 	"mathstudy/backend/internal/platform/maputil"
 	"mathstudy/backend/internal/platform/metautil"
@@ -328,6 +330,7 @@ type GenerationInput struct {
 	QuestionType        string
 	AvoidQuestionBodies []string // Trusted internal exercise history; adapters must bound prompt use.
 	Feedback            string   // 首次生成为空；重试时携带上次验证失败原因
+	LearningFeedback    *learningfeedback.Feedback
 }
 
 // GeneratedQuestion stores a validated, persistable AI exercise candidate.
@@ -344,6 +347,7 @@ type GeneratedQuestion struct {
 	EstimatedTimeSeconds int
 	ConceptIDs           []string
 	KnowledgePointNames  []string
+	LearningFeedback     *learningfeedback.Feedback
 }
 
 // QuestionGenerator creates structured self-practice questions.
@@ -399,31 +403,33 @@ func normalizeQuestionGenerationError(err error) error {
 
 // ExerciseResponse is the Python-compatible exercise summary response.
 type ExerciseResponse struct {
-	ID                   string   `json:"id"`
-	Title                string   `json:"title"`
-	Content              string   `json:"content"`
-	Difficulty           float64  `json:"difficulty"`
-	Type                 string   `json:"type"`
-	Source               string   `json:"source"`
-	KnowledgePoints      []string `json:"knowledge_points"`
-	KnowledgePointNames  []string `json:"knowledge_point_names"`
-	HintsAvailable       bool     `json:"hints_available"`
-	EstimatedTimeSeconds int      `json:"estimated_time_seconds"`
-	Options              []string `json:"options"`
+	ID                   string                     `json:"id"`
+	Title                string                     `json:"title"`
+	Content              string                     `json:"content"`
+	Difficulty           float64                    `json:"difficulty"`
+	Type                 string                     `json:"type"`
+	Source               string                     `json:"source"`
+	KnowledgePoints      []string                   `json:"knowledge_points"`
+	KnowledgePointNames  []string                   `json:"knowledge_point_names"`
+	HintsAvailable       bool                       `json:"hints_available"`
+	EstimatedTimeSeconds int                        `json:"estimated_time_seconds"`
+	Options              []string                   `json:"options"`
+	LearningFeedback     *learningfeedback.Feedback `json:"learning_feedback,omitempty"`
 }
 
 // ExerciseDetailResponse is the Python-compatible exercise detail response.
 type ExerciseDetailResponse struct {
-	ID                  string   `json:"id"`
-	Title               string   `json:"title"`
-	Content             string   `json:"content"`
-	Difficulty          float64  `json:"difficulty"`
-	Type                string   `json:"type"`
-	Source              string   `json:"source"`
-	KnowledgePoints     []string `json:"knowledge_points"`
-	KnowledgePointNames []string `json:"knowledge_point_names"`
-	Hints               []string `json:"hints"`
-	Options             []string `json:"options"`
+	LearningFeedback    *learningfeedback.Feedback `json:"learning_feedback,omitempty"`
+	ID                  string                     `json:"id"`
+	Title               string                     `json:"title"`
+	Content             string                     `json:"content"`
+	Difficulty          float64                    `json:"difficulty"`
+	Type                string                     `json:"type"`
+	Source              string                     `json:"source"`
+	KnowledgePoints     []string                   `json:"knowledge_points"`
+	KnowledgePointNames []string                   `json:"knowledge_point_names"`
+	Hints               []string                   `json:"hints"`
+	Options             []string                   `json:"options"`
 }
 
 // SolutionResponse is the Python-compatible solution response.
@@ -833,6 +839,19 @@ func (s *Service) GenerateExercise(ctx context.Context, userID string, request G
 	if !ok {
 		return nil, ErrNotFound
 	}
+	var learningFeedback *learningfeedback.Feedback
+	if reader, ok := s.repo.(learningfeedback.Reader); ok {
+		now := s.now().UTC()
+		snapshots, err := reader.ReadLearningFeedback(ctx, userID, []string{concept.ID}, now)
+		if err != nil {
+			return nil, err
+		}
+		if snapshot, found := snapshots[concept.ID]; found {
+			feedback := learningfeedback.Build(snapshot, now)
+			learningFeedback = &feedback
+			request.AvoidQuestionBodies = append(slices.Clone(request.AvoidQuestionBodies), learningfeedback.AvoidBodies(snapshot, now)...)
+		}
+	}
 	maxAttempts := 2
 	if len(request.AvoidQuestionBodies) > 0 {
 		maxAttempts = 3
@@ -853,6 +872,7 @@ func (s *Service) GenerateExercise(ctx context.Context, userID string, request G
 			QuestionType:        request.QuestionType,
 			AvoidQuestionBodies: request.AvoidQuestionBodies,
 			Feedback:            feedback,
+			LearningFeedback:    learningFeedback,
 		})
 		if err != nil {
 			if errors.Is(err, ErrGeneratedContentInvalid) {
@@ -904,6 +924,7 @@ func (s *Service) GenerateExercise(ctx context.Context, userID string, request G
 	// 用验证结果覆盖（落库前）
 	generated.Answer = verified.Answer
 	generated.SolutionSteps = verified.Steps
+	generated.LearningFeedback = learningFeedback
 
 	exercise, err := s.repo.CreateGeneratedExercise(ctx, userID, generated, s.now())
 	if err != nil {
@@ -1920,6 +1941,7 @@ func (s *Service) GetExercise(ctx context.Context, userID string, exerciseID str
 		return ExerciseDetailResponse{}, err
 	}
 	return ExerciseDetailResponse{
+		LearningFeedback:    storedLearningFeedback(exercise.Meta),
 		ID:                  exercise.ID,
 		Title:               exercise.Title,
 		Content:             exercise.Body,
@@ -2468,8 +2490,7 @@ func (s *Service) updateTracking(
 		if hasState {
 			prior = state.MasteryProb
 			if state.LastAttemptAt != nil {
-				daysSince := now.Sub(*state.LastAttemptAt).Hours() / 24.0
-				prior = applyForgetting(prior, daysSince, dktRetentionFloor)
+				prior = masteryprojection.Current(prior, state.LastAttemptAt, now)
 			}
 		} else {
 			id, err := s.newID()
@@ -2862,7 +2883,24 @@ func toExerciseResponse(exercise Exercise) *ExerciseResponse {
 		HintsAvailable:       len(metautil.StringSlice(exercise.Meta, "hints")) > 0,
 		EstimatedTimeSeconds: metautil.IntDefault(exercise.Meta, "estimated_time_seconds", 300),
 		Options:              metautil.OptionalStringSlice(exercise.Meta, "options"),
+		LearningFeedback:     storedLearningFeedback(exercise.Meta),
 	}
+}
+
+func storedLearningFeedback(meta map[string]any) *learningfeedback.Feedback {
+	value := meta["learning_feedback"]
+	if value == nil {
+		return nil
+	}
+	raw, err := json.Marshal(value)
+	if err != nil {
+		return nil
+	}
+	var feedback learningfeedback.Feedback
+	if json.Unmarshal(raw, &feedback) != nil || feedback.Stage == "" {
+		return nil
+	}
+	return &feedback
 }
 
 func exerciseSource(exercise Exercise) string {

@@ -15,7 +15,6 @@ const (
 	dktModelName          = "dkt-sakt-lite"
 	dktMaxSequenceLength  = 64
 	dktEmbeddingDim       = 16
-	dktRetentionFloor     = 0.05
 	dktUncategorizedPrior = 0.5
 	epsilon               = 1e-6
 )
@@ -248,15 +247,4 @@ func dot(left []float64, right []float64) float64 {
 		total += left[i] * right[i]
 	}
 	return total
-}
-
-func applyForgetting(mastery float64, daysSinceLast float64, floor float64) float64 {
-	if floor <= 0 {
-		floor = dktRetentionFloor
-	}
-	if daysSinceLast <= 0 || mastery <= floor {
-		return mastery
-	}
-	decayed := floor + (mastery-floor)*math.Exp(-0.025*daysSinceLast)
-	return numutil.ClampFloat(decayed, 0.001, 0.999)
 }

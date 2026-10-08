@@ -100,6 +100,16 @@ function TopicCard({ topic, tone }: { topic: PortraitInsightTopic; tone: 'succes
           ? topic.unavailable_reason ?? '暂不提供班级比较'
           : `超过有效样本中 ${topic.exceeded_percent.toFixed(0)}% 的同学`}
       </p>
+      {topic.learning_feedback && (
+        <div className="mt-3 space-y-2 border-t border-surface-200 pt-3 text-sm dark:border-surface-700">
+          <Badge variant="default">{topic.learning_feedback.label}</Badge>
+          <p className="text-surface-600 dark:text-surface-300">{topic.learning_feedback.reason}</p>
+          <p className="text-xs text-surface-500 dark:text-surface-400">
+            近{topic.learning_feedback.window_days}天最近{topic.learning_feedback.recent_attempts}次作答 · 新题首答 {topic.learning_feedback.independent_correct}/{topic.learning_feedback.independent_attempts} 正确 · 间隔验证 {topic.learning_feedback.delayed_correct} 次正确
+          </p>
+          <p className="text-xs leading-5 text-surface-500 dark:text-surface-400">下一步：{topic.learning_feedback.next_step}</p>
+        </div>
+      )}
     </div>
   );
 }
@@ -145,7 +155,12 @@ export function StudentPortraitInsights({ range, insights, loading, error, onRet
         }
         setStartingConceptId(null);
       }
-      navigate(`/exercise?mode=ai&concept_id=${encodeURIComponent(action.concept_id)}&autostart=1`);
+      const difficulty = action.learning_feedback?.recommended_difficulty;
+      navigate(`/exercise?mode=ai&concept_id=${encodeURIComponent(action.concept_id)}&autostart=1${difficulty == null ? '' : `&difficulty=${difficulty}`}`);
+      return;
+    }
+    if (action.type === 'practice') {
+      navigate('/exercise?mode=ai');
       return;
     }
     navigate(action.concept_id
@@ -299,6 +314,11 @@ export function StudentPortraitInsights({ range, insights, loading, error, onRet
                     <ArrowRight className="h-4 w-4 shrink-0 text-surface-400 group-hover:text-primary-500" />
                   </div>
                   <p className="mt-2 text-sm leading-6 text-surface-500 dark:text-surface-400">{action.description}</p>
+                  {action.learning_feedback && (
+                    <p className="mt-2 text-xs leading-5 text-surface-600 dark:text-surface-300">
+                      验证标准：{action.learning_feedback.success_criterion}
+                    </p>
+                  )}
                   {action.target_count > 0 && (
                     <>
                       <div className="mt-3 flex items-center justify-between text-xs text-surface-400">
@@ -307,7 +327,7 @@ export function StudentPortraitInsights({ range, insights, loading, error, onRet
                           {startingConceptId === action.concept_id
                             ? '正在开始'
                             : action.status === 'completed'
-                              ? '已完成，可再练'
+                              ? '题量已完成，可再练'
                               : action.status === 'not_started'
                                 ? '尚未开始'
                                 : '进行中'}
@@ -336,6 +356,7 @@ export function StudentPortraitInsights({ range, insights, loading, error, onRet
           </Card>
 
           <p className="text-center text-xs text-surface-400 dark:text-surface-500">
+            学习验证独立使用近30天最多20次作答；新题首答不保证未使用提示，题量完成不代表已经掌握。
             练习量、时长和活跃天数对比全班其他同学；正确率只比较至少完成10道课程题的有效样本，知识点比较使用至少5次练习且置信度达到30%的当前掌握状态。
             {insights.class_context.in_class && ` 当前班级 ${insights.class_context.class_size} 人，本范围活跃 ${insights.class_context.active_students} 人。`}
           </p>

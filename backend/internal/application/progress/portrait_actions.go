@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"mathstudy/backend/internal/application/learningfeedback"
 	"mathstudy/backend/internal/application/learningrange"
 	"mathstudy/backend/internal/platform/timefmt"
 )
@@ -28,14 +29,15 @@ type PortraitActionProgress struct {
 
 // PortraitAction gives the frontend a concrete destination instead of a prose-only suggestion.
 type PortraitAction struct {
-	Type           string  `json:"type"`
-	Title          string  `json:"title"`
-	Description    string  `json:"description"`
-	ConceptID      *string `json:"concept_id"`
-	TargetCount    int     `json:"target_count"`
-	CompletedCount int     `json:"completed_count"`
-	Status         string  `json:"status"`
-	StartedAt      *string `json:"started_at"`
+	Type             string                     `json:"type"`
+	Title            string                     `json:"title"`
+	Description      string                     `json:"description"`
+	ConceptID        *string                    `json:"concept_id"`
+	TargetCount      int                        `json:"target_count"`
+	CompletedCount   int                        `json:"completed_count"`
+	Status           string                     `json:"status"`
+	StartedAt        *string                    `json:"started_at"`
+	LearningFeedback *learningfeedback.Feedback `json:"learning_feedback,omitempty"`
 }
 
 // PortraitActionStartResponse confirms an explicit student action start.

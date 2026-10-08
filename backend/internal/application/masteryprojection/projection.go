@@ -1,4 +1,4 @@
-// Package masteryprojection owns the read-side DKT forgetting projection shared by learning views.
+// Package masteryprojection shares DKT forgetting between learning views and assessment priors.
 package masteryprojection
 
 import (

@@ -66,6 +66,11 @@ export const ExercisePage: React.FC = () => {
     autoStartedRequest, appliedConceptRequest,
   } = useAIPractice();
   const requestedConceptId = searchParams.get('concept_id')?.trim() ?? '';
+  const difficultyParam = searchParams.get('difficulty');
+  const parsedDifficulty = difficultyParam?.trim() ? Number(difficultyParam) : NaN;
+  const requestedDifficulty = Number.isFinite(parsedDifficulty) && parsedDifficulty >= 0 && parsedDifficulty <= 1
+    ? parsedDifficulty
+    : undefined;
   const requestedTopic = searchParams.get('topic')?.trim().slice(0, 200) ?? '';
   const sourceSession = searchParams.get('from_session');
   const sourceSessionId = sourceSession && /^[0-9a-f-]{36}$/i.test(sourceSession) ? sourceSession : null;
@@ -225,7 +230,9 @@ export const ExercisePage: React.FC = () => {
     if (autoStartedRequest.current === requestedConceptId) return;
 
     autoStartedRequest.current = requestedConceptId;
-    void requestAIQuestion(requestedConceptId, difficulty);
+    const nextDifficulty = requestedDifficulty ?? difficulty;
+    setDifficulty(nextDifficulty);
+    void requestAIQuestion(requestedConceptId, nextDifficulty);
   }, [
     aiQuestion,
     autoStartedRequest,
@@ -236,6 +243,8 @@ export const ExercisePage: React.FC = () => {
     mode,
     requestAIQuestion,
     requestedConceptId,
+    requestedDifficulty,
+    setDifficulty,
     shouldAutoStart,
   ]);
 

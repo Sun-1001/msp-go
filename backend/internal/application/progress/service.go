@@ -165,6 +165,7 @@ type MasteryResponse struct {
 // MasteryTopic stores one concept mastery row.
 type MasteryTopic struct {
 	Topic      string  `json:"topic"`
+	Name       string  `json:"name"`
 	Mastery    float64 `json:"mastery"`
 	Exercises  int     `json:"exercises"`
 	Confidence float64 `json:"confidence"`
@@ -378,10 +379,19 @@ func (s *Service) GetMasteryVector(ctx context.Context, userID string) (MasteryR
 	}
 
 	keys := maputil.SortedFloatKeys(mastery)
+	names, err := s.repo.KnowledgeNodeNames(ctx, keys)
+	if err != nil {
+		return MasteryResponse{}, err
+	}
 	topics := make([]MasteryTopic, 0, len(keys))
 	for _, key := range keys {
+		name := names[key]
+		if name == "" {
+			name = key
+		}
 		topics = append(topics, MasteryTopic{
 			Topic:      key,
+			Name:       name,
 			Mastery:    mastery[key],
 			Exercises:  attempts[key],
 			Confidence: confidence[key],

@@ -1396,5 +1396,6 @@ func generatedQuestionMeta(generated exerciseapp.GeneratedQuestion) map[string]a
 		"solution_steps":         generated.SolutionSteps,
 		"estimated_time_seconds": generated.EstimatedTimeSeconds,
 		"knowledge_point_names":  generated.KnowledgePointNames,
+		"learning_feedback":      generated.LearningFeedback,
 	}
 }

@@ -435,6 +435,13 @@ const ExercisePanelContent: React.FC<ExercisePanelProps> = ({
             )}
 
             {/* 掌握度变化 */}
+            {!isIndeterminate && currentQuestion.learningFeedback && (
+              <details className="rounded-lg border border-surface-200 p-3 text-sm dark:border-surface-700">
+                <summary className="cursor-pointer font-medium text-surface-700 dark:text-surface-300">本题出题依据 · {currentQuestion.learningFeedback.label}</summary>
+                <p className="mt-2 text-surface-600 dark:text-surface-400">{currentQuestion.learningFeedback.reason}</p>
+                <p className="mt-2 text-xs text-surface-500">这是出题时的学习快照；下一题会依据最新作答重新调整。</p>
+              </details>
+            )}
             {!isIndeterminate && submitResult.masteryUpdate && Object.keys(submitResult.masteryUpdate).length > 0 && (
               <div className="mt-2 flex flex-wrap gap-2">
                 {Object.entries(submitResult.masteryUpdate).map(([concept, mastery]) => (
