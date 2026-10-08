@@ -3,6 +3,7 @@ package session
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 	"strconv"
 	"strings"
@@ -66,6 +67,7 @@ type Repository interface {
 	GetMessage(context.Context, string, string) (Message, bool, error)
 	InsertMessage(context.Context, Message) error
 	InsertMeteredAssistantMessage(context.Context, string, Message, string) error
+	RecordExerciseHint(context.Context, string, string) error
 	ListMessages(context.Context, string, int, int) ([]Message, int, error)
 	ListSessions(context.Context, string, int, int, bool) ([]SessionListItem, int, error)
 	EndSession(context.Context, string, string, time.Time) (EndState, bool, error)
@@ -660,12 +662,21 @@ func (s *Service) generateAssistant(ctx context.Context, input ChatAgentInput, o
 
 	emitted := false
 	var deliveredContent strings.Builder
+	hintRecorded := false
+	var evidenceErr error
 	deliver := func(chunk ChatAgentChunk) error {
 		if chunk.Content == "" {
 			return nil
 		}
 		if chunk.Agent == "" {
 			chunk.Agent = "tutor"
+		}
+		if !hintRecorded && strings.TrimSpace(chunk.Content) != "" {
+			if err := s.repo.RecordExerciseHint(ctx, input.SessionID, input.StudentID); err != nil {
+				evidenceErr = fmt.Errorf("record exercise hint evidence: %w", err)
+				return evidenceErr
+			}
+			hintRecorded = true
 		}
 		if onChunk != nil {
 			if err := onChunk(chunk); err != nil {
@@ -684,12 +695,20 @@ func (s *Service) generateAssistant(ctx context.Context, input ChatAgentInput, o
 	} else {
 		output, err = s.agent.Generate(ctx, input)
 	}
+	if evidenceErr != nil {
+		// Never persist undelivered model text: history could otherwise expose
+		// a hint whose evidence write failed, including a provider ignoring errors.
+		output.Content = ""
+		return output, "interrupted", evidenceErr
+	}
 	if err != nil {
 		if emitted {
 			// A streaming provider can return a larger accumulated value after
 			// the transport has already failed. Persist only chunks delivered
 			// successfully so history cannot outrun the client-visible reply.
 			output.Content = deliveredContent.String()
+		} else {
+			output.Content = ""
 		}
 		if output.Agent == "" {
 			output.Agent = "tutor"
@@ -704,20 +723,25 @@ func (s *Service) generateAssistant(ctx context.Context, input ChatAgentInput, o
 	}
 	if strings.TrimSpace(output.Content) == "" {
 		output.Content = "智能导师暂未生成有效回复，请稍后重试。"
-		return deliverAssistantOutput(output, "unavailable", deliver)
+		return deliverAssistantOutput(output, "unavailable", onChunk)
 	}
 	if !emitted {
 		if err := deliver(ChatAgentChunk(output)); err != nil {
+			if evidenceErr != nil {
+				output.Content = ""
+			}
 			return output, "interrupted", err
 		}
 	} else if streamed := deliveredContent.String(); streamed != output.Content {
 		if strings.HasPrefix(output.Content, streamed) {
 			if err := deliver(ChatAgentChunk{Agent: output.Agent, Content: output.Content[len(streamed):]}); err != nil {
+				output.Content = deliveredContent.String()
 				return output, "interrupted", err
 			}
 		} else {
 			output.Content = streamed + interruptedAssistantSuffix
 			if err := deliver(ChatAgentChunk{Agent: output.Agent, Content: interruptedAssistantSuffix}); err != nil {
+				output.Content = deliveredContent.String()
 				return output, "interrupted", err
 			}
 			return output, "interrupted", nil

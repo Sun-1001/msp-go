@@ -67,6 +67,7 @@ const (
 type Repository interface {
 	WithTx(context.Context, func(context.Context, Repository) error) error
 	LockStudentTracking(context.Context, string) error
+	GetExerciseAssistance(context.Context, string, string) (string, error)
 	GetTeacherIDForStudent(context.Context, string) (string, bool, error)
 	GetLatestSession(context.Context, string) (LearningSession, bool, error)
 	CreateSession(context.Context, string, time.Time) (LearningSession, error)
@@ -229,6 +230,7 @@ type AttemptRecord struct {
 	RegularSubmissionDigest string
 	QuestionSnapshot        *Exercise
 	MasteryWeight           float64
+	AssistanceStatus        string
 	StudentAnswer           string
 	StudentSteps            []string
 	IsCorrect               bool
@@ -458,6 +460,7 @@ type SubmitResponse struct {
 	MasteryModel       string             `json:"mastery_model"`
 	NextRecommendation string             `json:"next_recommendation"`
 	MasteryWeight      float64            `json:"mastery_weight"`
+	AssistanceStatus   string             `json:"assistance_status,omitempty"`
 	ReviewTaskRevision *int64             `json:"review_task_revision,omitempty"`
 }
 
@@ -1226,6 +1229,10 @@ func (s *Service) SubmitAnswer(ctx context.Context, userID string, request Submi
 		} else if request.ReviewTaskID != "" {
 			attemptDailyAssignmentID = ""
 		}
+		assistanceStatus, err := repo.GetExerciseAssistance(txCtx, userID, currentExercise.ID)
+		if err != nil {
+			return err
+		}
 		attempt := AttemptRecord{
 			ID:                      attemptID,
 			ContentID:               currentExercise.ID,
@@ -1238,6 +1245,7 @@ func (s *Service) SubmitAnswer(ctx context.Context, userID string, request Submi
 			RegularSubmissionKey:    regularSubmissionKey,
 			RegularSubmissionDigest: regularSubmissionDigest,
 			MasteryWeight:           submissionMasteryWeight(request, scheduledReview, isDailyCorrection(dailyBinding, reviewTask)),
+			AssistanceStatus:        assistanceStatus,
 			StudentAnswer:           studentAnswer,
 			StudentSteps:            request.AnswerSteps,
 			IsCorrect:               check.Decision == mathsolverapp.DecisionCorrect,
@@ -1245,6 +1253,10 @@ func (s *Service) SubmitAnswer(ctx context.Context, userID string, request Submi
 			StartedAt:               now,
 			SubmittedAt:             now,
 			TimeSpentSeconds:        request.TimeSpentSeconds,
+		}
+		if assistanceStatus == learningfeedback.AssistanceHinted {
+			// Reuse the existing assisted/redo weight without compounding discounts.
+			attempt.MasteryWeight = min(attempt.MasteryWeight, informalRedoMasteryWeight)
 		}
 		questionSnapshot := cloneReviewExercise(currentExercise)
 		attempt.QuestionSnapshot = &questionSnapshot
@@ -1337,6 +1349,7 @@ func (s *Service) SubmitAnswer(ctx context.Context, userID string, request Submi
 			MasteryModel:       dktModelName,
 			NextRecommendation: nextRecommendation(isCorrect, masteryUpdate),
 			MasteryWeight:      attempt.MasteryWeight,
+			AssistanceStatus:   attempt.AssistanceStatus,
 		}
 		if request.ReviewTaskID != "" {
 			response.ReviewTaskRevision = &resultingReviewTaskRevision

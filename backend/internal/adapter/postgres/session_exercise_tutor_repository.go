@@ -65,3 +65,27 @@ func (r SessionRepository) GetTutorExerciseID(ctx context.Context, sessionID, st
 	}
 	return exerciseID, err
 }
+
+// RecordExerciseHint runs before the first nonempty model chunk becomes available.
+// It serializes with submission snapshots, but never writes mastery itself.
+func (r SessionRepository) RecordExerciseHint(ctx context.Context, sessionID, studentID string) error {
+	exerciseID, err := r.GetTutorExerciseID(ctx, sessionID, studentID)
+	if err != nil || exerciseID == "" {
+		return err
+	}
+	return withRepositoryTx(ctx, "exercise hint evidence", r.Repository, func(base Repository) SessionRepository {
+		return SessionRepository{Repository: base}
+	}, func(current SessionRepository) error {
+		if err := lockStudentTracking(ctx, current.DB(), studentID); err != nil {
+			return err
+		}
+		_, err := current.DB().Exec(ctx, `
+			INSERT INTO public.exercise_hint_evidence (student_id, exercise_id, status, observed_at)
+			VALUES ($1, $2, 'hinted', clock_timestamp() AT TIME ZONE 'UTC')
+			ON CONFLICT (student_id, exercise_id) DO UPDATE
+			SET status = 'hinted', observed_at = CASE
+				WHEN exercise_hint_evidence.status = 'unknown' THEN EXCLUDED.observed_at
+				ELSE exercise_hint_evidence.observed_at END`, studentID, exerciseID)
+		return err
+	})
+}

@@ -1,5 +1,7 @@
 /** Recent assessment evidence, independent of the selected statistics range. */
 export interface LearningFeedback {
+  /** Missing on snapshots generated before assistance evidence was introduced. */
+  evidence_version?: number;
   concept_id: string;
   concept_name: string;
   stage: 'diagnostic' | 'repair' | 'consolidate' | 'verify' | 'retention' | 'transfer';
@@ -13,6 +15,9 @@ export interface LearningFeedback {
   recent_attempts: number;
   independent_attempts: number;
   independent_correct: number;
+  hinted_attempts?: number;
+  hinted_correct?: number;
+  unknown_assistance_attempts?: number;
   delayed_correct: number;
   recent_accuracy: number | null;
   dominant_error?: string;

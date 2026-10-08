@@ -14,8 +14,11 @@ import (
 )
 
 const (
-	WindowDays   = 30
-	AttemptLimit = 20
+	WindowDays             = 30
+	AttemptLimit           = 20
+	AssistanceHinted       = "hinted"
+	AssistanceNoneRecorded = "no_recorded_hint"
+	AssistanceUnknown      = "unknown"
 )
 
 // Reader supplies student-owned, immutable assessment facts in one snapshot.
@@ -24,15 +27,16 @@ type Reader interface {
 }
 
 type Attempt struct {
-	ID            string    `json:"id"`
-	ContentID     string    `json:"content_id"`
-	Body          string    `json:"body"`
-	Correct       bool      `json:"correct"`
-	FirstAttempt  bool      `json:"first_attempt"`
-	MasteryWeight float64   `json:"mastery_weight"`
-	ErrorType     string    `json:"error_type"`
-	ErrorSubtype  string    `json:"error_subtype"`
-	SubmittedAt   time.Time `json:"submitted_at"`
+	ID               string    `json:"id"`
+	ContentID        string    `json:"content_id"`
+	Body             string    `json:"body"`
+	Correct          bool      `json:"correct"`
+	FirstAttempt     bool      `json:"first_attempt"`
+	MasteryWeight    float64   `json:"mastery_weight"`
+	AssistanceStatus string    `json:"assistance_status"`
+	ErrorType        string    `json:"error_type"`
+	ErrorSubtype     string    `json:"error_subtype"`
+	SubmittedAt      time.Time `json:"submitted_at"`
 }
 
 type Snapshot struct {
@@ -48,35 +52,40 @@ type Snapshot struct {
 // Feedback separates work completed from evidence of independent and delayed success.
 // Thresholds are transparent teaching heuristics, not calibrated learning probabilities.
 type Feedback struct {
-	ConceptID             string    `json:"concept_id"`
-	ConceptName           string    `json:"concept_name"`
-	Stage                 string    `json:"stage"`
-	Label                 string    `json:"label"`
-	Reason                string    `json:"reason"`
-	NextStep              string    `json:"next_step"`
-	SuccessCriterion      string    `json:"success_criterion"`
-	RecommendedDifficulty float64   `json:"recommended_difficulty"`
-	EstimatedMastery      *float64  `json:"estimated_mastery"`
-	Confidence            float64   `json:"confidence"`
-	RecentAttempts        int       `json:"recent_attempts"`
-	IndependentAttempts   int       `json:"independent_attempts"`
-	IndependentCorrect    int       `json:"independent_correct"`
-	DelayedCorrect        int       `json:"delayed_correct"`
-	RecentAccuracy        *float64  `json:"recent_accuracy"`
-	DominantError         string    `json:"dominant_error,omitempty"`
-	FocusError            string    `json:"focus_error,omitempty"`
-	WindowDays            int       `json:"window_days"`
-	AsOf                  time.Time `json:"as_of"`
+	EvidenceVersion           int       `json:"evidence_version"`
+	ConceptID                 string    `json:"concept_id"`
+	ConceptName               string    `json:"concept_name"`
+	Stage                     string    `json:"stage"`
+	Label                     string    `json:"label"`
+	Reason                    string    `json:"reason"`
+	NextStep                  string    `json:"next_step"`
+	SuccessCriterion          string    `json:"success_criterion"`
+	RecommendedDifficulty     float64   `json:"recommended_difficulty"`
+	EstimatedMastery          *float64  `json:"estimated_mastery"`
+	Confidence                float64   `json:"confidence"`
+	RecentAttempts            int       `json:"recent_attempts"`
+	IndependentAttempts       int       `json:"independent_attempts"`
+	IndependentCorrect        int       `json:"independent_correct"`
+	HintedAttempts            int       `json:"hinted_attempts"`
+	HintedCorrect             int       `json:"hinted_correct"`
+	UnknownAssistanceAttempts int       `json:"unknown_assistance_attempts"`
+	DelayedCorrect            int       `json:"delayed_correct"`
+	RecentAccuracy            *float64  `json:"recent_accuracy"`
+	DominantError             string    `json:"dominant_error,omitempty"`
+	FocusError                string    `json:"focus_error,omitempty"`
+	WindowDays                int       `json:"window_days"`
+	AsOf                      time.Time `json:"as_of"`
 }
 
 // Build never writes mastery or treats repeated answers as independent verification.
 func Build(snapshot Snapshot, now time.Time) Feedback {
 	f := Feedback{
-		ConceptID: snapshot.ConceptID, ConceptName: snapshot.Name,
+		EvidenceVersion: 2,
+		ConceptID:       snapshot.ConceptID, ConceptName: snapshot.Name,
 		Stage: "diagnostic", Label: "先做诊断", WindowDays: WindowDays, AsOf: now.UTC(),
-		Reason:                "新题首答证据不足，暂不判断已经掌握或薄弱。",
-		NextStep:              "完成一道基础新题，写出关键步骤，定位需要巩固的环节。",
-		SuccessCriterion:      "先积累至少3道不同新题的首次作答，再确定下一步。",
+		Reason:                "未记录题目提示的新题首答证据不足，暂不判断已经掌握或薄弱。",
+		NextStep:              "先尝试一道基础新题，写出关键步骤；需要时仍可求助，提示辅助作答会单独统计。",
+		SuccessCriterion:      "先积累至少3道不同新题、未记录本平台题目提示的首次作答，再确定下一步。",
 		RecommendedDifficulty: 0.35,
 	}
 	if snapshot.Mastery != nil && !math.IsNaN(*snapshot.Mastery) && !math.IsInf(*snapshot.Mastery, 0) && snapshot.LastAttemptAt != nil && !snapshot.LastAttemptAt.After(now) && snapshot.LifetimeAttempts > 0 {
@@ -89,7 +98,16 @@ func Build(snapshot Snapshot, now time.Time) Feedback {
 	attempts := recentAttempts(snapshot.Attempts, now)
 	f.RecentAttempts = len(attempts)
 	independent := make([]Attempt, 0, len(attempts))
-	seenContent, seenBodies := map[string]bool{}, map[string]bool{}
+	seenContent := map[string]bool{}
+	// Keep the earliest exposure to an identical body in this window. A new ID
+	// after a hinted or incorrect answer must not turn that body into a new test.
+	firstBodyAttempt := map[string]string{}
+	for index := len(attempts) - 1; index >= 0; index-- {
+		body := strings.Join(strings.Fields(strings.ToLower(attempts[index].Body)), "")
+		if _, exists := firstBodyAttempt[body]; !exists {
+			firstBodyAttempt[body] = attempts[index].ID
+		}
+	}
 	errors := map[string]int{}
 	for index, attempt := range attempts {
 		if index < 5 && !attempt.Correct {
@@ -98,10 +116,25 @@ func Build(snapshot Snapshot, now time.Time) Feedback {
 			}
 		}
 		body := strings.Join(strings.Fields(strings.ToLower(attempt.Body)), "")
-		if !attempt.FirstAttempt || attempt.MasteryWeight != 1 || attempt.ContentID == "" || body == "" || seenContent[attempt.ContentID] || seenBodies[body] {
+		if !attempt.FirstAttempt || attempt.ContentID == "" || body == "" || seenContent[attempt.ContentID] || firstBodyAttempt[body] != attempt.ID {
 			continue
 		}
-		seenContent[attempt.ContentID], seenBodies[body] = true, true
+		seenContent[attempt.ContentID] = true
+		switch attempt.AssistanceStatus {
+		case AssistanceHinted:
+			f.HintedAttempts++
+			if attempt.Correct {
+				f.HintedCorrect++
+			}
+			continue
+		case AssistanceNoneRecorded:
+			if attempt.MasteryWeight != 1 {
+				continue
+			}
+		default:
+			f.UnknownAssistanceAttempts++
+			continue
+		}
 		independent = append(independent, attempt)
 		if attempt.Correct {
 			f.IndependentCorrect++
@@ -157,23 +190,27 @@ func Build(snapshot Snapshot, now time.Time) Feedback {
 	}
 	if len(independent) < 3 {
 		if len(attempts) >= 3 {
-			f.Reason = fmt.Sprintf("近期%d次练习中只有%d道新题首答；重复题和提前复习不能替代新题验证。", len(attempts), len(independent))
+			f.Reason = fmt.Sprintf("近期%d次练习中有%d道未记录提示的新题首答、%d道提示辅助首答、%d道提示状态未知首答；辅助作答、重复题和未知记录不能替代独立验证。", len(attempts), len(independent), f.HintedAttempts, f.UnknownAssistanceAttempts)
+		}
+		if f.HintedCorrect > 0 {
+			f.Label = "撤去提示再验证"
+			f.NextStep = "提示辅助下已有正确作答；换一道同知识点的基础新题，先尝试自行选择方法，再按需请求提示。"
 		}
 		return f
 	}
 	f.Stage, f.Label = "consolidate", "巩固解题步骤"
-	f.Reason = "已有新题首答记录，正确性还需要稳定。"
+	f.Reason = "已有未记录题目提示的新题首答，正确性还需要稳定。"
 	f.NextStep = "用不同表示或条件完成一道新题，检查方法选择和运算步骤。"
 	f.SuccessCriterion = "最近5道独立新题至少答对4道，再进行间隔验证。"
 	f.RecommendedDifficulty = 0.5
 	if f.RecentAccuracy != nil && *f.RecentAccuracy >= 0.8 {
 		f.Stage, f.Label = "verify", "等待间隔验证"
-		f.Reason = "近期新题表现改善，还需要更多题目和跨时间证据。"
+		f.Reason = "近期未记录题目提示的新题表现改善，还需要更多题目和跨时间证据。"
 		f.NextStep = "选择不同情境的新题独立作答，并在至少24小时后再做新题检验保持。"
 		f.SuccessCriterion = "至少5道独立新题、最近5道至少4道正确，且至少2道正确发生在首次证据24小时后。"
 		if len(independent) >= 5 && f.DelayedCorrect >= 2 {
 			f.Stage, f.Label = "transfer", "尝试迁移应用"
-			f.Reason = "新题首答正确性与间隔作答均有支持，可以尝试迁移；这仍不是掌握保证。"
+			f.Reason = "未记录题目提示的新题首答与间隔作答均有支持，可以尝试迁移；平台无法确认其他帮助，这仍不是掌握保证。"
 			f.NextStep = "保持同一知识点，换一种表示、应用情境或逆向问题，检验方法迁移。"
 			f.SuccessCriterion = "迁移题首次独立答对且能解释关键步骤；失败则回到错因巩固。"
 			f.RecommendedDifficulty = 0.65

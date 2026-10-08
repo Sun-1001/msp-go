@@ -105,8 +105,13 @@ function TopicCard({ topic, tone }: { topic: PortraitInsightTopic; tone: 'succes
           <Badge variant="default">{topic.learning_feedback.label}</Badge>
           <p className="text-surface-600 dark:text-surface-300">{topic.learning_feedback.reason}</p>
           <p className="text-xs text-surface-500 dark:text-surface-400">
-            近{topic.learning_feedback.window_days}天最近{topic.learning_feedback.recent_attempts}次作答 · 新题首答 {topic.learning_feedback.independent_correct}/{topic.learning_feedback.independent_attempts} 正确 · 间隔验证 {topic.learning_feedback.delayed_correct} 次正确
+            近{topic.learning_feedback.window_days}天最近{topic.learning_feedback.recent_attempts}次作答 · {(topic.learning_feedback.evidence_version ?? 1) >= 2 ? '未记录提示首答' : '新题首答'} {topic.learning_feedback.independent_correct}/{topic.learning_feedback.independent_attempts} 正确 · 间隔验证 {topic.learning_feedback.delayed_correct} 次正确
           </p>
+          {(topic.learning_feedback.evidence_version ?? 1) >= 2 && (
+            <p className="text-xs text-surface-500 dark:text-surface-400">
+              提示辅助首答 {topic.learning_feedback.hinted_correct ?? 0}/{topic.learning_feedback.hinted_attempts ?? 0} 正确 · 提示状态未知 {topic.learning_feedback.unknown_assistance_attempts ?? 0} 道；这两类记录不计入独立验证。
+            </p>
+          )}
           <p className="text-xs leading-5 text-surface-500 dark:text-surface-400">下一步：{topic.learning_feedback.next_step}</p>
         </div>
       )}
@@ -356,7 +361,7 @@ export function StudentPortraitInsights({ range, insights, loading, error, onRet
           </Card>
 
           <p className="text-center text-xs text-surface-400 dark:text-surface-500">
-            学习验证独立使用近30天最多20次作答；新题首答不保证未使用提示，题量完成不代表已经掌握。
+            学习验证使用近30天最多20次作答，并按题面去重。当前验证只纳入未记录本平台题目提示的全权重新题首答；历史提示状态未知单独统计，平台无法确认其他帮助。题量完成不代表已经掌握。
             练习量、时长和活跃天数对比全班其他同学；正确率只比较至少完成10道课程题的有效样本，知识点比较使用至少5次练习且置信度达到30%的当前掌握状态。
             {insights.class_context.in_class && ` 当前班级 ${insights.class_context.class_size} 人，本范围活跃 ${insights.class_context.active_students} 人。`}
           </p>

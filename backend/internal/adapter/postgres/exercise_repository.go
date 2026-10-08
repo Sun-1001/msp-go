@@ -966,11 +966,12 @@ func (r ExerciseRepository) InsertAttempt(ctx context.Context, record exerciseap
 			score,
 			started_at,
 			submitted_at,
-			time_spent_seconds
+			time_spent_seconds,
+			assistance_status
 		)
 			VALUES (
 				$1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16::json, $17,
-				$18::json, $19, $20, $21, $22::json, $23, $24, $25, $26, $27
+				$18::json, $19, $20, $21, $22::json, $23, $24, $25, $26, $27, $28
 			)`,
 		record.ID,
 		record.ContentID,
@@ -999,6 +1000,7 @@ func (r ExerciseRepository) InsertAttempt(ctx context.Context, record exerciseap
 		record.StartedAt,
 		record.SubmittedAt,
 		record.TimeSpentSeconds,
+		record.AssistanceStatus,
 	)
 	return err
 }

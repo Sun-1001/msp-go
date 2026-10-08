@@ -59,6 +59,7 @@ LEFT JOIN LATERAL (
 		'id', recent.id, 'content_id', recent.content_id,
 		'body', left(recent.review_question_body, 1200),
 		'correct', recent.is_correct, 'mastery_weight', recent.mastery_weight,
+		'assistance_status', recent.assistance_status,
 		'first_attempt', NOT EXISTS (
 			SELECT 1 FROM public.content_attempts prior
 			WHERE prior.student_id = $1 AND prior.content_id = recent.content_id
@@ -71,7 +72,7 @@ LEFT JOIN LATERAL (
 	) ORDER BY recent.submitted_at DESC, recent.id DESC) AS attempts
 	FROM (
 		SELECT ca.id, ca.content_id, ca.review_question_body, ca.is_correct,
-			ca.mastery_weight, ca.submitted_at
+			ca.mastery_weight, ca.assistance_status, ca.submitted_at
 		FROM public.content_attempts ca
 		WHERE ca.student_id = $1
 			AND ca.submitted_at >= $3::timestamp - make_interval(days => $4)

@@ -435,6 +435,14 @@ const ExercisePanelContent: React.FC<ExercisePanelProps> = ({
             )}
 
             {/* 掌握度变化 */}
+            {!isIndeterminate && submitResult.assistanceStatus === 'hinted' && (
+              <p className="rounded-lg bg-surface-50 p-3 text-sm text-surface-600 dark:bg-surface-800 dark:text-surface-300">
+                本题已提供过辅导提示，作答保留为辅助练习，并降低掌握度更新权重。接下来可换一道新题自行尝试，验证能否迁移方法。
+              </p>
+            )}
+            {!isIndeterminate && submitResult.assistanceStatus === 'unknown' && (
+              <p className="text-xs text-surface-500">本题的历史提示状态无法确认，保留练习记录，暂不作为独立验证证据。</p>
+            )}
             {!isIndeterminate && currentQuestion.learningFeedback && (
               <details className="rounded-lg border border-surface-200 p-3 text-sm dark:border-surface-700">
                 <summary className="cursor-pointer font-medium text-surface-700 dark:text-surface-300">本题出题依据 · {currentQuestion.learningFeedback.label}</summary>

@@ -95,6 +95,7 @@ export interface SubmitResult {
   attemptId?: string;
   reviewTaskRevision?: number;
   masteryWeight?: number;
+  assistanceStatus?: 'hinted' | 'no_recorded_hint' | 'unknown';
   isCorrect: boolean;
   recorded?: boolean;
   gradingStatus?: 'correct' | 'incorrect' | 'indeterminate';
@@ -261,6 +262,7 @@ export const exerciseService = {
       mastery_model: string;
       next_recommendation: string;
       mastery_weight?: number;
+      assistance_status?: SubmitResult['assistanceStatus'];
       review_task_revision?: number;
     }>('/exercise/submit', {
       exercise_id: payload.exerciseId,
@@ -292,6 +294,7 @@ export const exerciseService = {
       ...(data.mastery_weight !== undefined
         ? { masteryWeight: data.mastery_weight }
         : {}),
+      ...(data.assistance_status ? { assistanceStatus: data.assistance_status } : {}),
       isCorrect: data.is_correct,
       recorded,
       gradingStatus:

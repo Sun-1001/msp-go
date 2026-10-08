@@ -412,8 +412,9 @@ func buildPortraitContent(input GeneratorInput) string {
 
 	builder.WriteString("\n## 改进建议\n")
 	if len(input.LearningFeedback) > 0 {
-		builder.WriteString("以下依据近30天最多20次作答的题目首答与间隔证据，独立于上方统计范围；题数完成不等于已经掌握。首答不保证未使用提示。\n")
+		builder.WriteString("以下依据近30天最多20次作答的题目首答与间隔证据，独立于上方统计范围；仅将未记录本平台题目提示的全权重新题首答纳入验证。提示辅助和历史状态未知单独统计，平台无法确认其他帮助，题数完成不等于已经掌握。\n")
 		for _, feedback := range input.LearningFeedback {
+			builder.WriteString(fmt.Sprintf("- %s证据：未记录提示首答 %d/%d 正确；提示辅助首答 %d/%d 正确；提示状态未知 %d 道。\n", feedback.ConceptName, feedback.IndependentCorrect, feedback.IndependentAttempts, feedback.HintedCorrect, feedback.HintedAttempts, feedback.UnknownAssistanceAttempts))
 			builder.WriteString(fmt.Sprintf("- %s：%s。%s 下一步：%s 验证标准：%s\n", feedback.ConceptName, feedback.Label, feedback.Reason, feedback.NextStep, feedback.SuccessCriterion))
 		}
 		return builder.String()
