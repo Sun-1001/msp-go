@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useLocation, useSearchParams } from 'react-router-dom';
 import { MainLayout } from '@/components/layout/MainLayout';
 import { RequestErrorNotice } from '@/components/feedback';
@@ -11,7 +11,6 @@ import { Tabs, TabsContent, TabsList } from '@/components/ui/Tabs';
 import { useToast } from '@/components/ui/Toast';
 import {
   Archive,
-  ArrowLeft,
   Bell,
   Check,
   CheckCircle2,
@@ -24,7 +23,6 @@ import {
   Search,
   SquareCheckBig,
   UserRound,
-  X,
 } from 'lucide-react';
 import { cn } from '@/libs/utils/cn';
 import {
@@ -38,7 +36,6 @@ import { useSerialPolling } from '@/hooks/useSerialPolling';
 import {
   conversationService,
   type ConversationItem,
-  type ConversationDetail,
   type Contact,
 } from '@/modules/message-center/services/conversationService';
 import {
@@ -66,11 +63,12 @@ import {
 import { MessageCenterSideTab } from '@/modules/message-center/MessageCenterSideTab';
 import { MessageCenterListPagination } from '@/modules/message-center/MessageCenterListPagination';
 import { MessageCenterFilterMenu } from '@/modules/message-center/MessageCenterFilterMenu';
-import { MessageAttachmentPicker } from '@/modules/message-center/MessageAttachmentPicker';
 import { MessageAttachments } from '@/modules/message-center/MessageAttachments';
 import { MessageText } from '@/modules/message-center/MessageText';
 import { useVisibleMessageCutoff } from '@/modules/message-center/components/useVisibleMessageCutoff';
-import { useConversationMessageSearch } from '@/modules/message-center/components/useConversationMessageSearch';
+import { usePrivateConversationDetail } from '@/modules/message-center/components/usePrivateConversationDetail';
+import { ConversationDetailPanel } from '@/modules/message-center/ConversationDetailPanel';
+import { NewConversationModal } from '@/modules/message-center/NewConversationModal';
 import { MessageComposer } from '@/modules/message-center/MessageComposer';
 import type { MessageAttachment } from '@/modules/message-center/attachmentTypes';
 import { ForumCenter } from '@/modules/forum';
@@ -93,14 +91,6 @@ const listPageSize = 50;
 interface ListLoadOptions {
   refreshCurrentPage?: boolean;
   signal?: AbortSignal;
-}
-
-type ConversationScrollIntent =
-  | { type: 'bottom'; conversationID: string }
-  | { type: 'preserve'; conversationID: string; scrollHeight: number; scrollTop: number };
-
-function isConversationViewportNearBottom(viewport: HTMLDivElement): boolean {
-  return viewport.scrollHeight - viewport.scrollTop - viewport.clientHeight <= 80;
 }
 
 const studentTabs = new Set(['private', 'notices', 'questions', 'forum']);
@@ -149,7 +139,6 @@ export const MessageCenterPage: React.FC = () => {
   const [searchParams, setSearchParams] = useSearchParams();
   const initialTab = parseStudentTab(searchParams.get('tab'));
   const initialItemID = searchParams.get('id') ?? '';
-  const conversationRequest = useRef(0);
   const noticeRequest = useRef(0);
   const threadRequest = useRef(0);
   const conversationListRequest = useRef(0);
@@ -161,9 +150,7 @@ export const MessageCenterPage: React.FC = () => {
   const handledLocationKey = useRef(location.key);
   const pendingDeepLink = useRef(initialItemID ? { tab: initialTab, id: initialItemID } : null);
   const contactSearchRequest = useRef(0);
-  const acknowledgedConversationCutoff = useRef('');
   const acknowledgedThreadCutoff = useRef('');
-  const acknowledgingConversationCutoff = useRef('');
   const acknowledgingThreadCutoff = useRef('');
   const { toast } = useToast();
   const {
@@ -186,30 +173,6 @@ export const MessageCenterPage: React.FC = () => {
 
   // conversations
   const [convItems, setConvItems] = useState<ReturnType<typeof mapConversationItem>[]>([]);
-  const [activeConv, setActiveConv] = useState<ConversationDetail | null>(null);
-  const [activeConvId, setActiveConvId] = useState(initialTab === 'private' ? initialItemID : '');
-  const activeConvIDRef = useRef(activeConvId);
-  const conversationListModeRef = useRef(!activeConvId);
-  const conversationDetailLoadingRef = useRef(Boolean(activeConvId));
-  const [conversationDetailLoading, setConversationDetailLoading] = useState(Boolean(activeConvId));
-  const [conversationDetailError, setConversationDetailError] = useState<AppError | null>(null);
-  const [messageDrafts, setMessageDrafts] = useState<Record<string, string>>({});
-  const messageDraft = activeConvId ? messageDrafts[activeConvId] ?? '' : '';
-  const [messageAttachmentDrafts, setMessageAttachmentDrafts] = useState<Record<string, MessageAttachment[]>>({});
-  const messageAttachments = useMemo(
-    () => activeConvId ? messageAttachmentDrafts[activeConvId] ?? [] : [],
-    [activeConvId, messageAttachmentDrafts],
-  );
-  const [messageUploading, setMessageUploading] = useState(false);
-  const [sendingMsg, setSendingMsg] = useState(false);
-  const [loadingOlderMessages, setLoadingOlderMessages] = useState(false);
-  const loadingOlderMessagesRef = useRef(false);
-  const conversationViewportRef = useRef<HTMLDivElement>(null);
-  const conversationScrollIntentRef = useRef<ConversationScrollIntent | null>(
-    activeConvId ? { type: 'bottom', conversationID: activeConvId } : null,
-  );
-  const [conversationSearchOpen, setConversationSearchOpen] = useState(false);
-  const [conversationMessageSearch, setConversationMessageSearch] = useState('');
   const [conversationPage, setConversationPage] = useState(1);
   const [conversationTotal, setConversationTotal] = useState(0);
   const [conversationSelectionMode, setConversationSelectionMode] = useState(false);
@@ -298,13 +261,36 @@ export const MessageCenterPage: React.FC = () => {
   questionPageRef.current = questionPage;
 
   const threadViewportRef = useRef<HTMLDivElement>(null);
-  const conversationSearch = useConversationMessageSearch(activeConvId, conversationMessageSearch, conversationSearchOpen && activeTab === 'private');
-  const loadingConversationSearch = conversationSearch.loading;
-  const conversationSearchError = conversationSearch.error?.message ?? '';
-  const visibleConversationCutoff = useVisibleMessageCutoff(
-    conversationViewportRef, activeConvId, activeConv?.messages ?? [],
-    pageVisible && activeTab === 'private' && !conversationSearchOpen && !conversationDetailLoading,
-  );
+  const loadConversationsRef = useRef<(page?: number, options?: ListLoadOptions) => Promise<boolean>>(async () => true);
+  const invalidateConversationList = useCallback(() => {
+    conversationListRequest.current++;
+  }, []);
+  const refreshConversationsAfterMutation = useCallback(async () => {
+    const loaded = await loadConversationsRef.current(1, { refreshCurrentPage: true });
+    if (!loaded && !listLoadError) setListLoadError(toAppError(null, '私信列表刷新失败，请稍后重试'));
+    refreshMessageCenterSummaryAfterMutation();
+  }, [listLoadError]);
+  const conversation = usePrivateConversationDetail({
+    initialConversationID: initialTab === 'private' ? initialItemID : '',
+    active: activeTab === 'private',
+    pageVisible,
+    notifyRequestError,
+    invalidateConversationList,
+    onConversationMutated: refreshConversationsAfterMutation,
+  });
+  const {
+    activeConv,
+    setActiveConv,
+    activeConvId,
+    activeConvIDRef,
+    conversationListModeRef,
+    conversationDetailLoadingRef,
+    loadingOlderMessagesRef,
+    activateConversation,
+    loadConversationDetail,
+    refreshActiveConversation,
+    discardDrafts,
+  } = conversation;
   const visibleThreadCutoff = useVisibleMessageCutoff(
     threadViewportRef, activeQuestionId, activeThread?.messages ?? [],
     pageVisible && activeTab === 'questions' && !threadDetailLoading,
@@ -315,24 +301,6 @@ export const MessageCenterPage: React.FC = () => {
     if (!pending || pending.tab !== tab) return '';
     pendingDeepLink.current = null;
     return pending.id;
-  }, []);
-
-  const activateConversation = useCallback((id: string): boolean => {
-    conversationListModeRef.current = !id;
-    conversationScrollIntentRef.current = id ? { type: 'bottom', conversationID: id } : null;
-    if (activeConvIDRef.current === id) return false;
-    activeConvIDRef.current = id;
-    conversationRequest.current++;
-    loadingOlderMessagesRef.current = false;
-    setActiveConvId(id);
-    setActiveConv(null);
-    setLoadingOlderMessages(false);
-    setConversationSearchOpen(false);
-    setConversationMessageSearch('');
-    conversationDetailLoadingRef.current = Boolean(id);
-    setConversationDetailLoading(Boolean(id));
-    setConversationDetailError(null);
-    return true;
   }, []);
 
   const activateQuestion = useCallback((id: string): boolean => {
@@ -370,7 +338,7 @@ export const MessageCenterPage: React.FC = () => {
     conversationListModeRef.current = true;
     clearItemDeepLink('private');
     activateConversation('');
-  }, [activateConversation, clearItemDeepLink]);
+  }, [activateConversation, clearItemDeepLink, conversationListModeRef]);
 
   useEffect(() => {
     const timer = window.setTimeout(() => setServerSearch(searchTerm.trim()), 300);
@@ -426,43 +394,8 @@ export const MessageCenterPage: React.FC = () => {
       if (!stale && !isRequestCancelled(error)) setListLoadError(toAppError(error, '私信列表加载失败'));
       return stale;
     }
-  }, [activateConversation, consumePendingDeepLink, serverSearch]);
-
-  const loadConversationDetail = useCallback(async (id: string, preserveLoadedMessages = false): Promise<boolean> => {
-    const request = ++conversationRequest.current;
-    conversationDetailLoadingRef.current = true;
-    if (!preserveLoadedMessages) {
-      conversationScrollIntentRef.current = { type: 'bottom', conversationID: id };
-      setConversationDetailLoading(true);
-    }
-    setConversationDetailError(null);
-    try {
-      const detail = await conversationService.get(id);
-      if (request === conversationRequest.current && activeConvIDRef.current === id) {
-        setActiveConv((current) => preserveLoadedMessages && current?.id === detail.id ? {
-          ...detail,
-          messages: mergeMessagesByID(current.messages, detail.messages),
-          messages_page: current.messages_page,
-          messages_page_size: current.messages_page_size,
-        } : detail);
-        conversationDetailLoadingRef.current = false;
-        setConversationDetailLoading(false);
-      }
-      return true;
-    } catch (error) {
-      if (request === conversationRequest.current && activeConvIDRef.current === id) {
-        if (!preserveLoadedMessages) {
-          setActiveConv(null);
-          if (!isRequestCancelled(error)) {
-            setConversationDetailError(toAppError(error, '私信详情加载失败，请稍后重试'));
-          }
-        }
-        conversationDetailLoadingRef.current = false;
-        setConversationDetailLoading(false);
-      }
-      return false;
-    }
-  }, []);
+  }, [activateConversation, activeConvIDRef, conversationListModeRef, consumePendingDeepLink, serverSearch]);
+  loadConversationsRef.current = loadConversations;
 
   // ---- load notices ---------------------------------------------------
   const loadNotices = useCallback(async (page = 1, options: ListLoadOptions = {}) => {
@@ -567,60 +500,6 @@ export const MessageCenterPage: React.FC = () => {
       return false;
     }
   }, []);
-
-  useEffect(() => {
-    if (activeTab !== 'private') {
-      conversationRequest.current++;
-      conversationDetailLoadingRef.current = false;
-      setConversationDetailLoading(false);
-      return;
-    }
-    if (!activeConvId) {
-      conversationRequest.current++;
-      setActiveConv(null);
-      conversationDetailLoadingRef.current = false;
-      setConversationDetailLoading(false);
-      setConversationDetailError(null);
-      return;
-    }
-    setActiveConv(null);
-    void loadConversationDetail(activeConvId);
-  }, [activeConvId, activeTab, loadConversationDetail]);
-
-  useLayoutEffect(() => {
-    const viewport = conversationViewportRef.current;
-    const intent = conversationScrollIntentRef.current;
-    if (!viewport || !intent || !activeConv || activeConv.id !== activeConvId || intent.conversationID !== activeConv.id) return;
-
-    if (intent.type === 'bottom') {
-      viewport.scrollTop = viewport.scrollHeight;
-    } else {
-      viewport.scrollTop = Math.max(0, intent.scrollTop + viewport.scrollHeight - intent.scrollHeight);
-    }
-    if (conversationScrollIntentRef.current === intent) conversationScrollIntentRef.current = null;
-  }, [activeConv, activeConvId]);
-
-  useEffect(() => {
-    const throughMessageID = visibleConversationCutoff;
-    const cutoffKey = activeConv && throughMessageID ? `${activeConv.id}:${throughMessageID}` : '';
-    if (!pageVisible || !visibleConversationCutoff || activeTab !== 'private' || !activeConv || !throughMessageID || activeConv.id !== activeConvId || acknowledgedConversationCutoff.current === cutoffKey || acknowledgingConversationCutoff.current === cutoffKey) return;
-    const conversationID = activeConv.id;
-    const controller = new AbortController();
-    acknowledgingConversationCutoff.current = cutoffKey;
-    conversationListRequest.current++;
-    void conversationService.acknowledgeRead(conversationID, throughMessageID, controller.signal).then(async () => {
-      acknowledgedConversationCutoff.current = cutoffKey;
-      const loaded = await loadConversations(1, { refreshCurrentPage: true });
-      if (!loaded && !listLoadError) setListLoadError(toAppError(null, '私信列表刷新失败，请稍后重试'));
-      refreshMessageCenterSummaryAfterMutation();
-    }).catch((error) => {
-      if (controller.signal.aborted) return;
-      notifyRequestError(error, '私信已显示，但同步已读状态失败');
-    }).finally(() => {
-      if (acknowledgingConversationCutoff.current === cutoffKey) acknowledgingConversationCutoff.current = '';
-    });
-    return () => controller.abort();
-  }, [activeConv, activeConvId, activeTab, visibleConversationCutoff, listLoadError, loadConversations, notifyRequestError, pageVisible]);
 
   useEffect(() => {
     if (activeTab !== 'notices') {
@@ -731,24 +610,9 @@ export const MessageCenterPage: React.FC = () => {
     ]);
     if (signal.aborted) return;
     if (document.hidden || loadingMoreListRef.current || loadingOlderMessagesRef.current || loadingOlderThreadMessagesRef.current || conversationDetailLoadingRef.current || threadDetailLoadingRef.current) return;
-    const currentConversationID = activeConvIDRef.current;
     const currentQuestionID = activeQuestionIDRef.current;
-    if (activeTab === 'private' && currentConversationID) {
-      const request = ++conversationRequest.current;
-      try {
-        const detail = await conversationService.get(currentConversationID, undefined, signal);
-        if (signal.aborted || document.hidden || request !== conversationRequest.current || activeConvIDRef.current !== currentConversationID) return;
-        const viewport = conversationViewportRef.current;
-        if (!conversationSearchOpen && viewport && isConversationViewportNearBottom(viewport)) {
-          conversationScrollIntentRef.current = { type: 'bottom', conversationID: currentConversationID };
-        }
-        setActiveConv((current) => current?.id === detail.id ? {
-          ...detail,
-          messages: mergeMessagesByID(current.messages, detail.messages),
-          messages_page: current.messages_page,
-          messages_page_size: current.messages_page_size,
-        } : current);
-      } catch { /* retain the last successfully loaded detail */ }
+    if (activeTab === 'private') {
+      await refreshActiveConversation(signal);
     }
     if (activeTab === 'questions' && currentQuestionID) {
       const request = ++threadRequest.current;
@@ -763,7 +627,7 @@ export const MessageCenterPage: React.FC = () => {
         } : current);
       } catch { /* retain the last successfully loaded detail */ }
     }
-  }, [activeTab, conversationSearchOpen, initialLoad, loadConversations, loadNotices, loadQuestions]);
+  }, [activeTab, conversationDetailLoadingRef, initialLoad, loadConversations, loadNotices, loadQuestions, loadingOlderMessagesRef, refreshActiveConversation]);
 
   useSerialPolling(pollMessageCenter, 30_000);
 
@@ -818,116 +682,7 @@ export const MessageCenterPage: React.FC = () => {
       setActiveConv(null);
       void loadConversationDetail(id);
     }
-  }, [activateConversation, clearItemDeepLink, loadConversationDetail]);
-
-  const sendPrivateMessage = useCallback(async (event?: React.FormEvent<HTMLFormElement>) => {
-    event?.preventDefault();
-    if (!activeConv || activeConv.id !== activeConvId || (!messageDraft.trim() && messageAttachments.length === 0) || sendingMsg || messageUploading) return;
-    const conversationID = activeConv.id;
-    const submittedDraft = messageDraft;
-    const submittedAttachments = messageAttachments;
-    conversationRequest.current++;
-    conversationListRequest.current++;
-    setSendingMsg(true);
-    try {
-      const message = await conversationService.sendMessage(conversationID, submittedDraft.trim(), submittedAttachments);
-      if (activeConvIDRef.current === conversationID) {
-        conversationRequest.current++;
-        conversationScrollIntentRef.current = { type: 'bottom', conversationID };
-        conversationDetailLoadingRef.current = false;
-        setConversationDetailLoading(false);
-        setConversationDetailError(null);
-        setConversationSearchOpen(false);
-        setConversationMessageSearch('');
-      }
-      setActiveConv((current) => activeConvIDRef.current === conversationID
-        ? appendDeliveredMessage(current?.id === conversationID ? current : activeConv, message)
-        : current);
-      setMessageDrafts((current) => {
-        if ((current[conversationID] ?? '') !== submittedDraft) return current;
-        const next = { ...current };
-        delete next[conversationID];
-        return next;
-      });
-      setMessageAttachmentDrafts((current) => {
-        if (current[conversationID] !== submittedAttachments) return current;
-        const next = { ...current };
-        delete next[conversationID];
-        return next;
-      });
-      await loadConversations(1, { refreshCurrentPage: true });
-      refreshMessageCenterSummaryAfterMutation();
-    } catch (error) {
-      notifyRequestError(error, '发送私信失败，请稍后重试');
-    }
-    finally { setSendingMsg(false); }
-  }, [activeConv, activeConvId, messageAttachments, messageDraft, messageUploading, sendingMsg, loadConversations, notifyRequestError]);
-
-  const loadOlderConversationMessages = useCallback(async () => {
-    if (!activeConv || activeConv.id !== activeConvIDRef.current || loadingOlderMessagesRef.current || activeConv.messages.length >= activeConv.messages_total) return;
-    const conversationID = activeConv.id;
-    const request = ++conversationRequest.current;
-    loadingOlderMessagesRef.current = true;
-    setLoadingOlderMessages(true);
-    try {
-      const nextPage = activeConv.messages_page + 1;
-      const detail = await conversationService.get(conversationID, { messages_page: nextPage, messages_page_size: activeConv.messages_page_size });
-      if (request !== conversationRequest.current) return;
-      let messages = mergeMessagesByID(activeConv.messages, detail.messages);
-      let messagesTotal = detail.messages_total;
-      const headDetail = await conversationService.get(conversationID, { messages_page: 1, messages_page_size: activeConv.messages_page_size });
-      if (request !== conversationRequest.current) return;
-      const currentHeadID = activeConv.messages.at(-1)?.id ?? '';
-      const serverHeadID = headDetail.messages.at(-1)?.id ?? '';
-      const headShifted = currentHeadID !== serverHeadID
-        || activeConv.messages_total !== headDetail.messages_total
-        || detail.messages_total !== headDetail.messages_total;
-      const loadedWindowDrifted = activeConv.messages.length < headDetail.messages_total
-        && activeConv.messages.length !== Math.min(
-          headDetail.messages_total,
-          activeConv.messages_page * activeConv.messages_page_size,
-        );
-      if (headShifted || loadedWindowDrifted || messages.length < Math.min(messagesTotal, nextPage * activeConv.messages_page_size)) {
-        const stableWindow = await fetchStableOffsetMessageWindow(nextPage, activeConv.messages_page_size, async (messagesPage) => {
-          const pageDetail = await conversationService.get(conversationID, { messages_page: messagesPage, messages_page_size: activeConv.messages_page_size });
-          return { messages: pageDetail.messages, messages_total: pageDetail.messages_total };
-        });
-        if (request !== conversationRequest.current) return;
-        messages = stableWindow.messages;
-        messagesTotal = stableWindow.total;
-      }
-      const viewport = conversationViewportRef.current;
-      if (viewport && activeConvIDRef.current === conversationID) {
-        conversationScrollIntentRef.current = {
-          type: 'preserve',
-          conversationID,
-          scrollHeight: viewport.scrollHeight,
-          scrollTop: viewport.scrollTop,
-        };
-      }
-      setActiveConv((current) => current?.id === detail.id ? {
-        ...detail,
-        read_through_message_id: current.read_through_message_id,
-        messages,
-        messages_total: messagesTotal,
-        messages_page: nextPage,
-      } : current);
-    } catch (error) {
-      if (request === conversationRequest.current && activeConvIDRef.current === conversationID) {
-        notifyRequestError(error, '加载更早私信失败，请稍后重试');
-      }
-    } finally {
-      if (activeConvIDRef.current === conversationID) {
-        loadingOlderMessagesRef.current = false;
-        setLoadingOlderMessages(false);
-      }
-    }
-  }, [activeConv, notifyRequestError]);
-
-  const toggleConversationSearch = useCallback(() => {
-    setConversationSearchOpen((current) => !current);
-    setConversationMessageSearch('');
-  }, []);
+  }, [activateConversation, clearItemDeepLink, loadConversationDetail, setActiveConv]);
 
   const changeConversationPage = useCallback(async (nextPage: number) => {
     const totalPages = Math.max(1, Math.ceil(conversationTotal / listPageSize));
@@ -1006,16 +761,7 @@ export const MessageCenterPage: React.FC = () => {
       const failedIDs = requestedIDs.filter((id) => !archivedIDs.has(id));
 
       if (archivedIDs.size > 0) {
-        setMessageDrafts((current) => {
-          const nextDrafts = { ...current };
-          archivedIDs.forEach((id) => delete nextDrafts[id]);
-          return nextDrafts;
-        });
-        setMessageAttachmentDrafts((current) => {
-          const nextDrafts = { ...current };
-          archivedIDs.forEach((id) => delete nextDrafts[id]);
-          return nextDrafts;
-        });
+        discardDrafts(archivedIDs);
         clearItemDeepLink('private');
         if (archivedIDs.has(activeConvIDRef.current)) activateConversation('');
         await loadConversations();
@@ -1036,7 +782,7 @@ export const MessageCenterPage: React.FC = () => {
     } finally {
       setArchivingConversations(false);
     }
-  }, [activateConversation, archivingConversations, clearItemDeepLink, loadConversations, notifyRequestError, selectedConversationIds]);
+  }, [activateConversation, activeConvIDRef, archivingConversations, clearItemDeepLink, discardDrafts, loadConversations, notifyRequestError, selectedConversationIds]);
 
   // ---- actions: notices -----------------------------------------------
   const confirmNotice = useCallback(async (id: string) => {
@@ -1243,7 +989,7 @@ export const MessageCenterPage: React.FC = () => {
       setActiveThread(null);
       void loadThreadDetail(id);
     }
-  }, [activateConversation, activateNotice, activateQuestion, loadConversationDetail, loadNoticeDetail, loadThreadDetail, location.key, searchParams]);
+  }, [activateConversation, activateNotice, activateQuestion, loadConversationDetail, loadNoticeDetail, loadThreadDetail, location.key, searchParams, setActiveConv]);
 
   const retryActiveList = useCallback(async () => {
     let loaded = true;
@@ -1253,9 +999,40 @@ export const MessageCenterPage: React.FC = () => {
     if (loaded) setListLoadError(null);
   }, [activeTab, loadConversations, loadNotices, loadQuestions]);
 
-  const visibleConversationMessages = conversationSearchOpen && conversationMessageSearch.trim()
-    ? conversationSearch.messages
-    : activeConv?.messages ?? [];
+  const resetNewConversationForm = useCallback(() => {
+    contactSearchRequest.current++;
+    setSelectedTeacherId('');
+    setContactSearch('');
+    setGlobalSearchResults([]);
+    setNewConvDraft('');
+    setNewConvAttachments([]);
+  }, []);
+
+  const closeNewConversationModal = useCallback(() => {
+    setNewConvOpen(false);
+    resetNewConversationForm();
+  }, [resetNewConversationForm]);
+
+  const changeNewConversationSearch = useCallback((value: string) => {
+    contactSearchRequest.current++;
+    setContactSearch(value);
+    setGlobalSearchResults([]);
+    if (selectedTeacherId) {
+      setSelectedTeacherId('');
+      setNewConvDraft('');
+      setNewConvAttachments([]);
+    }
+  }, [selectedTeacherId]);
+
+  const selectNewConversationContact = useCallback((id: string) => {
+    if (selectedTeacherId && selectedTeacherId !== id) {
+      setNewConvDraft('');
+      setNewConvAttachments([]);
+    }
+    setSelectedTeacherId(id);
+    setContactSearch('');
+    setGlobalSearchResults([]);
+  }, [selectedTeacherId]);
 
   // ---- render ---------------------------------------------------------
   if (initialLoad && loading) {
@@ -1429,130 +1206,15 @@ export const MessageCenterPage: React.FC = () => {
                 </CardContent>
               </Card>
 
-              <Card className={cn('min-h-0 overflow-hidden rounded-2xl border-surface-200/80 shadow-sm dark:border-surface-700', !activeConvId ? 'hidden lg:block' : '')}>
-                <CardContent className="flex h-full min-h-0 flex-col p-0">
-                  {conversationDetailLoading ? (
-                    <div className="flex min-h-64 flex-col items-center justify-center gap-3 p-6">
-                      <Loader2 className="h-6 w-6 animate-spin text-primary-500" />
-                      <Button variant="ghost" size="sm" className="lg:hidden" onClick={showConversationList}><ArrowLeft className="mr-1 h-4 w-4" />返回列表</Button>
-                    </div>
-                  ) : conversationDetailError ? (
-                    <div className="flex min-h-64 flex-col items-center justify-center gap-3 p-6">
-                      <RequestErrorNotice
-                        error={conversationDetailError}
-                        onRetry={() => activeConvId && void loadConversationDetail(activeConvId)}
-                        onRefresh={() => activeConvId && void loadConversationDetail(activeConvId)}
-                        className="w-full max-w-lg"
-                      />
-                      <div className="flex gap-2">
-                        <Button variant="ghost" size="sm" className="lg:hidden" onClick={showConversationList}><ArrowLeft className="mr-1 h-4 w-4" />返回列表</Button>
-                      </div>
-                    </div>
-                  ) : activeConv && activeConv.id === activeConvId ? (
-                    <>
-                      <div className="shrink-0 border-b border-surface-100 p-3 sm:p-4 dark:border-surface-800">
-                        <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
-                          <div>
-                            <Button variant="ghost" size="sm" className="mb-2 -ml-2 lg:hidden" onClick={showConversationList}><ArrowLeft className="mr-1 h-4 w-4" />返回列表</Button>
-                            <div className="text-lg font-semibold text-surface-900 dark:text-surface-100">
-                              {activeConv.teacher_name}
-                            </div>
-                            <div className="text-sm text-surface-500 dark:text-surface-400">{activeConv.scope}</div>
-                          </div>
-                          <div className="flex w-full items-center justify-end gap-2 sm:w-auto">
-                            {conversationSearchOpen && (
-                              <div role="search" className="relative min-w-0 flex-1 sm:w-64 sm:flex-none">
-                                <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-surface-400" />
-                                <Input
-                                  autoFocus
-                                  value={conversationMessageSearch}
-                                  maxLength={200}
-                                  onChange={(event) => setConversationMessageSearch(event.target.value)}
-                                  placeholder={`查找与 ${activeConv.teacher_name} 的聊天内容`}
-                                  className={cn('pl-9 pr-16', conversationSearchError && 'border-amber-500 focus-visible:ring-amber-500')}
-                                />
-                                <span
-                                  title={conversationSearchError || undefined}
-                                  className={cn('pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-xs text-surface-500 dark:text-surface-400', conversationSearchError && 'text-amber-600 dark:text-amber-400')}
-                                >
-                                  {conversationSearchError ? '加载失败' : loadingConversationSearch ? '载入中…' : conversationMessageSearch.trim() ? `${conversationSearch.total} 条` : `共 ${activeConv.messages_total} 条`}
-                                </span>
-                              </div>
-                            )}
-                            <Button variant="outline" size="sm" className="shrink-0" onClick={toggleConversationSearch}>
-                              {loadingConversationSearch ? <Loader2 className="h-4 w-4 animate-spin sm:mr-2" /> : conversationSearchOpen ? <X className="h-4 w-4 sm:mr-2" /> : <Search className="mr-2 h-4 w-4" />}
-                              <span className={conversationSearchOpen ? 'hidden sm:inline' : ''}>{loadingConversationSearch ? '载入记录' : conversationSearchOpen ? '关闭查找' : '查找聊天记录'}</span>
-                            </Button>
-                          </div>
-                        </div>
-                      </div>
-                      <div ref={conversationViewportRef} className="min-h-0 flex-1 space-y-4 overflow-y-auto overscroll-contain p-5">
-                        {!conversationSearchOpen && activeConv.messages.length < activeConv.messages_total && <Button variant="outline" size="sm" className="w-full" onClick={loadOlderConversationMessages} disabled={loadingOlderMessages}>{loadingOlderMessages ? '加载中…' : '加载更早消息'}</Button>}
-                        {conversationSearch.error && <RequestErrorNotice error={conversationSearch.error} onRetry={conversationSearch.refresh} onRefresh={conversationSearch.refresh} />}
-                        {conversationSearchOpen && conversationMessageSearch.trim() && !loadingConversationSearch && !conversationSearch.error && visibleConversationMessages.length === 0 && (
-                          <div className="flex min-h-32 items-center justify-center text-sm text-surface-500 dark:text-surface-400">未找到匹配的聊天记录</div>
-                        )}
-                        {visibleConversationMessages.map((msg) => (
-                          <div key={msg.id} className="flex w-full">
-                            <div className={cn('max-w-[80%]', msg.from === 'student' ? 'ml-auto text-right' : 'mr-auto')}>
-                              {msg.text && <div className={cn(
-                                'inline-block rounded-lg px-4 py-3 text-sm',
-                                msg.from === 'student'
-                                  ? 'bg-primary-600 text-white'
-                                  : 'bg-surface-100 text-surface-800 dark:bg-surface-800 dark:text-surface-100',
-                              )}>
-                                <MessageText text={msg.text} />
-                              </div>}
-                              <MessageAttachments attachments={msg.attachments} />
-                              <div data-read-message-id={msg.from !== 'student' ? msg.id : undefined} className={cn('mt-1 flex gap-2 text-xs text-surface-400', msg.from === 'student' ? 'justify-end' : 'justify-start')}>
-                                <span>{formatRelativeTime(msg.time)}</span>
-                                {msg.from === 'student' && <span>{msg.read_by_recipient ? '老师已读' : '老师未读'}</span>}
-                              </div>
-                            </div>
-                          </div>
-                        ))}
-                        {conversationSearchOpen && conversationMessageSearch.trim() && (
-                          <MessageCenterListPagination
-                            currentPage={conversationSearch.page}
-                            totalItems={conversationSearch.total}
-                            pageSize={conversationSearch.pageSize}
-                            disabled={loadingConversationSearch}
-                            onPageChange={conversationSearch.setPage}
-                          />
-                        )}
-                      </div>
-                      <div className="shrink-0 border-t border-surface-100 p-4 dark:border-surface-800">
-                        <MessageComposer
-                          key={activeConvId}
-                          value={messageDraft}
-                          onChange={(value) => {
-                            const conversationID = activeConvId;
-                            if (conversationID) setMessageDrafts((current) => ({ ...current, [conversationID]: value }));
-                          }}
-                          attachments={messageAttachments}
-                          onAttachmentsChange={(attachments) => {
-                            const conversationID = activeConvId;
-                            if (conversationID) setMessageAttachmentDrafts((current) => ({ ...current, [conversationID]: attachments }));
-                          }}
-                          onUploadingChange={setMessageUploading}
-                          onError={(message) => toast({ type: 'error', title: message })}
-                          onFeedback={(feedback) => toast(feedback)}
-                          onSend={sendPrivateMessage}
-                          placeholder="输入给老师的消息"
-                          sendLabel="发送私信"
-                          disabled={sendingMsg}
-                          uploading={messageUploading}
-                          sending={sendingMsg}
-                        />
-                      </div>
-                    </>
-                  ) : (
-                    <div className="flex h-full items-center justify-center p-8 text-sm text-surface-500 dark:text-surface-400">
-                      {activeConvId ? '暂无可显示的私信对话' : '请选择联系人查看私信'}
-                    </div>
-                  )}
-                </CardContent>
-              </Card>
+              <ConversationDetailPanel
+                conversation={conversation}
+                viewerRole="student"
+                counterpartName={activeConv?.teacher_name ?? ''}
+                counterpartSubtitle={activeConv?.scope ?? ''}
+                composerPlaceholder="输入给老师的消息"
+                sendLabel="发送私信"
+                onBack={showConversationList}
+              />
             </div>
           </TabsContent>
 
@@ -1863,66 +1525,31 @@ export const MessageCenterPage: React.FC = () => {
         </Modal>
 
         {/* New conversation modal */}
-        <Modal isOpen={newConvOpen} onClose={() => { setNewConvOpen(false); setContactSearch(''); setNewConvDraft(''); setNewConvAttachments([]); }} title="新建私信对话" className="max-w-lg">
-          <div className="space-y-4">
-            <label className="block text-sm font-medium text-surface-700 dark:text-surface-300">选择联系人</label>
-            <Input value={contactSearch} onChange={(e) => {
-              setContactSearch(e.target.value);
-              if (selectedTeacherId) {
-                setSelectedTeacherId('');
-                setNewConvDraft('');
-                setNewConvAttachments([]);
-              }
-            }}
-              placeholder="搜索老师姓名或 ID…" />
-            {allSearchResults.length > 0 ? (
-              <div className="max-h-48 space-y-0.5 overflow-y-auto rounded-md border border-surface-200 dark:border-surface-700">
-                {allSearchResults.map((c) => (
-                  <button key={c.id} type="button"
-                    onClick={() => {
-                      if (selectedTeacherId && selectedTeacherId !== c.id) {
-                        setNewConvDraft('');
-                        setNewConvAttachments([]);
-                      }
-                      setSelectedTeacherId(c.id);
-                      setContactSearch('');
-                      setGlobalSearchResults([]);
-                    }}
-                    className={cn('w-full px-4 py-2.5 text-left text-sm hover:bg-surface-50 dark:hover:bg-surface-800',
-                      selectedTeacherId === c.id && 'bg-primary-50 ring-1 ring-inset ring-primary-200 dark:bg-primary-950/30 dark:ring-primary-800')}>
-                    <div className="font-medium text-surface-900 dark:text-surface-100">{c.display_name}</div>
-                    <div className="flex items-center justify-between text-xs text-surface-500 dark:text-surface-400">
-                      <span>{c.scope || '全校'}</span>
-                      <span className="font-mono text-surface-400">{c.id}</span>
-                    </div>
-                  </button>
-                ))}
-              </div>
-            ) : contactSearch.trim() ? (
-              <p className="text-sm text-surface-500 dark:text-surface-400">未找到匹配的教师。</p>
-            ) : availableContacts.length === 0 ? (
-              <p className="text-sm text-surface-500 dark:text-surface-400">输入教师姓名或 ID 搜索并建立对话。</p>
-            ) : null}
-            <textarea value={newConvDraft} onChange={(e) => setNewConvDraft(e.target.value)}
-              placeholder="可以先写一句要发给老师的消息"
-              className="min-h-28 w-full rounded-md border border-surface-200 bg-white px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary-500 dark:border-surface-700 dark:bg-surface-800 dark:text-surface-100"
-            />
-            <MessageAttachmentPicker
-              value={newConvAttachments}
-              onChange={setNewConvAttachments}
-              onUploadingChange={setNewConvUploading}
-              onError={(message) => toast({ type: 'error', title: message })}
-              onFeedback={(feedback) => toast(feedback)}
-              disabled={creatingConv}
-            />
-            <div className="flex justify-end gap-2">
-              <Button variant="outline" onClick={() => { setNewConvOpen(false); setContactSearch(''); setNewConvDraft(''); setNewConvAttachments([]); }}>取消</Button>
-              <Button onClick={createConversation} disabled={!selectedTeacherId || creatingConv || newConvUploading}>
-                {creatingConv ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}创建对话
-              </Button>
-            </div>
-          </div>
-        </Modal>
+        <NewConversationModal
+          isOpen={newConvOpen}
+          onClose={closeNewConversationModal}
+          contacts={allSearchResults}
+          selectedContactId={selectedTeacherId}
+          onSelectContact={selectNewConversationContact}
+          contactSearch={contactSearch}
+          onContactSearchChange={changeNewConversationSearch}
+          draft={newConvDraft}
+          onDraftChange={setNewConvDraft}
+          attachments={newConvAttachments}
+          onAttachmentsChange={setNewConvAttachments}
+          uploading={newConvUploading}
+          onUploadingChange={setNewConvUploading}
+          creating={creatingConv}
+          onCreate={createConversation}
+          showNoContactsHint={availableContacts.length === 0}
+          labels={{
+            contact: '选择联系人',
+            searchPlaceholder: '搜索老师姓名或 ID…',
+            noMatch: '未找到匹配的教师。',
+            noContacts: '输入教师姓名或 ID 搜索并建立对话。',
+            draftPlaceholder: '可以先写一句要发给老师的消息',
+          }}
+        />
       </div>
     </MainLayout>
   );
