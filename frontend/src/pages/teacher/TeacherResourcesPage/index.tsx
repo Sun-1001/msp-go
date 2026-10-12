@@ -1,6 +1,8 @@
 import React, { useCallback, useEffect, useMemo, useReducer, useRef, useState } from 'react';
 import { MainLayout } from '../../../components/layout/MainLayout';
 import { resourceService } from '@/modules/resource/services/resourceService';
+import { resourceApi, selectResourceScope, useDeleteResourceMutation } from '@/modules/resource/store/resourceSlice';
+import { useAppDispatch, useAppSelector } from '@/store';
 import type { Resource, ResourceFilter, ResourceStats } from '@/modules/resource/types/resource';
 import type { FilterType, ViewMode } from './types';
 import { resourcePageReducer, initialState } from './reducer';
@@ -23,6 +25,9 @@ import { Check, Upload, Loader2, FolderOpen } from 'lucide-react';
 
 export const TeacherResourcesPage: React.FC = () => {
   const { toast } = useToast();
+  const dispatch = useAppDispatch();
+  const scope = useAppSelector(selectResourceScope);
+  const [deleteResource] = useDeleteResourceMutation();
   const [state, localDispatch] = useReducer(resourcePageReducer, initialState);
   const [resources, setResources] = useState<Resource[]>([]);
   const [stats, setStats] = useState<ResourceStats | null>(null);
@@ -104,9 +109,10 @@ export const TeacherResourcesPage: React.FC = () => {
 
   // 处理删除
   const handleDelete = async (id: string) => {
+    if (!scope || actionLoading) return;
     setActionLoading(true);
     try {
-      await resourceService.deleteResource(id);
+      await deleteResource({ scope, id }).unwrap();
       setResources((current) => current.filter((resource) => resource.id !== id));
       localDispatch({ type: 'CLOSE_DELETE_CONFIRM' });
       await loadStats();
@@ -119,6 +125,7 @@ export const TeacherResourcesPage: React.FC = () => {
 
   // 批量删除
   const handleBatchDelete = async () => {
+    if (!scope || actionLoading) return;
     const ids = Array.from(state.selectedResourceIds);
     setActionLoading(true);
     const failed: unknown[] = [];
@@ -126,7 +133,7 @@ export const TeacherResourcesPage: React.FC = () => {
     try {
       for (const id of ids) {
         try {
-          await resourceService.deleteResource(id);
+          await deleteResource({ scope, id }).unwrap();
           deletedIDs.push(id);
         } catch (error) {
           failed.push(error);
@@ -150,6 +157,17 @@ export const TeacherResourcesPage: React.FC = () => {
     } finally {
       setActionLoading(false);
     }
+  };
+
+  const refreshResources = () => {
+    if (scope) {
+      dispatch(resourceApi.util.invalidateTags([
+        { type: 'ResourceList', id: scope },
+        { type: 'ResourceStats', id: scope },
+      ]));
+    }
+    void loadResources(currentFilter);
+    void loadStats();
   };
 
   const displayStats = stats || {
@@ -185,17 +203,14 @@ export const TeacherResourcesPage: React.FC = () => {
 
         <Tabs defaultValue="resources" value={activeView} onValueChange={(value) => {
           setActiveView(value);
-          if (value === 'resources') {
-            void loadResources(currentFilter);
-            void loadStats();
-          }
+          if (value === 'resources') refreshResources();
         }} keepMounted={false}>
           <TabsList className="mb-4">
             <TabsTrigger value="resources">资源列表</TabsTrigger>
             <TabsTrigger value="ingestions">文档处理</TabsTrigger>
           </TabsList>
           <TabsContent value="ingestions">
-            <IngestionPanel key={ingestionRevision} onChanged={() => { void loadResources(currentFilter); void loadStats(); }} />
+            <IngestionPanel key={ingestionRevision} onChanged={refreshResources} />
           </TabsContent>
           <TabsContent value="resources">
         {listError ? (
@@ -340,7 +355,7 @@ export const TeacherResourcesPage: React.FC = () => {
         onClose={() => localDispatch({ type: 'CLOSE_EDIT' })}
         onSuccess={() => {
           localDispatch({ type: 'CLOSE_EDIT' });
-          void loadResources(currentFilter);
+          refreshResources();
         }}
       />
 
@@ -354,8 +369,7 @@ export const TeacherResourcesPage: React.FC = () => {
             setIngestionRevision((value) => value + 1);
             setActiveView('ingestions');
           }
-          void loadResources(currentFilter);
-          void loadStats();
+          refreshResources();
         }}
       />
     </MainLayout>

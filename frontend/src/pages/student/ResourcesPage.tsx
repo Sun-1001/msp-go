@@ -1,4 +1,6 @@
-import React, { useEffect, useState } from 'react';
+import React, { useState } from 'react';
+import { skipToken } from '@reduxjs/toolkit/query/react';
+import { useDebounce } from '@/hooks/useDebounce';
 import { MainLayout } from '../../components/layout/MainLayout';
 import { Card, CardContent, CardHeader } from '../../components/ui/Card';
 import { Button } from '../../components/ui/Button';
@@ -19,15 +21,16 @@ import {
   Play,
   Loader2,
 } from 'lucide-react';
-import { useAppDispatch, useAppSelector } from '@/store';
+import { useAppSelector } from '@/store';
 import {
-  fetchResources,
-  fetchResourceStats,
-  toggleFavorite,
+  selectResourceScope,
+  useGetResourcesQuery,
+  useGetResourceStatsQuery,
+  useToggleFavoriteMutation,
 } from '@/modules/resource/store/resourceSlice';
 import { getInitialResourceSearch, openResourceUrl } from '@/libs/utils/resourceUtils';
-import type { ResourceType, Resource } from '@/modules/resource/types/resource';
-import { toAppErrorFeedback } from '@/libs/http/appError';
+import type { ResourceType, Resource, ResourceFilter } from '@/modules/resource/types/resource';
+import { toAppError, toAppErrorFeedback } from '@/libs/http/appError';
 import { useToast } from '@/components/ui/Toast';
 import { KnowledgeSearch } from '@/modules/resource/components/KnowledgeSearch';
 
@@ -69,10 +72,7 @@ const getTypeBadge = (type: string) => {
 };
 
 export const ResourcesPage: React.FC = () => {
-  const dispatch = useAppDispatch();
-  const { resources, stats, loading, statsLoading, actionLoading, loadError, statsError } = useAppSelector(
-    (state) => state.resource
-  );
+  const scope = useAppSelector(selectResourceScope);
   const { toast } = useToast();
 
   const [searchTerm, setSearchTerm] = useState(() =>
@@ -83,60 +83,38 @@ export const ResourcesPage: React.FC = () => {
   const [activeTab, setActiveTab] = useState('all');
 
   // 初始加载统计
-  useEffect(() => {
-    dispatch(fetchResourceStats());
-  }, [dispatch]);
+  const { currentData: stats, isFetching: statsFetching, error: statsQueryError, refetch: refetchStats } =
+    useGetResourceStatsQuery(scope ? { scope } : skipToken);
+  const statsLoading = statsFetching && !stats;
+  const statsError = statsQueryError ? toAppError(statsQueryError, '获取资源统计失败') : null;
 
   // 筛选变化时重新加载（含搜索防抖）
-  useEffect(() => {
-    if (activeTab === 'knowledge') return;
-    const timer = setTimeout(() => {
-      const filter: {
-        type?: ResourceType;
-        chapter?: string;
-        search?: string;
-        favorites_only?: boolean;
-      } = {};
-
-      if (selectedType) {
-        filter.type = selectedType as ResourceType;
-      }
-      if (selectedChapter) {
-        filter.chapter = selectedChapter;
-      }
-      if (searchTerm) {
-        filter.search = searchTerm;
-      }
-      if (activeTab === 'favorites') {
-        filter.favorites_only = true;
-      }
-
-      dispatch(fetchResources(filter));
-    }, searchTerm ? 300 : 0);
-
-    return () => clearTimeout(timer);
-  }, [dispatch, selectedType, selectedChapter, activeTab, searchTerm]);
+  const debouncedSearch = useDebounce(searchTerm, searchTerm ? 300 : 0);
+  const filter: ResourceFilter = {
+    type: selectedType ? selectedType as ResourceType : undefined,
+    chapter: selectedChapter || undefined,
+    search: debouncedSearch || undefined,
+    favorites_only: activeTab === 'favorites' ? true : undefined,
+  };
+  const { currentData: response, isFetching, error: listQueryError, refetch: refetchResources } =
+    useGetResourcesQuery(scope && activeTab !== 'knowledge' ? { scope, filter } : skipToken);
+  const resources = response?.items ?? [];
+  const loading = isFetching && !response;
+  const loadError = listQueryError ? toAppError(listQueryError, '获取资源列表失败') : null;
+  const [toggleFavorite, { isLoading: actionLoading }] = useToggleFavoriteMutation();
 
   const handleToggleFavorite = async (id: string) => {
-    const result = await dispatch(toggleFavorite(id));
-    if (toggleFavorite.rejected.match(result)) {
-      const feedback = toAppErrorFeedback(result.payload, '收藏状态更新失败');
+    if (!scope || actionLoading) return;
+    try {
+      await toggleFavorite({ scope, id }).unwrap();
+    } catch (error) {
+      const feedback = toAppErrorFeedback(error, '收藏状态更新失败');
       if (feedback) toast(feedback);
     }
   };
 
   const retryResources = () => {
-    const filter: {
-      type?: ResourceType;
-      chapter?: string;
-      search?: string;
-      favorites_only?: boolean;
-    } = {};
-    if (selectedType) filter.type = selectedType as ResourceType;
-    if (selectedChapter) filter.chapter = selectedChapter;
-    if (searchTerm) filter.search = searchTerm;
-    if (activeTab === 'favorites') filter.favorites_only = true;
-    void dispatch(fetchResources(filter));
+    void refetchResources();
   };
 
   const handleOpenResource = (resource: Resource) => {
@@ -166,8 +144,8 @@ export const ResourcesPage: React.FC = () => {
         {statsError ? (
           <RequestErrorNotice
             error={statsError}
-            onRetry={() => void dispatch(fetchResourceStats())}
-            onRefresh={() => void dispatch(fetchResourceStats())}
+            onRetry={() => void refetchStats()}
+            onRefresh={() => void refetchStats()}
             className="mb-6"
           />
         ) : null}

@@ -6,7 +6,8 @@ import { Input } from '../../../../components/ui/Input';
 import { Loader2, Check } from 'lucide-react';
 import { RequestErrorNotice } from '@/components/feedback';
 import { toAppError, type AppError } from '@/libs/http/apiClient';
-import { resourceService } from '@/modules/resource/services/resourceService';
+import { selectResourceScope, useUpdateResourceMutation } from '@/modules/resource/store/resourceSlice';
+import { useAppSelector } from '@/store';
 
 interface ResourceEditModalProps {
   resource: Resource | null;
@@ -28,7 +29,8 @@ export const ResourceEditModal = React.memo<ResourceEditModalProps>(({ resource,
     storage_type: resource?.storage_type || undefined,
   });
   const [submitError, setSubmitError] = useState<AppError | null>(null);
-  const [isSaving, setIsSaving] = useState(false);
+  const scope = useAppSelector(selectResourceScope);
+  const [updateResource, { isLoading: isSaving }] = useUpdateResourceMutation();
 
   // 当 resource 变化时更新表单数据
   React.useEffect(() => {
@@ -49,17 +51,14 @@ export const ResourceEditModal = React.memo<ResourceEditModalProps>(({ resource,
   }, [resource]);
 
   const handleSubmit = async () => {
-    if (!resource || !formData.title?.trim()) return;
+    if (!scope || !resource || !formData.title?.trim() || isSaving) return;
 
     setSubmitError(null);
-    setIsSaving(true);
     try {
-      await resourceService.updateResource(resource.id, formData);
+      await updateResource({ scope, id: resource.id, data: formData }).unwrap();
       onSuccess();
     } catch (error) {
       setSubmitError(toAppError(error, '更新资源失败'));
-    } finally {
-      setIsSaving(false);
     }
   };
 

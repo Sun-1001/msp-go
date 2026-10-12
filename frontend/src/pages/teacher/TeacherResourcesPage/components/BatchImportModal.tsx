@@ -5,7 +5,8 @@ import { Button } from '../../../../components/ui/Button';
 import { Input } from '../../../../components/ui/Input';
 import { Loader2, Upload, Search, Link as LinkIcon, Check, X, Plus } from 'lucide-react';
 import { cn } from '../../../../libs/utils/cn';
-import { resourceService } from '@/modules/resource/services/resourceService';
+import { selectResourceScope, useCreateResourceMutation } from '@/modules/resource/store/resourceSlice';
+import { useAppSelector } from '@/store';
 import { uploadResourceFile, validateResourceFile } from '@/modules/upload/services/uploadService';
 import { ingestionService, validateIngestionFile } from '@/modules/resource/services/ingestionService';
 import type { ResourceCreateRequest, BatchImportItem, ResourceType as ResourceTypeEnum } from '@/modules/resource/types/resource';
@@ -52,6 +53,8 @@ function validateUploadFile(file: File) {
 }
 
 export const BatchImportModal = React.memo<BatchImportModalProps>(({ isOpen, onClose, onSuccess }) => {
+  const scope = useAppSelector(selectResourceScope);
+  const [createResource] = useCreateResourceMutation();
   const [tab, setTab] = useState<'link' | 'file'>('link');
   const [linksText, setLinksText] = useState('');
   const [importItems, setImportItems] = useState<BatchImportItem[]>([]);
@@ -98,6 +101,7 @@ export const BatchImportModal = React.memo<BatchImportModalProps>(({ isOpen, onC
 
   // 执行批量导入（链接）
   const handleBatchImport = async () => {
+    if (!scope || importing) return;
     const selectedItems = importItems.filter((item) => item.selected);
     if (selectedItems.length === 0) return;
 
@@ -133,7 +137,7 @@ export const BatchImportModal = React.memo<BatchImportModalProps>(({ isOpen, onC
           topic: defaultTopic || undefined,
           storage_type: 'external',
         };
-        await resourceService.createResource(data);
+        await createResource({ scope, data }).unwrap();
         completedLinkImportsRef.current.set(item.id, JSON.stringify(data));
       }
       handleClose();
@@ -198,6 +202,7 @@ export const BatchImportModal = React.memo<BatchImportModalProps>(({ isOpen, onC
 
   // 执行文件上传（真正上传到七牛云）
   const handleFileUpload = async () => {
+    if (!scope || importing) return;
     const selectedIndices = fileItems
       .map((item, index) => ({ item, index }))
       .filter(({ item }) => item.selected && fileProgress[item.id]?.status !== 'done');
@@ -275,7 +280,7 @@ export const BatchImportModal = React.memo<BatchImportModalProps>(({ isOpen, onC
           topic: defaultTopic || undefined,
           storage_type: 'cloud',
         };
-        await resourceService.createResource(data);
+        await createResource({ scope, data }).unwrap();
 
         setFileProgress((prev) => ({
           ...prev,
