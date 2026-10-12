@@ -50,6 +50,7 @@ interface AgentConfigFormData {
   max_tokens_override: string;
   timeout_override: string;
   max_retries_override: string;
+  dirty?: boolean;
 }
 
 const parameterOverrideDefaults = {
@@ -99,7 +100,13 @@ export const AgentConfigPanel: React.FC<AgentConfigPanelProps> = ({
         initialData[type.type] = { ...defaultFormData };
       }
     });
-    setFormData(initialData);
+    setFormData((previous) => {
+      const next = { ...initialData };
+      for (const [agentType, data] of Object.entries(previous)) {
+        if (data.dirty && initialData[agentType]) next[agentType] = data;
+      }
+      return next;
+    });
   }, [agentTypes, agentConfigs, models]);
 
   // 获取配置
@@ -119,6 +126,7 @@ export const AgentConfigPanel: React.FC<AgentConfigPanelProps> = ({
       [agentType]: {
         ...prev[agentType],
         [field]: value,
+        dirty: true,
       },
     }));
   };
@@ -156,6 +164,9 @@ export const AgentConfigPanel: React.FC<AgentConfigPanelProps> = ({
       };
 
       await onUpdateConfig(agentType, request);
+      setFormData((previous) => previous[agentType] === data
+        ? { ...previous, [agentType]: { ...data, dirty: false } }
+        : previous);
       setExpandedAgent((currentAgent) => currentAgent === agentType ? null : currentAgent);
       toast({
         type: 'success',

@@ -4,7 +4,7 @@
  * 管理 AI 渠道（提供商 + 模型）和智能体配置
  */
 
-import React, { useState, useEffect, useCallback, useMemo } from 'react';
+import React, { useState, useCallback } from 'react';
 import { AdminLayout } from '@/modules/admin/components/AdminLayout';
 import { Card, CardContent } from '../../components/ui/Card';
 import { Button } from '../../components/ui/Button';
@@ -28,37 +28,15 @@ import {
   ChannelCard,
   AgentConfigPanel,
   EmbeddingConfigPanel,
+  useAIConfig,
 } from '@/modules/admin';
 
 // 导入 Hooks 和类型
-import { useAppDispatch, useAppSelector } from '../../store';
-import {
-  fetchProviders,
-  fetchModels,
-  fetchAgentConfigs,
-  fetchAgentTypes,
-  createProviderWithModels,
-  updateProvider,
-  deleteProvider,
-  testProviderConnection,
-  fetchAvailableModels,
-  updateProviderModels,
-  updateAgentConfig,
-  deleteAgentConfig,
-  setDefaultModel,
-  selectProviders,
-  selectProvidersLoading,
-  selectProvidersError,
-  selectModels,
-  selectModelsLoading,
-  selectModelsError,
-  selectAgentConfigs,
-  selectAgentTypes,
-  selectAgentConfigsLoading,
-  selectAgentConfigsError,
-} from '@/modules/ai-config/store/aiConfigSlice';
+import { useAppSelector } from '../../store';
+import { selectApiScope } from '@/store/api';
 import type {
   LLMProvider,
+  LLMModel,
   CreateProviderWithModelsRequest,
   UpdateProviderRequest,
   UpdateAgentConfigRequest,
@@ -70,92 +48,69 @@ import type {
 import { getAdminErrorToast } from '@/modules/admin/utils/errorFeedback';
 
 export const AIModelSettingsPage: React.FC = () => {
-  const dispatch = useAppDispatch();
+  const scope = useAppSelector(selectApiScope);
   const { toast } = useToast();
 
-  // Redux 状态 (添加防御性默认值)
-  const providers = useAppSelector(selectProviders) ?? [];
-  const providersLoading = useAppSelector(selectProvidersLoading) ?? 'idle';
-  const providersError = useAppSelector(selectProvidersError) ?? null;
-  const models = useAppSelector(selectModels);
-  const modelsLoading = useAppSelector(selectModelsLoading) ?? 'idle';
-  const modelsError = useAppSelector(selectModelsError) ?? null;
-  const agentConfigs = useAppSelector(selectAgentConfigs) ?? [];
-  const agentTypes = useAppSelector(selectAgentTypes) ?? [];
-  const agentConfigsLoading = useAppSelector(selectAgentConfigsLoading) ?? 'idle';
-  const agentConfigsError = useAppSelector(selectAgentConfigsError) ?? null;
+  // 初始化加载数据
+  // 相同查询由 RTK Query 共享，StrictMode 不再手工延迟派发。
+  const { providers: providersState, models: modelsState, agentConfigs: agentsState, testConnection, loadAll } = useAIConfig();
+  const { test: testProviderConnection } = testConnection;
+  const { fetchAvailableModels, updateModels } = providersState;
+
+  // 查询状态（保留稳定的空数据默认值）
+  const providers = providersState.providers;
+  const providersLoading = providersState.loading;
+  const providersError = providersState.error;
+  const models = modelsState.models;
+  const modelsLoading = modelsState.loading;
+  const modelsError = modelsState.error;
+  const agentConfigs = agentsState.configs;
+  const agentTypes = agentsState.agentTypes;
+  const agentConfigsLoading = agentsState.loading;
+  const agentConfigsError = agentsState.error;
 
   // 本地状态
-  const [isModalOpen, setIsModalOpen] = useState(false);
-  const [editingProvider, setEditingProvider] = useState<LLMProvider | null>(null);
-  const [isRefreshing, setIsRefreshing] = useState(false);
-
-  // 初始化加载数据
-  useEffect(() => {
-    let requests: Array<{ abort: () => void }> = [];
-    // Defer dispatch so StrictMode's probe mount is cleaned up before requests begin.
-    const timer = window.setTimeout(() => {
-      requests = [
-        dispatch(fetchProviders(true)),
-        dispatch(fetchModels({ includeInactive: true })),
-        dispatch(fetchAgentConfigs()),
-        dispatch(fetchAgentTypes()),
-      ];
-    }, 0);
-    return () => {
-      window.clearTimeout(timer);
-      requests.forEach((request) => request.abort());
-    };
-  }, [dispatch]);
+  const [editor, setEditor] = useState<{ scope: string; provider: LLMProvider | null; models: LLMModel[] } | null>(null);
+  const currentEditor = editor?.scope === scope ? editor : null;
+  const isModalOpen = currentEditor !== null;
+  const editingProvider = currentEditor?.provider ?? null;
+  const isRefreshing = providersState.fetching || modelsState.fetching || agentsState.fetching;
 
   // 刷新数据
   const handleRefresh = async () => {
-    setIsRefreshing(true);
-    try {
-      await Promise.all([
-        dispatch(fetchProviders(true)),
-        dispatch(fetchModels({ includeInactive: true })),
-        dispatch(fetchAgentConfigs()),
-        dispatch(fetchAgentTypes()),
-      ]);
-    } finally {
-      setIsRefreshing(false);
-    }
+    await loadAll();
   };
 
   // 打开新建 Modal
   const handleOpenCreateModal = () => {
-    setEditingProvider(null);
-    setIsModalOpen(true);
+    if (scope) setEditor({ scope, provider: null, models: [] });
   };
 
   // 打开编辑 Modal
   const handleOpenEditModal = (provider: LLMProvider) => {
-    setEditingProvider(provider);
-    setIsModalOpen(true);
+    if (scope) setEditor({ scope, provider, models: modelsState.getModelsByProvider(provider.id) });
   };
 
   // 关闭 Modal
   const handleCloseModal = () => {
-    setIsModalOpen(false);
-    setEditingProvider(null);
+    setEditor(null);
   };
 
   // 创建渠道（提供商 + 模型）
-  const handleCreateChannel = async (data: CreateProviderWithModelsRequest) => {
-    return dispatch(createProviderWithModels(data)).unwrap();
+  const handleCreateChannel = (data: CreateProviderWithModelsRequest, deferRefresh = false) => {
+    return providersState.createWithModels(data, deferRefresh);
   };
 
   // 更新提供商
   const handleUpdateProvider = async (id: string, data: UpdateProviderRequest) => {
-    await dispatch(updateProvider({ id, data })).unwrap();
+    await providersState.update(id, data);
   };
 
   // 删除提供商
   const handleDeleteProvider = async (provider: LLMProvider) => {
     if (window.confirm(`确定要删除渠道 "${provider.name}" 吗？这将同时删除所有关联的模型。`)) {
       try {
-        await dispatch(deleteProvider(provider.id)).unwrap();
+        await providersState.remove(provider.id);
       } catch (error) {
         const feedback = getAdminErrorToast(error, '删除渠道失败');
         if (feedback) toast(feedback);
@@ -166,12 +121,7 @@ export const AIModelSettingsPage: React.FC = () => {
   // 切换提供商状态
   const handleToggleProviderActive = async (provider: LLMProvider) => {
     try {
-      await dispatch(
-        updateProvider({
-          id: provider.id,
-          data: { is_active: !provider.is_active },
-        })
-      ).unwrap();
+      await providersState.update(provider.id, { is_active: !provider.is_active });
     } catch (error) {
       const feedback = getAdminErrorToast(error, '更新渠道状态失败');
       if (feedback) toast(feedback);
@@ -180,32 +130,26 @@ export const AIModelSettingsPage: React.FC = () => {
 
   // 测试连接
   const handleTestConnection = useCallback(
-    async (provider: LLMProvider, modelId?: string): Promise<ProviderTestResult> => {
-      return dispatch(testProviderConnection({ id: provider.id, modelId })).unwrap();
-    },
-    [dispatch]
+    (provider: LLMProvider, modelId?: string): Promise<ProviderTestResult> => testProviderConnection(provider.id, modelId),
+    [testProviderConnection]
   );
 
   // 获取可用模型列表
   const handleFetchModels = useCallback(
-    async (providerId: string): Promise<FetchModelsResponse> => {
-      return dispatch(fetchAvailableModels(providerId)).unwrap();
-    },
-    [dispatch]
+    (providerId: string): Promise<FetchModelsResponse> => fetchAvailableModels(providerId),
+    [fetchAvailableModels]
   );
 
   // 更新提供商的模型列表
   const handleUpdateProviderModels = useCallback(
-    async (providerId: string, models: ModelCreateSimple[]): Promise<ModelsUpdateResponse> => {
-      return dispatch(updateProviderModels({ providerId, data: { models } })).unwrap();
-    },
-    [dispatch]
+    (providerId: string, models: ModelCreateSimple[]): Promise<ModelsUpdateResponse> => updateModels(providerId, { models }),
+    [updateModels]
   );
 
   // 设置默认模型
   const handleSetDefaultModel = async (modelId: string) => {
     try {
-      await dispatch(setDefaultModel(modelId)).unwrap();
+      await modelsState.setDefault(modelId);
     } catch (error) {
       const feedback = getAdminErrorToast(error, '设置默认模型失败');
       if (feedback) toast(feedback);
@@ -214,23 +158,17 @@ export const AIModelSettingsPage: React.FC = () => {
 
   // 更新智能体配置
   const handleUpdateAgentConfig = async (agentType: string, data: UpdateAgentConfigRequest) => {
-    await dispatch(updateAgentConfig({ agentType, data })).unwrap();
+    await agentsState.update(agentType, data);
   };
 
   // 删除智能体配置
   const handleDeleteAgentConfig = async (agentType: string) => {
-    await dispatch(deleteAgentConfig(agentType)).unwrap();
+    await agentsState.remove(agentType);
   };
 
   // 获取提供商的模型
-  const getProviderModels = (providerId: string) => {
-    return models.filter((m) => m.provider_id === providerId);
-  };
-
-  const editingProviderModels = useMemo(
-    () => editingProvider ? models.filter((model) => model.provider_id === editingProvider.id) : [],
-    [editingProvider, models]
-  );
+  const getProviderModels = modelsState.getModelsByProvider;
+  const editingProviderModels = currentEditor?.models ?? [];
 
   // 统计数据
   const stats = {
@@ -340,8 +278,8 @@ export const AIModelSettingsPage: React.FC = () => {
         {providersError && (
           <RequestErrorNotice
             error={providersError}
-            onRetry={() => { void dispatch(fetchProviders(true)); }}
-            onRefresh={() => { void dispatch(fetchProviders(true)); }}
+            onRetry={() => { void providersState.loadProviders(true); }}
+            onRefresh={() => { void providersState.loadProviders(true); }}
             className="mb-6"
           />
         )}
@@ -370,8 +308,8 @@ export const AIModelSettingsPage: React.FC = () => {
             {modelsError ? (
               <RequestErrorNotice
                 error={modelsError}
-                onRetry={() => { void dispatch(fetchModels({ includeInactive: true })); }}
-                onRefresh={() => { void dispatch(fetchModels({ includeInactive: true })); }}
+                onRetry={() => { void modelsState.loadModels(undefined, true); }}
+                onRefresh={() => { void modelsState.loadModels(undefined, true); }}
               />
             ) : null}
             {isLoading ? (
@@ -420,17 +358,18 @@ export const AIModelSettingsPage: React.FC = () => {
               <RequestErrorNotice
                 error={agentConfigsError}
                 onRetry={() => {
-                  void dispatch(fetchAgentConfigs());
-                  void dispatch(fetchAgentTypes());
+                  void agentsState.loadConfigs();
+                  void agentsState.loadTypes();
                 }}
                 onRefresh={() => {
-                  void dispatch(fetchAgentConfigs());
-                  void dispatch(fetchAgentTypes());
+                  void agentsState.loadConfigs();
+                  void agentsState.loadTypes();
                 }}
                 className="mb-4"
               />
             ) : null}
             <AgentConfigPanel
+              key={scope ?? 'anonymous'}
               agentTypes={agentTypes}
               agentConfigs={agentConfigs}
               providers={providers}
@@ -442,15 +381,17 @@ export const AIModelSettingsPage: React.FC = () => {
           </TabsContent>
 
           <TabsContent value="embeddings">
-            <EmbeddingConfigPanel providers={providers} models={models} />
+            <EmbeddingConfigPanel key={scope ?? 'anonymous'} providers={providers} models={models} />
           </TabsContent>
         </Tabs>
 
         {/* 渠道表单 Modal */}
         <ChannelFormModal
+          key={scope ?? 'anonymous'}
           isOpen={isModalOpen}
           onClose={handleCloseModal}
           onSubmit={handleCreateChannel}
+          onBatchSettled={providersState.finishBatch}
           onUpdate={handleUpdateProvider}
           onUpdateModels={handleUpdateProviderModels}
           onFetchModels={handleFetchModels}

@@ -76,16 +76,17 @@ export const aiConfigService = {
   /**
    * 创建提供商
    */
-  async createProvider(data: CreateProviderRequest): Promise<LLMProvider> {
+  async createProvider(data: CreateProviderRequest, signal?: AbortSignal): Promise<LLMProvider> {
     try {
       const response = await apiClient.post<LLMProvider>(
         `${BASE_PATH}/providers`,
-        data
+        data,
+        { signal }
       );
       aiConfigLogger.info('创建提供商成功', { id: response.data.id, name: response.data.name });
       return response.data;
     } catch (error) {
-      aiConfigLogger.error('创建提供商失败', { name: data.name, error });
+      if (!signal?.aborted) aiConfigLogger.error('创建提供商失败', { name: data.name, error });
       throw error;
     }
   },
@@ -93,16 +94,17 @@ export const aiConfigService = {
   /**
    * 更新提供商
    */
-  async updateProvider(providerId: string, data: UpdateProviderRequest): Promise<LLMProvider> {
+  async updateProvider(providerId: string, data: UpdateProviderRequest, signal?: AbortSignal): Promise<LLMProvider> {
     try {
       const response = await apiClient.put<LLMProvider>(
         `${BASE_PATH}/providers/${providerId}`,
-        data
+        data,
+        { signal }
       );
       aiConfigLogger.info('更新提供商成功', { id: providerId });
       return response.data;
     } catch (error) {
-      aiConfigLogger.error('更新提供商失败', { providerId, error });
+      if (!signal?.aborted) aiConfigLogger.error('更新提供商失败', { providerId, error });
       throw error;
     }
   },
@@ -110,15 +112,16 @@ export const aiConfigService = {
   /**
    * 删除提供商
    */
-  async deleteProvider(providerId: string): Promise<SuccessResponse> {
+  async deleteProvider(providerId: string, signal?: AbortSignal): Promise<SuccessResponse> {
     try {
       const response = await apiClient.delete<SuccessResponse>(
-        `${BASE_PATH}/providers/${providerId}`
+        `${BASE_PATH}/providers/${providerId}`,
+        { signal }
       );
       aiConfigLogger.info('删除提供商成功', { id: providerId });
       return response.data;
     } catch (error) {
-      aiConfigLogger.error('删除提供商失败', { providerId, error });
+      if (!signal?.aborted) aiConfigLogger.error('删除提供商失败', { providerId, error });
       throw error;
     }
   },
@@ -126,7 +129,7 @@ export const aiConfigService = {
   /**
    * 测试提供商连接
    */
-  async testProvider(providerId: string, modelId?: string): Promise<ProviderTestResult> {
+  async testProvider(providerId: string, modelId?: string, signal?: AbortSignal): Promise<ProviderTestResult> {
     try {
       const params: Record<string, string> = {};
       if (modelId) {
@@ -135,7 +138,7 @@ export const aiConfigService = {
       const response = await apiClient.post<ProviderTestResult>(
         `${BASE_PATH}/providers/${providerId}/test`,
         null,
-        { params }
+        { params, signal }
       );
       aiConfigLogger.info('测试提供商连接', {
         id: providerId,
@@ -145,7 +148,7 @@ export const aiConfigService = {
       });
       return response.data;
     } catch (error) {
-      aiConfigLogger.error('测试提供商连接失败', { providerId, error });
+      if (!signal?.aborted) aiConfigLogger.error('测试提供商连接失败', { providerId, error });
       throw error;
     }
   },
@@ -153,11 +156,12 @@ export const aiConfigService = {
   /**
    * 创建提供商并同时创建模型
    */
-  async createProviderWithModels(data: CreateProviderWithModelsRequest): Promise<ProviderWithModelsResponse> {
+  async createProviderWithModels(data: CreateProviderWithModelsRequest, signal?: AbortSignal): Promise<ProviderWithModelsResponse> {
     try {
       const response = await apiClient.post<ProviderWithModelsResponse>(
         `${BASE_PATH}/providers/with-models`,
-        data
+        data,
+        { signal }
       );
       aiConfigLogger.info('创建提供商和模型成功', {
         providerId: response.data.provider.id,
@@ -166,7 +170,7 @@ export const aiConfigService = {
       });
       return response.data;
     } catch (error) {
-      aiConfigLogger.error('创建提供商和模型失败', { name: data.name, error });
+      if (!signal?.aborted) aiConfigLogger.error('创建提供商和模型失败', { name: data.name, error });
       throw error;
     }
   },
@@ -174,10 +178,11 @@ export const aiConfigService = {
   /**
    * 从提供商 API 获取可用模型列表
    */
-  async fetchAvailableModels(providerId: string): Promise<FetchModelsResponse> {
+  async fetchAvailableModels(providerId: string, signal?: AbortSignal): Promise<FetchModelsResponse> {
     try {
       const response = await apiClient.get<FetchModelsResponse>(
-        `${BASE_PATH}/providers/${providerId}/fetch-models`
+        `${BASE_PATH}/providers/${providerId}/fetch-models`,
+        { signal }
       );
       aiConfigLogger.info('获取可用模型列表', {
         providerId,
@@ -186,7 +191,7 @@ export const aiConfigService = {
       });
       return response.data;
     } catch (error) {
-      aiConfigLogger.error('获取可用模型列表失败', { providerId, error });
+      if (!signal?.aborted) aiConfigLogger.error('获取可用模型列表失败', { providerId, error });
       throw error;
     }
   },
@@ -214,11 +219,12 @@ export const aiConfigService = {
   /**
    * 更新提供商的模型列表（全量替换）
    */
-  async updateProviderModels(providerId: string, data: ModelsUpdateRequest): Promise<ModelsUpdateResponse> {
+  async updateProviderModels(providerId: string, data: ModelsUpdateRequest, signal?: AbortSignal): Promise<ModelsUpdateResponse> {
     try {
       const response = await apiClient.put<ModelsUpdateResponse>(
         `${BASE_PATH}/providers/${providerId}/models`,
-        data
+        data,
+        { signal }
       );
       aiConfigLogger.info('更新提供商模型列表', {
         providerId,
@@ -228,7 +234,7 @@ export const aiConfigService = {
       });
       return response.data;
     } catch (error) {
-      aiConfigLogger.error('更新提供商模型列表失败', { providerId, error });
+      if (!signal?.aborted) aiConfigLogger.error('更新提供商模型列表失败', { providerId, error });
       throw error;
     }
   },
@@ -274,16 +280,17 @@ export const aiConfigService = {
   /**
    * 创建模型
    */
-  async createModel(data: CreateModelRequest): Promise<LLMModel> {
+  async createModel(data: CreateModelRequest, signal?: AbortSignal): Promise<LLMModel> {
     try {
       const response = await apiClient.post<LLMModel>(
         `${BASE_PATH}/models`,
-        data
+        data,
+        { signal }
       );
       aiConfigLogger.info('创建模型成功', { id: response.data.id, name: response.data.name });
       return response.data;
     } catch (error) {
-      aiConfigLogger.error('创建模型失败', { name: data.name, error });
+      if (!signal?.aborted) aiConfigLogger.error('创建模型失败', { name: data.name, error });
       throw error;
     }
   },
@@ -291,16 +298,17 @@ export const aiConfigService = {
   /**
    * 更新模型
    */
-  async updateModel(modelId: string, data: UpdateModelRequest): Promise<LLMModel> {
+  async updateModel(modelId: string, data: UpdateModelRequest, signal?: AbortSignal): Promise<LLMModel> {
     try {
       const response = await apiClient.put<LLMModel>(
         `${BASE_PATH}/models/${modelId}`,
-        data
+        data,
+        { signal }
       );
       aiConfigLogger.info('更新模型成功', { id: modelId });
       return response.data;
     } catch (error) {
-      aiConfigLogger.error('更新模型失败', { modelId, error });
+      if (!signal?.aborted) aiConfigLogger.error('更新模型失败', { modelId, error });
       throw error;
     }
   },
@@ -308,15 +316,16 @@ export const aiConfigService = {
   /**
    * 删除模型
    */
-  async deleteModel(modelId: string): Promise<SuccessResponse> {
+  async deleteModel(modelId: string, signal?: AbortSignal): Promise<SuccessResponse> {
     try {
       const response = await apiClient.delete<SuccessResponse>(
-        `${BASE_PATH}/models/${modelId}`
+        `${BASE_PATH}/models/${modelId}`,
+        { signal }
       );
       aiConfigLogger.info('删除模型成功', { id: modelId });
       return response.data;
     } catch (error) {
-      aiConfigLogger.error('删除模型失败', { modelId, error });
+      if (!signal?.aborted) aiConfigLogger.error('删除模型失败', { modelId, error });
       throw error;
     }
   },
@@ -324,15 +333,17 @@ export const aiConfigService = {
   /**
    * 设置默认模型
    */
-  async setDefaultModel(modelId: string): Promise<SuccessResponse> {
+  async setDefaultModel(modelId: string, signal?: AbortSignal): Promise<SuccessResponse> {
     try {
       const response = await apiClient.post<SuccessResponse>(
-        `${BASE_PATH}/models/${modelId}/set-default`
+        `${BASE_PATH}/models/${modelId}/set-default`,
+        undefined,
+        { signal }
       );
       aiConfigLogger.info('设置默认模型成功', { id: modelId });
       return response.data;
     } catch (error) {
-      aiConfigLogger.error('设置默认模型失败', { modelId, error });
+      if (!signal?.aborted) aiConfigLogger.error('设置默认模型失败', { modelId, error });
       throw error;
     }
   },
@@ -435,17 +446,19 @@ export const aiConfigService = {
    */
   async updateAgentConfig(
     agentType: string,
-    data: UpdateAgentConfigRequest
+    data: UpdateAgentConfigRequest,
+    signal?: AbortSignal
   ): Promise<AgentModelConfig> {
     try {
       const response = await apiClient.put<AgentModelConfig>(
         `${BASE_PATH}/agents/${agentType}`,
-        data
+        data,
+        { signal }
       );
       aiConfigLogger.info('更新智能体配置成功', { agentType });
       return response.data;
     } catch (error) {
-      aiConfigLogger.error('更新智能体配置失败', { agentType, error });
+      if (!signal?.aborted) aiConfigLogger.error('更新智能体配置失败', { agentType, error });
       throw error;
     }
   },
@@ -453,15 +466,16 @@ export const aiConfigService = {
   /**
    * 删除智能体配置
    */
-  async deleteAgentConfig(agentType: string): Promise<SuccessResponse> {
+  async deleteAgentConfig(agentType: string, signal?: AbortSignal): Promise<SuccessResponse> {
     try {
       const response = await apiClient.delete<SuccessResponse>(
-        `${BASE_PATH}/agents/${agentType}`
+        `${BASE_PATH}/agents/${agentType}`,
+        { signal }
       );
       aiConfigLogger.info('删除智能体配置成功', { agentType });
       return response.data;
     } catch (error) {
-      aiConfigLogger.error('删除智能体配置失败', { agentType, error });
+      if (!signal?.aborted) aiConfigLogger.error('删除智能体配置失败', { agentType, error });
       throw error;
     }
   },

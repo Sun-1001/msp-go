@@ -62,7 +62,8 @@ interface ChannelFormModalProps {
   isOpen: boolean;
   onClose: () => void;
   onFetchModels?: (providerId: string) => Promise<FetchModelsResponse>;
-  onSubmit: (data: CreateProviderWithModelsRequest) => Promise<ProviderWithModelsResponse>;
+  onSubmit: (data: CreateProviderWithModelsRequest, deferRefresh?: boolean) => Promise<ProviderWithModelsResponse>;
+  onBatchSettled: () => void;
   onUpdate?: (id: string, data: UpdateProviderRequest) => Promise<void>;
   onUpdateModels?: (providerId: string, models: ModelCreateSimple[]) => Promise<ModelsUpdateResponse>;
 }
@@ -101,6 +102,7 @@ export const ChannelFormModal: React.FC<ChannelFormModalProps> = ({
   onClose,
   onFetchModels,
   onSubmit,
+  onBatchSettled,
   onUpdate,
   onUpdateModels,
 }) => {
@@ -456,7 +458,7 @@ export const ChannelFormModal: React.FC<ChannelFormModalProps> = ({
               is_active: isActive,
               description: description.trim() || undefined,
               models,
-            });
+            }, true);
             created += 1;
           }
         } catch (batchError) {
@@ -470,6 +472,8 @@ export const ChannelFormModal: React.FC<ChannelFormModalProps> = ({
             ...appError,
             message: `已创建 ${completed}/${batchTotal} 个渠道，重试只会处理剩余密钥。${appError.message}`,
           } satisfies AppError;
+        } finally {
+          if (created > 0) onBatchSettled();
         }
       } else {
         await onSubmit({
