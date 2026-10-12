@@ -4,7 +4,7 @@
  * 提供学生画像的获取、生成和清除功能
  */
 
-import { apiClient, isRequestCancelled } from '@/libs/http/apiClient';
+import { apiClient, AI_REQUEST_TIMEOUT_MS, isRequestCancelled } from '@/libs/http/apiClient';
 import { logger } from '@/libs/utils/logger';
 import type {
   StudentPortrait,
@@ -77,7 +77,7 @@ export const studentPortraitService = {
       const response = await apiClient.post<GeneratePortraitResponse>(
         `${BASE_PATH}/generate`,
         undefined,
-        { params: { range }, timeout: 60_000, signal }
+        { params: { range }, timeout: AI_REQUEST_TIMEOUT_MS, signal }
       );
       portraitLogger.info('生成学生画像成功', {
         version: response.data.portrait_version,

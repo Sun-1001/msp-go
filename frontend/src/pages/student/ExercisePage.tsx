@@ -106,7 +106,6 @@ export const ExercisePage: React.FC = () => {
     submitAnswer: submitAIAnswer,
     loadSolution: loadAISolution,
   } = aiExercise;
-  const classLoadStarted = useRef(false);
   const knowledgeLoaded = useRef(false);
   const knowledgeLoadInFlight = useRef(false);
   const knowledgeRequestId = useRef(0);
@@ -118,8 +117,6 @@ export const ExercisePage: React.FC = () => {
   const [dailyStatusError, setDailyStatusError] = useState<AppError | null>(null);
 
   useEffect(() => {
-    if (classLoadStarted.current) return;
-    classLoadStarted.current = true;
     void loadNextClassQuestion();
   }, [loadNextClassQuestion]);
 

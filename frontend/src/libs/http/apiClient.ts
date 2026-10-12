@@ -23,6 +23,9 @@ export {
 } from './appError';
 export type { AppError, AppErrorFeedback, AppErrorKind } from './appError';
 
+export const AI_REQUEST_TIMEOUT_MS = 130_000;
+export const AI_GENERATION_TIMEOUT_MS = 250_000;
+
 /**
  * Normalize API error detail to a single string for display.
  * FastAPI uses string for HTTPException.detail, or array of { loc, msg, type } for 422 validation.

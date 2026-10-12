@@ -42,6 +42,7 @@ type Config struct {
 	CORSAllowMethods       []string
 	CORSAllowHeaders       []string
 	RequestTimeout         time.Duration
+	AIRequestTimeout       time.Duration
 	ExerciseGenTimeout     time.Duration
 	SessionChatTimeout     time.Duration
 	ReadHeaderTimeout      time.Duration
@@ -179,7 +180,8 @@ func Load() (Config, error) {
 		CORSAllowMethods:          envList("CORS_ALLOW_METHODS", []string{"GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"}),
 		CORSAllowHeaders:          envList("CORS_ALLOW_HEADERS", []string{"Authorization", "Content-Type", "Accept", "Origin", "X-Requested-With", "X-CSRF-Token"}),
 		RequestTimeout:            envSeconds("REQUEST_TIMEOUT_DEFAULT", 30*time.Second),
-		ExerciseGenTimeout:        envSeconds("EXERCISE_GENERATION_REQUEST_TIMEOUT_SECONDS", 55*time.Second),
+		AIRequestTimeout:          envSeconds("AI_REQUEST_TIMEOUT_SECONDS", 120*time.Second),
+		ExerciseGenTimeout:        envSeconds("EXERCISE_GENERATION_REQUEST_TIMEOUT_SECONDS", 240*time.Second),
 		SessionChatTimeout:        envSeconds("SESSION_CHAT_REQUEST_TIMEOUT_SECONDS", 130*time.Second),
 		ReadHeaderTimeout:         envSeconds("HTTP_READ_HEADER_TIMEOUT", 5*time.Second),
 		ReadTimeout:               envSeconds("HTTP_READ_TIMEOUT", 35*time.Second),
@@ -290,6 +292,9 @@ func Load() (Config, error) {
 	}
 	if cfg.Port <= 0 || cfg.Port > 65535 {
 		return Config{}, fmt.Errorf("GO_API_PORT must be between 1 and 65535, got %d", cfg.Port)
+	}
+	if cfg.AIRequestTimeout <= 0 {
+		return Config{}, errors.New("AI_REQUEST_TIMEOUT_SECONDS must be greater than 0")
 	}
 	if cfg.ExerciseGenTimeout <= 0 {
 		return Config{}, errors.New("EXERCISE_GENERATION_REQUEST_TIMEOUT_SECONDS must be greater than 0")

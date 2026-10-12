@@ -10,6 +10,7 @@ import (
 	"net/url"
 	"strings"
 	"sync"
+	"time"
 )
 
 const (
@@ -147,7 +148,17 @@ func NewProviderClient(client *http.Client) *ProviderClient {
 
 // DoForProvider sends a request using the channel's protocol preference.
 func (c *ProviderClient) DoForProvider(request *http.Request, providerCode string) (*http.Response, error) {
-	return WrapClientForProvider(c.Client, providerCode).Do(request)
+	client := c.Client
+	if deadline, ok := request.Context().Deadline(); ok {
+		client = c.WithTimeout(time.Until(deadline))
+	}
+	return WrapClientForProvider(client, providerCode).Do(request)
+}
+
+func (c *ProviderClient) WithTimeout(timeout time.Duration) *http.Client {
+	cloned := *c.Client
+	cloned.Timeout = timeout
+	return &cloned
 }
 
 func wrapClient(client *http.Client, preference ProtocolPreference) *http.Client {

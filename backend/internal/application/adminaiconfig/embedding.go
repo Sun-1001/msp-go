@@ -391,7 +391,12 @@ func (s *Service) probeEmbeddingModel(ctx context.Context, request normalizedEmb
 	defer cancel()
 	startedAt := time.Now()
 	client := s.httpClient
-	if httpClient, ok := client.(*http.Client); ok {
+	switch httpClient := client.(type) {
+	case interface {
+		WithTimeout(time.Duration) *http.Client
+	}:
+		client = httpClient.WithTimeout(time.Duration(request.TimeoutSeconds) * time.Second)
+	case *http.Client:
 		clone := *httpClient
 		clone.Timeout = time.Duration(request.TimeoutSeconds) * time.Second
 		client = &clone
@@ -492,6 +497,9 @@ func performEmbeddingProbe(ctx context.Context, client HTTPDoer, endpoint string
 		} `json:"data"`
 	}
 	if err := httpjson.DecodeLimited(resp.Body, maxEmbeddingResponseBytes, &response); err != nil {
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return embeddingProbeAttemptResult{}, ctxErr
+		}
 		return embeddingProbeAttemptResult{message: "embeddings 响应格式无效"}, nil
 	}
 	if len(response.Data) != 1 || response.Data[0].Index != 0 || len(response.Data[0].Embedding) == 0 {

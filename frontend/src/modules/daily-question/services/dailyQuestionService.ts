@@ -1,4 +1,4 @@
-import { apiClient } from '@/libs/http/apiClient';
+import { apiClient, AI_GENERATION_TIMEOUT_MS } from '@/libs/http/apiClient';
 import {
   mapExerciseQuestion,
   type ExerciseQuestionResponse,
@@ -175,7 +175,7 @@ export const dailyQuestionService = {
     const response = await apiClient.post<DailyQuestionAssignmentResponse>(
       '/daily-question/today/prepare',
       undefined,
-      { timeout: 120_000, signal },
+      { timeout: AI_GENERATION_TIMEOUT_MS, signal },
     );
     return mapAssignment(response.data);
   },

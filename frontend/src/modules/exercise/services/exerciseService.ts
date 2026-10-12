@@ -4,7 +4,7 @@
  * 对接后端 /exercise API，替代原有 Mock 实现
  */
 
-import { apiClient } from '@/libs/http/apiClient';
+import { apiClient, AI_GENERATION_TIMEOUT_MS, AI_REQUEST_TIMEOUT_MS } from '@/libs/http/apiClient';
 import { logger } from '@/libs/utils/logger';
 import type { LearningFeedback } from '@/types/learningFeedback';
 
@@ -123,7 +123,7 @@ export interface SubmitPayload {
   timeSpentSeconds: number;
 }
 
-const submitTimeoutMs = 120_000;
+const submitTimeoutMs = AI_REQUEST_TIMEOUT_MS;
 
 interface EvaluationResponse {
   method: string;
@@ -223,7 +223,7 @@ export const exerciseService = {
       difficulty: payload.difficulty,
       question_type: payload.questionType,
     }, {
-      timeout: 60000,
+      timeout: AI_GENERATION_TIMEOUT_MS,
       signal,
     });
 
@@ -368,6 +368,7 @@ export const exerciseService = {
           ? { attempt_id: normalizedSolutionAttemptId }
           : {}),
       },
+      timeout: AI_GENERATION_TIMEOUT_MS,
       signal,
     });
 

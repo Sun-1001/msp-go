@@ -113,6 +113,13 @@ func (h *Handler) generate(w http.ResponseWriter, r *http.Request) {
 	}
 	response, err := h.service.GeneratePortrait(r.Context(), principal.UserID, rangeType)
 	if err != nil {
+		if errors.Is(err, context.Canceled) {
+			return
+		}
+		if errors.Is(err, context.DeadlineExceeded) {
+			writePortraitError(w, http.StatusGatewayTimeout, "PORTRAIT_TIMEOUT", "画像生成超时，请稍后重试")
+			return
+		}
 		if errors.Is(err, portraitapp.ErrInvalidRange) {
 			writePortraitError(w, http.StatusUnprocessableEntity, "INVALID_RANGE", "画像时间范围无效")
 			return

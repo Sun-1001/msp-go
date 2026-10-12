@@ -107,6 +107,9 @@ func requestTimeout(cfg config.Config, r *http.Request) time.Duration {
 	if isEmbeddingConfigRequest(r, cfg.APIV1Prefix) {
 		return embeddingConfigTimeout()
 	}
+	if isAIRequest(r, cfg.APIV1Prefix) {
+		return cfg.AIRequestTimeout
+	}
 	return cfg.RequestTimeout
 }
 
@@ -133,16 +136,36 @@ func sessionChatTimeout(cfg config.Config) time.Duration {
 }
 
 func isLongRunningAIRequest(r *http.Request, apiPrefix string) bool {
+	if r.Method == http.MethodGet {
+		path, ok := strings.CutPrefix(r.URL.Path, apiPrefix+"/exercise/")
+		parts := strings.Split(path, "/")
+		return ok && len(parts) == 2 && parts[0] != "" && parts[1] == "solution"
+	}
 	if r.Method != http.MethodPost {
 		return false
 	}
 	switch r.URL.Path {
 	case apiPrefix + "/exercise/generate",
 		apiPrefix + "/daily-question/today/prepare",
-		apiPrefix + "/portrait/generate":
+		apiPrefix + "/questions/generate-isomorphic":
 		return true
 	}
 	return false
+}
+
+func isAIRequest(r *http.Request, apiPrefix string) bool {
+	if r.Method != http.MethodPost {
+		return false
+	}
+	switch r.URL.Path {
+	case apiPrefix + "/exercise/submit",
+		apiPrefix + "/portrait/generate",
+		apiPrefix + "/questions/ai-parse":
+		return true
+	}
+	path, ok := strings.CutPrefix(r.URL.Path, apiPrefix+"/admin/ai-config/providers/")
+	parts := strings.Split(path, "/")
+	return ok && len(parts) == 2 && parts[0] != "" && parts[1] == "test"
 }
 
 func isSessionChatRequest(r *http.Request, apiPrefix string) bool {

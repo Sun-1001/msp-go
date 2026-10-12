@@ -182,14 +182,20 @@ P4 在本地 Ubuntu WSL 独立 Docker 引擎完成向量专项镜像、三节点
 | 层级 | 默认超时 |
 | --- | ---: |
 | 普通 Go API 总请求预算 | 30 秒 |
-| 练习、每日题准备和画像 AI 接口总请求预算 | 55 秒 |
+| 作答判题、画像、教师题目识别及渠道连接测试总预算 | 120 秒 |
+| AI 出题、每日题准备、同构题生成及题目解析总预算 | 240 秒 |
 | AI 学习会话聊天总请求预算 | 130 秒 |
 | OpenAI Responses 请求总预算 | 130 秒 |
-| 前端生成请求 Axios 超时 | 60 秒 |
+| 前端单次 AI / 出题验算请求 Axios 超时 | 130 / 250 秒 |
+| 前端嵌入测试与激活 Axios 超时 | 配置的总超时 + 10 秒 |
 | Nginx `/api/` 上游响应读取超时 | 300 秒 |
 | Go HTTP `WriteTimeout` | 310 秒 |
 
-`EXERCISE_GENERATION_REQUEST_TIMEOUT_SECONDS` 只用于 `/exercise/generate`、`/daily-question/today/prepare` 和 `/portrait/generate`，默认 55 秒。`SESSION_CHAT_REQUEST_TIMEOUT_SECONDS` 独立用于精确的 `POST /session/start-chat`、`POST /session/{session_id}/chat` 和 `POST /v1/responses`，默认 130 秒；该预算覆盖最长 60 秒内容审核、最长 60 秒模型调用，并为降级回复或收尾处理保留余量。会话聊天和 Responses 流都使用端到端 SSE，不受前端生成请求的 60 秒 Axios 超时约束；已有更短的父级 context 仍会优先结束请求。每个分片都会刷新响应，因此所有代理层都必须禁用响应缓冲和压缩聚合，不能只延长读取超时。若将任一后端预算配置到 300 秒以上，必须同步调整所有边缘代理和 Go HTTP 写入超时。Nginx 的 300 秒仅是代理安全上限，不代表业务请求应持续运行 300 秒。
+`AI_REQUEST_TIMEOUT_SECONDS` 默认 120 秒，只用于 `POST /exercise/submit`、`POST /portrait/generate`、`POST /questions/ai-parse` 和 `POST /admin/ai-config/providers/{id}/test`。`EXERCISE_GENERATION_REQUEST_TIMEOUT_SECONDS` 默认 240 秒，用于 `POST /exercise/generate`、`POST /daily-question/today/prepare`、`POST /questions/generate-isomorphic` 及 `GET /exercise/{id}/solution`，覆盖生成、独立求解与答案/步骤复核的整个流程，不为每一步重新开始总预算。普通接口仍使用 `REQUEST_TIMEOUT_DEFAULT=30`，不会因路径含有相同单词而获得长预算。
+
+升级已有环境时，显式配置的旧值不会被新默认值覆盖：请在部署环境设置 `AI_REQUEST_TIMEOUT_SECONDS=120`，并将原来的 `EXERCISE_GENERATION_REQUEST_TIMEOUT_SECONDS=55` 调整为 `240` 后重启 API；无需数据库迁移。前端共享的 AI 请求预算位于 `frontend/src/libs/http/apiClient.ts`，比对应服务端默认预算多 10 秒；继续调整后端预算时须同步前端配置并重新构建。嵌入测试与激活则按请求中的 `timeout_seconds` 单独计算前端预算，默认 30 秒、上限 300 秒，服务端为重试和全部 Key 共享该总预算。配置到 300 秒时，须为边缘代理额外保留响应余量，不能让代理先于业务截止时间断开。
+
+`SESSION_CHAT_REQUEST_TIMEOUT_SECONDS` 独立用于精确的 `POST /session/start-chat`、`POST /session/{session_id}/chat`、`POST /session/{session_id}/exercise-hint` 和 `POST /v1/responses`，默认 130 秒。会话聊天和 Responses 流使用端到端 SSE，不受 Axios 非流式超时约束；已有更短的父级 context 和客户端取消仍优先结束请求。延长预算不跳过验算、不增加自动重试，也不修改学生日额度与并发限制。每个分片都会刷新响应，因此所有代理层都必须禁用响应缓冲和压缩聚合，不能只延长读取超时。若将任一后端预算配置到 300 秒以上，必须同步调整所有边缘代理和 Go HTTP 写入超时。Nginx 的 300 秒仅是代理安全上限，不代表业务请求应持续运行 300 秒。
 
 - `/api/` 指向 Go API；
 - `/v1/` 指向 Go API，至少开放 `POST /v1/responses`；必须原样保留 `Authorization`，并关闭响应缓冲、请求缓冲和 gzip，以支持 Responses SSE；

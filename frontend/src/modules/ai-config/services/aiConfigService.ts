@@ -4,7 +4,7 @@
  * 提供 AI 模型配置的 API 调用
  */
 
-import { apiClient } from '@/libs/http/apiClient';
+import { apiClient, AI_REQUEST_TIMEOUT_MS } from '@/libs/http/apiClient';
 import { logger } from '@/libs/utils/logger';
 import type {
   LLMProvider,
@@ -34,6 +34,9 @@ const aiConfigLogger = logger.createContextLogger('AIConfig');
 
 // API 基础路径
 const BASE_PATH = '/admin/ai-config';
+
+const embeddingTimeoutMs = (data: ConfigureEmbeddingRequest): number =>
+  (Math.min(300, Math.max(1, data.timeout_seconds || 30)) + 10) * 1000;
 
 /**
  * AI 配置 API 服务
@@ -138,7 +141,7 @@ export const aiConfigService = {
       const response = await apiClient.post<ProviderTestResult>(
         `${BASE_PATH}/providers/${providerId}/test`,
         null,
-        { params, signal }
+        { params, timeout: AI_REQUEST_TIMEOUT_MS, signal }
       );
       aiConfigLogger.info('测试提供商连接', {
         id: providerId,
@@ -368,7 +371,7 @@ export const aiConfigService = {
       const response = await apiClient.post<EmbeddingProbeResult>(
         `${BASE_PATH}/embeddings/test`,
         data,
-        { signal }
+        { timeout: embeddingTimeoutMs(data), signal }
       );
       return response.data;
     } catch (error) {
@@ -382,7 +385,7 @@ export const aiConfigService = {
       const response = await apiClient.put<EmbeddingModelVersion>(
         `${BASE_PATH}/embeddings/active`,
         data,
-        { signal }
+        { timeout: embeddingTimeoutMs(data), signal }
       );
       return response.data;
     } catch (error) {

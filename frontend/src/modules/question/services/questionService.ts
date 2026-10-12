@@ -2,7 +2,7 @@
  * 题目管理服务
  */
 
-import { apiClient } from '@/libs/http/apiClient';
+import { apiClient, AI_REQUEST_TIMEOUT_MS } from '@/libs/http/apiClient';
 import { logger } from '@/libs/utils/logger';
 import type {
   Question,
@@ -397,7 +397,7 @@ export const questionService = {
     try {
       const response = await apiClient.post<AIParseResponse>('/questions/ai-parse', {
         raw_texts: rawTexts,
-      });
+      }, { timeout: AI_REQUEST_TIMEOUT_MS });
       return response.data;
     } catch (error) {
       log.error('AI 识别题目失败', error);

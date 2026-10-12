@@ -253,6 +253,9 @@ func (s *Service) GeneratePortrait(ctx context.Context, userID string, rangeType
 	}
 	reportInput.FallbackContent = buildPortraitContent(reportInput)
 	content := s.generatePortraitContent(ctx, reportInput)
+	if err := ctx.Err(); err != nil {
+		return GenerateResponse{}, err
+	}
 	generatedAt := learningrange.InPlatformZone(s.now())
 	var saved Profile
 	err = s.repo.WithTx(ctx, func(txCtx context.Context, repo Repository) error {
