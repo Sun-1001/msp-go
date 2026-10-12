@@ -1,4 +1,4 @@
-import type { ModelCreateSimple } from '@/modules/ai-config/types/aiConfig';
+import type { ModelCreateSimple } from '@/modules/ai-config';
 
 export type CredentialMode = 'single' | 'batch' | 'multi';
 export type KeyStrategy = 'round_robin' | 'random';

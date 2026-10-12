@@ -7,11 +7,11 @@ import { Button } from '../../components/ui/Button';
 import { Badge } from '../../components/ui/Badge';
 import { Progress } from '../../components/ui/Progress';
 import { toAppError, type AppError } from '@/libs/http/apiClient';
-import { knowledgeService } from '@/modules/knowledge/services/knowledgeService';
-import type {
-  LearningPathItem,
-  LearningPathResponse,
-} from '@/modules/knowledge/types/knowledge';
+import {
+  knowledgeService,
+  type LearningPathItem,
+  type LearningPathResponse,
+} from '@/modules/knowledge/api';
 import {
   Target,
   CheckCircle2,

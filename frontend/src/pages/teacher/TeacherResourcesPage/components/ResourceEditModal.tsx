@@ -1,12 +1,12 @@
 import React, { useState } from 'react';
-import type { Resource, ResourceUpdateRequest } from '@/modules/resource/types/resource';
+import type { Resource, ResourceUpdateRequest } from '@/modules/resource/api';
 import { Modal } from '../../../../components/ui/Modal';
 import { Button } from '../../../../components/ui/Button';
 import { Input } from '../../../../components/ui/Input';
 import { Loader2, Check } from 'lucide-react';
 import { RequestErrorNotice } from '@/components/feedback';
 import { toAppError, type AppError } from '@/libs/http/apiClient';
-import { selectResourceScope, useUpdateResourceMutation } from '@/modules/resource/store/resourceSlice';
+import { selectResourceScope, useUpdateResourceMutation } from '@/modules/resource/state';
 import { useAppSelector } from '@/store';
 
 interface ResourceEditModalProps {

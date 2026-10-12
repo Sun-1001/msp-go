@@ -6,7 +6,7 @@
  */
 
 import { saveAs } from 'file-saver';
-import type { DashboardStats, TeacherAnalyticsData } from '@/modules/teacher/types/teacher';
+import type { DashboardStats, TeacherAnalyticsData } from '@/modules/teacher';
 
 // ==================== 类型定义 ====================
 

@@ -10,7 +10,7 @@ import {
   Edit, MoreHorizontal, Copy, Trash2, Send, FileEdit, Archive, Star,
 } from 'lucide-react';
 import { getDifficultyBadge, getTypeBadge, getStatusBadge } from '../constants';
-import type { Question } from '@/modules/question/types/question';
+import type { Question } from '@/modules/question';
 
 interface QuestionTableProps {
   questions: Question[];

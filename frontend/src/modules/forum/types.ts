@@ -1,4 +1,4 @@
-import type { MessageAttachment } from '@/modules/message-center/attachmentTypes';
+import type { MessageAttachment } from '@/modules/message-center/api';
 
 export type ForumRole = 'student' | 'teacher' | 'admin';
 export type ForumPostType = 'question' | 'discussion' | 'resource';

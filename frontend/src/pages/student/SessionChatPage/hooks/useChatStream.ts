@@ -10,29 +10,28 @@ import {
   setStreamingMessageId,
   setMessageKnowledge,
   type StreamStatus,
-} from '@/modules/session/store/sessionSlice';
-import { sessionService } from '@/modules/session/services/sessionService';
-import { uploadService, type UploadResponse } from '@/modules/upload/services/uploadService';
+} from '@/modules/session/state';
+import { uploadService, type UploadResponse } from '@/modules/upload';
 import type { ParsedDocument } from '@/libs/utils/documentParser';
 import {
+  sessionService,
   formatChatMessageForDisplay,
   formatDocumentsForChat,
-} from '@/modules/session/documentMessage';
+  MAX_CHAT_DOCUMENTS,
+  MAX_CHAT_IMAGES,
+  MAX_CHAT_MESSAGE_BYTES,
+  MAX_CHAT_MESSAGE_KIB,
+  normalizeSessionKnowledge,
+  type DraftSessionIdentity,
+  type SessionMode,
+  type StudyTurnInput,
+} from '@/modules/session/api';
 import type { SSEController, SSEError, SSEHandlers } from '@/libs/http/sseClient';
 import {
   isRequestCancelled,
   toAppError,
   type AppError,
 } from '@/libs/http/appError';
-import {
-  MAX_CHAT_DOCUMENTS,
-  MAX_CHAT_IMAGES,
-  MAX_CHAT_MESSAGE_BYTES,
-  MAX_CHAT_MESSAGE_KIB,
-} from '@/modules/session/limits';
-import type { DraftSessionIdentity, SessionMode } from '@/modules/session/types';
-import { normalizeSessionKnowledge } from '@/modules/session/knowledge';
-import type { StudyTurnInput } from '@/modules/session/study';
 
 const CANCEL_EVENT_FALLBACK_MS = 1500;
 

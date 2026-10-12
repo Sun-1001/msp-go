@@ -16,8 +16,7 @@ import {
   RefreshCw,
   Loader2,
 } from 'lucide-react';
-import { fetchMistakeDetail } from '@/modules/mistake/services/mistakeService';
-import type { MistakeDetail } from '@/modules/mistake/services/mistakeService';
+import { fetchMistakeDetail, type MistakeDetail } from '@/modules/mistake/api';
 import type { BadgeProps } from '../../components/ui/Badge';
 import { toAppError, type AppError } from '@/libs/http/appError';
 

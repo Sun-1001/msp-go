@@ -24,9 +24,7 @@ import { Select } from '@/components/ui/Select';
 import { useToast } from '@/components/ui/Toast';
 import { toAppError, type AppError } from '@/libs/http/apiClient';
 import { MathText } from '@/libs/math/MathText';
-import { questionService } from '@/modules/question/services/questionService';
-import type { Question, QuestionCreateData } from '@/modules/question/types/question';
-import type { ImportResult } from '@/modules/question/types/questionImport';
+import { questionService, type Question, type QuestionCreateData, type ImportResult } from '@/modules/question';
 import { QuestionImportModal } from '@/pages/teacher/QuestionBankPage/components/QuestionImportModal';
 import { dailyQuestionService } from '../services/dailyQuestionService';
 import type {

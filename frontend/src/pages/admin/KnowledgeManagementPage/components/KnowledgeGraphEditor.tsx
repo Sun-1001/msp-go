@@ -18,7 +18,7 @@ import type {
   KnowledgeRelationAdmin,
   KnowledgeRelationCreateData,
   AdminRelationType,
-} from '@/modules/admin/types/knowledgeAdmin';
+} from '@/modules/admin/api';
 import { NODE_TYPE_OPTIONS } from '../constants';
 
 interface KnowledgeGraphEditorProps {

@@ -17,7 +17,7 @@ import {
 import { logger } from '../../libs/utils/logger';
 import { useToast } from '@/components/ui/Toast';
 import { toAppErrorFeedback } from '@/libs/http/apiClient';
-import type { DashboardStats, TeacherAnalyticsData } from '@/modules/teacher/types/teacher';
+import type { DashboardStats, TeacherAnalyticsData } from '@/modules/teacher';
 
 const log = logger.createContextLogger('DashboardExportModal');
 

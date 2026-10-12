@@ -5,7 +5,7 @@
  */
 
 import React, { useState, useCallback } from 'react';
-import { AdminLayout } from '@/modules/admin/components/AdminLayout';
+import { AdminLayout } from '@/modules/admin/layout';
 import { Card, CardContent } from '../../components/ui/Card';
 import { Button } from '../../components/ui/Button';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '../../components/ui/Tabs';
@@ -44,8 +44,8 @@ import type {
   FetchModelsResponse,
   ModelCreateSimple,
   ModelsUpdateResponse,
-} from '@/modules/ai-config/types/aiConfig';
-import { getAdminErrorToast } from '@/modules/admin/utils/errorFeedback';
+} from '@/modules/ai-config';
+import { getAdminErrorToast } from '@/modules/admin/api';
 
 export const AIModelSettingsPage: React.FC = () => {
   const scope = useAppSelector(selectApiScope);

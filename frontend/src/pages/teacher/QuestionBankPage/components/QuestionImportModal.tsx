@@ -25,17 +25,19 @@ import {
   limitParsedQuestions,
   selectAiParseQuestions,
 } from '../utils/importBoundaries';
-import { questionService } from '@/modules/question/services/questionService';
 import { logger } from '../../../../libs/utils/logger';
 import { ImportPreviewTable } from './ImportPreviewTable';
-import type { ParsedQuestion, ImportStep, ImportResult } from '@/modules/question/types/questionImport';
-import type { QuestionCreateData } from '@/modules/question/types/question';
 import { toAppError, type AppError } from '@/libs/http/apiClient';
 import {
+  questionService,
   SUPPORTED_IMPORT_EXTENSIONS,
   MAX_IMPORT_FILE_SIZE,
   MAX_BATCH_IMPORT_SIZE,
-} from '@/modules/question/types/questionImport';
+  type ParsedQuestion,
+  type ImportStep,
+  type ImportResult,
+  type QuestionCreateData,
+} from '@/modules/question';
 
 const log = logger.createContextLogger('QuestionImportModal');
 

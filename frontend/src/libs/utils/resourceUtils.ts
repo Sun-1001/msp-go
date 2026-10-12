@@ -4,7 +4,7 @@
  * 提供 URL/文件名解析、资源类型识别等功能
  */
 
-import type { ResourceType } from '@/modules/resource/types/resource';
+import type { ResourceType } from '@/modules/resource/api';
 import { replaceAsciiControlCharacters } from '@/libs/utils/controlCharacters';
 import { hasUnsafeUrlCharacters, normalizeSafeHttpUrl } from '@/libs/utils/safeUrl';
 

@@ -6,8 +6,7 @@
  */
 
 import { saveAs } from 'file-saver';
-import type { Question } from '@/modules/question/types/question';
-import type { ExportOptions } from '@/modules/question/types/questionImport';
+import type { Question, ExportOptions } from '@/modules/question';
 
 // ==================== 格式化工具 ====================
 

@@ -15,15 +15,15 @@ import { Button } from '@/components/ui/Button';
 import { Card, CardContent } from '@/components/ui/Card';
 import { Progress } from '@/components/ui/Progress';
 import { ExercisePanel, useExerciseViewModel } from '@/modules/exercise';
-import type { Question } from '@/modules/exercise/services/exerciseService';
+import type { Question } from '@/modules/exercise/api';
 import {
   fetchReviewExerciseByAttempt,
   type ReviewExerciseResponse,
-} from '@/modules/mistake/services/mistakeService';
+} from '@/modules/mistake/api';
 import {
   getDifficultyBadge,
   getErrorTypeLabel,
-} from '@/modules/mistake/hooks/useMistakeBook';
+} from '@/modules/mistake';
 import { toAppError, type AppError } from '@/libs/http/apiClient';
 
 const uncategorizedKnowledgePointId = '00000000-0000-0000-0000-000000000001';

@@ -1,4 +1,4 @@
-import type { SearchCitation, SearchMode } from '@/modules/resource/types/search';
+import type { SearchCitation, SearchMode } from '@/modules/resource/api';
 
 export interface SessionKnowledge {
   mode: SearchMode;

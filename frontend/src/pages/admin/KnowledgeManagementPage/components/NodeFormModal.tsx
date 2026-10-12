@@ -6,7 +6,7 @@ import type {
   KnowledgeNodeAdmin,
   KnowledgeNodeCreateData,
   KnowledgeNodeUpdateData,
-} from '@/modules/admin/types/knowledgeAdmin';
+} from '@/modules/admin/api';
 
 interface NodeFormModalProps {
   node: KnowledgeNodeAdmin | null;

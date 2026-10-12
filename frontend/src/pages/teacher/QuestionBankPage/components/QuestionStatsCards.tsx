@@ -1,6 +1,6 @@
 import React from 'react';
 import { Card, CardContent } from '../../../../components/ui/Card';
-import type { QuestionStats } from '@/modules/question/types/question';
+import type { QuestionStats } from '@/modules/question';
 
 interface QuestionStatsCardsProps {
   stats: QuestionStats;

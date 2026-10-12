@@ -26,7 +26,7 @@ import {
   RoleSelector,
   type RoleOption,
 } from '@/libs/form';
-import { systemSettingService, type RegistrationSettings } from '@/modules/admin/services/systemSettingService';
+import { systemSettingService, type RegistrationSettings } from '@/modules/admin/api';
 import { authService } from '@/modules/auth/services/authService';
 import {
   formatAppErrorDescription,

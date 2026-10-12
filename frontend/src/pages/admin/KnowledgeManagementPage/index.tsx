@@ -1,5 +1,5 @@
 import React, { useEffect, useCallback, useMemo, useRef } from 'react';
-import { AdminLayout } from '@/modules/admin/components/AdminLayout';
+import { AdminLayout } from '@/modules/admin/layout';
 import { Card, CardContent, CardHeader } from '@/components/ui/Card';
 import { Button } from '@/components/ui/Button';
 import { Loader2, RefreshCw } from 'lucide-react';
@@ -26,7 +26,7 @@ import {
   openRelationModal,
   closeRelationModal,
   setDeleteConfirm,
-} from '@/modules/admin/store/knowledgeAdminSlice';
+} from '@/modules/admin/state';
 import {
   selectActiveTab,
   selectStats,
@@ -41,7 +41,7 @@ import type {
   KnowledgeNodeUpdateData,
   KnowledgeRelationCreateData,
   KnowledgeRelationUpdateData,
-} from '@/modules/admin/types/knowledgeAdmin';
+} from '@/modules/admin/api';
 import { StatsCards } from './components/StatsCards';
 import { NodesTable } from './components/NodesTable';
 import { RelationsTable } from './components/RelationsTable';

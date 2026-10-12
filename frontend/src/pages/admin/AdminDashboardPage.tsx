@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useState } from 'react';
-import { AdminLayout } from '@/modules/admin/components/AdminLayout';
+import { AdminLayout } from '@/modules/admin/layout';
 import { Card, CardContent, CardHeader, CardTitle } from '../../components/ui/Card';
 import { Button } from '../../components/ui/Button';
 import { ConfirmDialog } from '../../components/ui/ConfirmDialog';
@@ -15,8 +15,7 @@ import {
 } from 'lucide-react';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '../../components/ui/Tabs';
 import { UserGrowthChart } from '../../components/charts';
-import { SecurityLogModal } from '@/modules/admin/components/SecurityLogModal';
-import { OperationsPanel } from '@/modules/admin/components/OperationsPanel';
+import { SecurityLogModal, OperationsPanel } from '@/modules/admin/dashboard';
 import { useSerialPolling } from '@/hooks/useSerialPolling';
 import { useAppDispatch, useAppSelector } from '../../store';
 import {
@@ -27,15 +26,15 @@ import {
   resetTrafficMetrics,
   clearTrafficResetError,
   setUserGrowthPeriod,
-} from '@/modules/admin/store/adminStatsSlice';
+} from '@/modules/admin/state';
 import {
   selectOverviewData,
   selectUserGrowthData,
   selectActivitiesData,
   selectSystemStatusData,
 } from '../../store/selectors/adminStatsSelectors';
-import type { UserGrowthPeriod } from '@/modules/admin/types/adminStats';
-import { getAdminErrorToast } from '@/modules/admin/utils/errorFeedback';
+import type { UserGrowthPeriod } from '@/modules/admin/api';
+import { getAdminErrorToast } from '@/modules/admin/api';
 
 export const AdminDashboardPage: React.FC = () => {
   const dispatch = useAppDispatch();

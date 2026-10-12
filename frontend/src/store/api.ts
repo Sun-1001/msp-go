@@ -1,6 +1,6 @@
 import { createApi, fakeBaseQuery } from '@reduxjs/toolkit/query/react';
 import type { BaseQueryApi, QueryReturnValue } from '@reduxjs/toolkit/query';
-import type { AuthState } from '@/modules/auth/store/authSlice';
+import type { AuthState } from '@/modules/auth/state';
 import { toAppError, type AppError } from '@/libs/http/appError';
 
 export interface ApiScope {

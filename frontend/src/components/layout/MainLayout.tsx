@@ -1,5 +1,5 @@
 import React from 'react';
-import { Header } from '@/modules/auth/components/Header';
+import { Header } from '@/modules/auth/navigation';
 import { Footer } from './Footer';
 
 interface MainLayoutProps {

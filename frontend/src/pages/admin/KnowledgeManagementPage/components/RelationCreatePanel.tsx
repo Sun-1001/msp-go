@@ -2,7 +2,7 @@ import React, { useState } from 'react';
 import { X, Loader2 } from 'lucide-react';
 import { Button } from '@/components/ui/Button';
 import { RELATION_TYPE_OPTIONS, INPUT_CLASS } from '../constants';
-import type { AdminRelationType } from '@/modules/admin/types/knowledgeAdmin';
+import type { AdminRelationType } from '@/modules/admin/api';
 
 interface RelationCreatePanelProps {
   sourceName: string;

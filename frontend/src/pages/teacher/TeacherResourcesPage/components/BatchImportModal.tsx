@@ -5,11 +5,11 @@ import { Button } from '../../../../components/ui/Button';
 import { Input } from '../../../../components/ui/Input';
 import { Loader2, Upload, Search, Link as LinkIcon, Check, X, Plus } from 'lucide-react';
 import { cn } from '../../../../libs/utils/cn';
-import { selectResourceScope, useCreateResourceMutation } from '@/modules/resource/store/resourceSlice';
+import { selectResourceScope, useCreateResourceMutation } from '@/modules/resource/state';
 import { useAppSelector } from '@/store';
-import { uploadResourceFile, validateResourceFile } from '@/modules/upload/services/uploadService';
-import { ingestionService, validateIngestionFile } from '@/modules/resource/services/ingestionService';
-import type { ResourceCreateRequest, BatchImportItem, ResourceType as ResourceTypeEnum } from '@/modules/resource/types/resource';
+import { uploadResourceFile, validateResourceFile } from '@/modules/upload';
+import { ingestionService, validateIngestionFile } from '@/modules/resource/api';
+import type { ResourceCreateRequest, BatchImportItem, ResourceType as ResourceTypeEnum } from '@/modules/resource/api';
 import { toAppError, type AppError } from '@/libs/http/apiClient';
 import {
   extractTitleFromUrl,

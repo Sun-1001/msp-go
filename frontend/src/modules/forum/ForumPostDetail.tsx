@@ -24,9 +24,8 @@ import { IconTooltip } from '@/components/ui/IconTooltip';
 import { Modal } from '@/components/ui/Modal';
 import { Select } from '@/components/ui/Select';
 import { MarkdownContent } from '@/components/chat/MarkdownContent';
-import { MessageComposer } from '@/modules/message-center/MessageComposer';
-import { MessageAttachments } from '@/modules/message-center/MessageAttachments';
-import type { MessageAttachment } from '@/modules/message-center/attachmentTypes';
+import { MessageComposer, MessageAttachments } from '@/modules/message-center/shared';
+import type { MessageAttachment } from '@/modules/message-center/api';
 import { formatRelativeTime } from '@/libs/utils/dateFormat';
 import { cn } from '@/libs/utils/cn';
 

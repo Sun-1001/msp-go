@@ -1,9 +1,9 @@
 import { Routes, Route, Navigate, useLocation } from 'react-router-dom';
 import { useAppSelector } from '@/store';
 import { AnimatePresence } from 'framer-motion';
-import { selectIsAuthenticated, selectCurrentUser } from '@/modules/auth/store/authSlice';
-import { ProtectedRoute } from '@/modules/auth/components/ProtectedRoute';
-import { getHomePath } from '@/modules/auth/constants/homePath';
+import { selectIsAuthenticated, selectCurrentUser } from '@/modules/auth/state';
+import { ProtectedRoute } from '@/modules/auth/routing';
+import { getHomePath } from '@/modules/auth/api';
 import { routes, notFoundRoute } from './index';
 
 /**

@@ -1,6 +1,6 @@
 import { useRef, useState, type ReactNode } from 'react';
 import { useAppSelector } from '@/store';
-import { selectCurrentUser, selectIsAuthenticated } from '@/modules/auth/store/authSlice';
+import { selectCurrentUser, selectIsAuthenticated } from '@/modules/auth/state';
 import { useExerciseViewModel } from '../hooks/exerciseViewModel';
 import { AIPracticeContext, type ExerciseMode } from '../hooks/aiPracticeContext';
 import type { GenerateQuestionType } from '../services/exerciseService';

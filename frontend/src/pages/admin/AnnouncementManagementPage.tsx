@@ -9,24 +9,24 @@ import {
   RefreshCw,
   Trash2,
 } from 'lucide-react';
-import { AdminLayout } from '@/modules/admin/components/AdminLayout';
+import { AdminLayout } from '@/modules/admin/layout';
 import { Button } from '@/components/ui/Button';
 import { useToast } from '@/components/ui/Toast';
 import { RequestErrorNotice } from '@/components/feedback';
 import type { AppError } from '@/libs/http/apiClient';
 import { formatDateOrFallback } from '@/libs/utils/dateFormat';
-import { announcementService } from '@/modules/announcement/announcementService';
-import { AnnouncementEditorModal } from '@/modules/announcement/AnnouncementEditorModal';
+import { announcementService } from '@/modules/announcement/api';
+import { AnnouncementEditorModal } from '@/modules/announcement';
 import type {
   AnnouncementAudience,
   SaveAnnouncementRequest,
   SystemAnnouncement,
-} from '@/modules/announcement/types';
+} from '@/modules/announcement/api';
 import {
   getAdminErrorToast,
   isAdminRequestCancelled,
   toAdminAppError,
-} from '@/modules/admin/utils/errorFeedback';
+} from '@/modules/admin/api';
 
 const audienceLabels: Record<AnnouncementAudience, string> = {
   student: '学生',

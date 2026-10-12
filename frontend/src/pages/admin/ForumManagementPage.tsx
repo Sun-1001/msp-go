@@ -15,7 +15,7 @@ import {
   XCircle,
 } from 'lucide-react';
 
-import { AdminLayout } from '@/modules/admin/components/AdminLayout';
+import { AdminLayout } from '@/modules/admin/layout';
 import { Badge } from '@/components/ui/Badge';
 import { Button } from '@/components/ui/Button';
 import { ConfirmDialog } from '@/components/ui/ConfirmDialog';
@@ -25,24 +25,24 @@ import { Modal } from '@/components/ui/Modal';
 import { Select } from '@/components/ui/Select';
 import { useToast } from '@/components/ui/Toast';
 import { MarkdownContent } from '@/components/chat/MarkdownContent';
-import { MessageAttachments } from '@/modules/message-center/MessageAttachments';
+import { MessageAttachments } from '@/modules/message-center/shared';
 import { RequestErrorNotice } from '@/components/feedback';
 import type { AppError } from '@/libs/http/apiClient';
 import { cn } from '@/libs/utils/cn';
 import { formatDateOrFallback } from '@/libs/utils/dateFormat';
-import { forumAdminService } from '@/modules/admin/services/forumAdminService';
+import { forumAdminService } from '@/modules/admin/api';
 import type {
   ForumModerationPost,
   ForumModerationPostStatusFilter,
   ForumModerationReport,
   ForumReportStatus,
-} from '@/modules/admin/types/forumAdmin';
-import type { ForumPost, ForumSort } from '@/modules/forum/types';
+} from '@/modules/admin/api';
+import type { ForumPost, ForumSort } from '@/modules/forum/api';
 import {
   getAdminErrorToast,
   isAdminRequestCancelled,
   toAdminAppError,
-} from '@/modules/admin/utils/errorFeedback';
+} from '@/modules/admin/api';
 
 type ViewMode = 'posts' | 'reports';
 type PostActionTarget = Pick<ForumPost, 'id' | 'title'>;

@@ -1,9 +1,8 @@
 import { apiClient, toAppError } from '@/libs/http/apiClient';
 import { formatDateOrFallback } from '@/libs/utils/dateFormat';
-import { classService } from '@/modules/classroom/services/classService';
-import { sessionService } from '@/modules/session/services/sessionService';
-import { teacherService } from '@/modules/teacher/services/teacherService';
-import type { ClassInfo } from '@/modules/classroom/types/classroom';
+import { classService, type ClassInfo } from '@/modules/classroom';
+import { sessionService } from '@/modules/session/api';
+import { teacherService } from '@/modules/teacher';
 import type {
   PersonalHomeData,
   HomeActionItem,
@@ -11,11 +10,11 @@ import type {
   HomeStat,
   HomeSectionError,
 } from './types';
-import { dailyQuestionService } from '@/modules/daily-question/services/dailyQuestionService';
 import {
+  dailyQuestionService,
   getDailyQuestionPresentation,
   type DailyQuestionAssignment,
-} from '@/modules/daily-question/types/dailyQuestion';
+} from '@/modules/daily-question/api';
 
 interface StudentOverviewResponse {
   total_exercises: number;

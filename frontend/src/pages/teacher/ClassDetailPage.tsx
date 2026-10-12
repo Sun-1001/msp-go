@@ -28,11 +28,9 @@ import {
   Clock,
   Trash2
 } from 'lucide-react';
-import { classService } from '@/modules/classroom/services/classService';
-import { teacherService } from '@/modules/teacher/services/teacherService';
-import type { ClassInfo, ClassStudent } from '@/modules/classroom/types/classroom';
-import type { ClassAnalyticsData } from '@/modules/teacher/types/teacher';
-import { TeacherDailyQuestionPanel } from '@/modules/daily-question/components/TeacherDailyQuestionPanel';
+import { classService, type ClassInfo, type ClassStudent } from '@/modules/classroom';
+import { teacherService, type ClassAnalyticsData } from '@/modules/teacher';
+import { TeacherDailyQuestionPanel } from '@/modules/daily-question/teacher';
 import { toAppError, type AppError } from '@/libs/http/apiClient';
 
 const classDetailTabs = new Set(['students', 'mastery', 'errors', 'daily-question']);

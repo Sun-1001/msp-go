@@ -1,6 +1,6 @@
 import { useEffect, useRef } from 'react';
 import { useAppSelector, useAppDispatch } from '@/store';
-import { selectIsAuthenticated, selectCurrentUser, selectAuthError, selectAuthLoadingState, fetchCurrentUser, logout, refreshToken } from '@/modules/auth/store/authSlice';
+import { selectIsAuthenticated, selectCurrentUser, selectAuthError, selectAuthLoadingState, fetchCurrentUser, logout, refreshToken } from '@/modules/auth/state';
 import { subscribeAuthExpired } from '@/libs/auth/authEvents';
 import { getCsrfToken } from '@/libs/auth/csrfToken';
 import { refreshAccessToken } from '@/libs/http/tokenRefresh';

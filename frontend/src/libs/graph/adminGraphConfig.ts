@@ -1,4 +1,4 @@
-import type { SimpleNode, KnowledgeRelationAdmin } from '@/modules/admin/types/knowledgeAdmin';
+import type { SimpleNode, KnowledgeRelationAdmin } from '@/modules/admin/api';
 
 /**
  * 管理端知识图谱配置

@@ -1,4 +1,4 @@
-import type { Question } from '@/modules/exercise/services/exerciseService';
+import type { Question } from '@/modules/exercise/api';
 
 export type DailyQuestionStatus =
   | 'not_started'

@@ -5,7 +5,7 @@ import type {
   ForumReportReason,
   ForumReportTargetType,
   ForumSort,
-} from '@/modules/forum/types';
+} from '@/modules/forum/api';
 
 export type ForumReportStatus = 'pending' | 'resolved' | 'dismissed';
 export type ForumReportStatusFilter = 'all' | ForumReportStatus;

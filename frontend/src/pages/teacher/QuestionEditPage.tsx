@@ -10,8 +10,7 @@ import { Button } from '../../components/ui/Button';
 import { Input } from '../../components/ui/Input';
 import { Select } from '../../components/ui/Select';
 import { ArrowLeft, Save, Loader2, Plus, Trash2, Edit } from 'lucide-react';
-import { questionService } from '@/modules/question/services/questionService';
-import type { Question, QuestionCreateData, QuestionUpdateData } from '@/modules/question/types/question';
+import { questionService, type Question, type QuestionCreateData, type QuestionUpdateData } from '@/modules/question';
 import { useToast } from '../../components/ui/Toast';
 import { toAppError, type AppError } from '@/libs/http/apiClient';
 

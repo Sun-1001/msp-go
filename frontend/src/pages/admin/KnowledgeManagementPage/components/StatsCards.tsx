@@ -2,8 +2,8 @@ import React from 'react';
 import { Card, CardContent } from '@/components/ui/Card';
 import { Network, GitBranch, BookOpen, AlertCircle } from 'lucide-react';
 import { Badge } from '@/components/ui/Badge';
-import { NODE_TYPE_LABELS } from '@/modules/admin/types/knowledgeAdmin';
-import type { KnowledgeStats } from '@/modules/admin/types/knowledgeAdmin';
+import { NODE_TYPE_LABELS } from '@/modules/admin/api';
+import type { KnowledgeStats } from '@/modules/admin/api';
 
 interface StatsCardsProps {
   stats: KnowledgeStats | null;

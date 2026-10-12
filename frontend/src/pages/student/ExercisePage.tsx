@@ -5,10 +5,9 @@ import {
   ExercisePanel,
   useExerciseViewModel,
 } from '@/modules/exercise';
-import { useAIPractice, type ExerciseMode } from '@/modules/exercise/hooks/aiPracticeContext';
-import { ExerciseHintButton } from '@/modules/exercise/components/ExerciseHintButton';
-import { knowledgeService } from '@/modules/knowledge/services/knowledgeService';
-import type { KnowledgeNode } from '@/modules/knowledge/types/knowledge';
+import { useAIPractice, type ExerciseMode } from '@/modules/exercise/provider';
+import { ExerciseHintButton } from '@/modules/exercise/tutor';
+import { knowledgeService, type KnowledgeNode } from '@/modules/knowledge/api';
 import { Badge } from '@/components/ui/Badge';
 import { Button } from '@/components/ui/Button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/Card';
@@ -22,10 +21,8 @@ import {
   Users,
   WandSparkles,
 } from 'lucide-react';
-import { DailyQuestionStatusEntry } from '@/modules/daily-question/components/DailyQuestionStatusEntry';
-import { useShanghaiDate } from '@/modules/daily-question/hooks/useShanghaiDate';
-import { dailyQuestionService } from '@/modules/daily-question/services/dailyQuestionService';
-import type { DailyQuestionAssignment } from '@/modules/daily-question/types/dailyQuestion';
+import { DailyQuestionStatusEntry, useShanghaiDate } from '@/modules/daily-question';
+import { dailyQuestionService, type DailyQuestionAssignment } from '@/modules/daily-question/api';
 import { toAppError, type AppError } from '@/libs/http/apiClient';
 
 const INVALID_CONCEPT_MESSAGE = '指定的知识点不存在，请重新选择';

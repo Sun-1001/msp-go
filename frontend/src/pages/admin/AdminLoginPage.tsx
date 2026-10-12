@@ -5,14 +5,14 @@ import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '../..
 import { Button } from '../../components/ui/Button';
 import { Input } from '../../components/ui/Input';
 import { ThemeToggle } from '../../components/ui/ThemeToggle';
-import { setCredentials } from '@/modules/auth/store/authSlice';
+import { setCredentials } from '@/modules/auth/state';
 import { Shield, Lock, User, AlertCircle } from 'lucide-react';
 import { logger } from '../../libs/utils/logger';
-import { authService } from '@/modules/auth/services/authService';
-import { LoginCaptchaModal } from '@/modules/auth/components/LoginCaptchaModal';
+import { authService } from '@/modules/auth/api';
+import { LoginCaptchaModal } from '@/modules/auth/captcha';
 import { RequestErrorNotice } from '@/components/feedback';
 import type { AppError } from '@/libs/http/apiClient';
-import { isAdminRequestCancelled, toAdminAppError } from '@/modules/admin/utils/errorFeedback';
+import { isAdminRequestCancelled, toAdminAppError } from '@/modules/admin/api';
 
 const adminLogger = logger.createContextLogger('AdminLogin');
 

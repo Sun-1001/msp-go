@@ -26,28 +26,26 @@ import { Modal } from '../../components/ui/Modal';
 import { Progress } from '../../components/ui/Progress';
 import { Select, type SelectOption } from '../../components/ui/Select';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '../../components/ui/Tabs';
-import { ExerciseMathContent } from '@/modules/exercise/components/ExerciseMathContent';
+import { ExerciseMathContent } from '@/modules/exercise/math';
 import { toAppError, type AppError } from '@/libs/http/apiClient';
-import { knowledgeService } from '@/modules/knowledge/services/knowledgeService';
+import { knowledgeService } from '@/modules/knowledge/api';
 import {
   buildMistakeBookRequestKey,
   getDifficultyBadge,
   getErrorTypeLabel,
   useMistakeBook,
-} from '@/modules/mistake/hooks/useMistakeBook';
-import {
   buildReviewTaskRequestKey,
   useMistakeReviewTasks,
-} from '@/modules/mistake/hooks/useMistakeReviewTasks';
-import { fetchMistakeDetail } from '@/modules/mistake/services/mistakeService';
-import type {
-  MistakeDetail,
-  MistakeRecord,
-  MistakeExercise,
-  MistakeQueryParams,
-  ReviewTask,
-  ReviewTaskView,
-} from '@/modules/mistake/services/mistakeService';
+} from '@/modules/mistake';
+import {
+  fetchMistakeDetail,
+  type MistakeDetail,
+  type MistakeRecord,
+  type MistakeExercise,
+  type MistakeQueryParams,
+  type ReviewTask,
+  type ReviewTaskView,
+} from '@/modules/mistake/api';
 
 type MistakeBookView = ReviewTaskView | 'library';
 type BadgeVariant = 'secondary' | 'success' | 'warning';

@@ -1,5 +1,5 @@
 import type { Question } from './services/exerciseService';
-import type { SessionMode } from '@/modules/session/types';
+import type { SessionMode } from '@/modules/session/api';
 
 export interface ExerciseTutorLaunchState {
   initialMessage: string;

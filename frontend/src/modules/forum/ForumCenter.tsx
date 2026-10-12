@@ -20,7 +20,7 @@ import { IconTooltip } from '@/components/ui/IconTooltip';
 import { Input } from '@/components/ui/Input';
 import { Select } from '@/components/ui/Select';
 import { useToast } from '@/components/ui/Toast';
-import { MessageCenterListPagination } from '@/modules/message-center/MessageCenterListPagination';
+import { MessageCenterListPagination } from '@/modules/message-center/shared';
 import { toAppError, toAppErrorFeedback, type AppError } from '@/libs/http/apiClient';
 import { cn } from '@/libs/utils/cn';
 import { formatRelativeTime } from '@/libs/utils/dateFormat';

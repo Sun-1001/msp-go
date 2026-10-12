@@ -1,7 +1,7 @@
 import type {
   KnowledgeEdge,
   KnowledgeNode,
-} from '@/modules/knowledge/types/knowledge';
+} from '@/modules/knowledge/api';
 
 export interface KnowledgeGraphIndex {
   nodesById: ReadonlyMap<string, KnowledgeNode>;

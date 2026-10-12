@@ -7,6 +7,8 @@ export {
   KnowledgeGraph,
   KnowledgeGraphLegend,
 } from './components/KnowledgeGraph';
+export { KnowledgeGraphInspector, KnowledgeGraphMobileSheet } from './components/KnowledgeGraphInspector';
+export { readStoredKnowledgeGraphViewMode, storeKnowledgeGraphViewMode } from './hooks/useKnowledgeGraphMode';
 
 export type {
   KnowledgeNode,

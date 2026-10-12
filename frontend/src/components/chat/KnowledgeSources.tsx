@@ -1,8 +1,8 @@
 import { useState } from 'react';
 import { BookOpen } from 'lucide-react';
-import type { SessionKnowledge } from '@/modules/session/knowledge';
-import type { SearchCitation } from '@/modules/resource/types/search';
-import { CitationReader } from '@/modules/resource/components/CitationReader';
+import type { SessionKnowledge } from '@/modules/session/api';
+import type { SearchCitation } from '@/modules/resource/api';
+import { CitationReader } from '@/modules/resource';
 
 export function KnowledgeSources({ knowledge }: { knowledge?: SessionKnowledge | null }) {
   const [selected, setSelected] = useState<SearchCitation | null>(null);

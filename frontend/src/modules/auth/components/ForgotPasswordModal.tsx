@@ -10,7 +10,7 @@ import {
   FormSubmitButton,
 } from '@/libs/form';
 import { forgotPasswordSchema, type ForgotPasswordFormData } from '@/libs/validation';
-import { passwordResetService } from '@/modules/password-reset/services/passwordResetService';
+import { passwordResetService } from '@/modules/password-reset';
 import {
   formatAppErrorDescription,
   isRequestCancelled,

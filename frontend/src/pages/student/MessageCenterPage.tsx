@@ -35,47 +35,41 @@ import { formatRelativeTime } from '@/libs/utils/dateFormat';
 import { useSerialPolling } from '@/hooks/useSerialPolling';
 import {
   conversationService,
-  type ConversationItem,
-  type Contact,
-} from '@/modules/message-center/services/conversationService';
-import {
   noticeService,
-  type StudentNoticeItem,
-  type StudentNoticeListItem,
-} from '@/modules/message-center/services/noticeService';
-import {
   qaThreadService,
-  type StudentThreadItem,
-  type ThreadDetail,
-} from '@/modules/message-center/services/qaThreadService';
-import {
-  refreshMessageCenterSummaryAfterMutation,
-  useMessageCenterSummary,
-} from '@/modules/message-center/components/useMessageCenterSummary';
-import { usePageVisibility } from '@/modules/message-center/components/usePageVisibility';
-import {
   fetchMessageCenterPage,
   fetchStableOffsetMessageWindow,
   hasMinimumGlobalSearchCharacters,
   mergeMessagesByID,
   appendDeliveredMessage,
-} from '@/modules/message-center/pageUtils';
-import { MessageCenterSideTab } from '@/modules/message-center/MessageCenterSideTab';
-import { MessageCenterListPagination } from '@/modules/message-center/MessageCenterListPagination';
-import { MessageCenterFilterMenu } from '@/modules/message-center/MessageCenterFilterMenu';
-import { MessageAttachments } from '@/modules/message-center/MessageAttachments';
-import { MessageText } from '@/modules/message-center/MessageText';
-import { useVisibleMessageCutoff } from '@/modules/message-center/components/useVisibleMessageCutoff';
-import { usePrivateConversationDetail } from '@/modules/message-center/components/usePrivateConversationDetail';
-import { ConversationDetailPanel } from '@/modules/message-center/ConversationDetailPanel';
-import { NewConversationModal } from '@/modules/message-center/NewConversationModal';
-import { MessageComposer } from '@/modules/message-center/MessageComposer';
-import type { MessageAttachment } from '@/modules/message-center/attachmentTypes';
+  type ConversationItem,
+  type Contact,
+  type StudentNoticeItem,
+  type StudentNoticeListItem,
+  type StudentThreadItem,
+  type ThreadDetail,
+  type MessageAttachment,
+} from '@/modules/message-center/api';
+import {
+  refreshMessageCenterSummaryAfterMutation,
+  useMessageCenterSummary,
+  usePageVisibility,
+  MessageCenterSideTab,
+  MessageCenterListPagination,
+  MessageCenterFilterMenu,
+  MessageAttachments,
+  MessageText,
+  useVisibleMessageCutoff,
+  usePrivateConversationDetail,
+  ConversationDetailPanel,
+  NewConversationModal,
+  MessageComposer,
+} from '@/modules/message-center';
 import { ForumCenter } from '@/modules/forum';
 import {
   fetchMistakes,
   type MistakeRecord,
-} from '@/modules/mistake/services/mistakeService';
+} from '@/modules/mistake/api';
 
 // ---------------------------------------------------------------------------
 // Helpers

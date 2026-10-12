@@ -1,11 +1,11 @@
 import { apiClient } from '@/libs/http/apiClient';
-import { forumService } from '@/modules/forum';
+import { forumService } from '@/modules/forum/api';
 import type {
   ForumAuthor,
   ForumReportReason,
   ForumReportTargetType,
   ForumRole,
-} from '@/modules/forum/types';
+} from '@/modules/forum/api';
 import type {
   ForumModerationPost,
   ForumModerationPostListResponse,

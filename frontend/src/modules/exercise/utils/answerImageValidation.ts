@@ -1,4 +1,4 @@
-import { uploadService } from '@/modules/upload/services/uploadService';
+import { uploadService } from '@/modules/upload';
 
 export const answerImageAccept = 'image/jpeg,image/png,image/gif';
 

@@ -3,7 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { useAppSelector } from '@/store';
-import { selectCurrentUser } from '@/modules/auth/store/authSlice';
+import { selectCurrentUser } from '@/modules/auth/state';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/Card';
 import { Button } from '@/components/ui/Button';
 import { Input } from '@/components/ui/Input';
@@ -17,10 +17,10 @@ import {
   type AppError,
 } from '@/libs/http/apiClient';
 import { passwordChangeSchema, type PasswordChangeFormData } from '@/libs/validation/schemas';
-import { authService } from '@/modules/auth/services/authService';
-import { useAuth } from '@/modules/auth/hooks/useAuth';
-import { xidianService, type XidianBindingStatus, type XidianCaptchaChallenge } from '@/modules/xidian/services/xidianService';
-import { WechatBindingSection } from '@/modules/wechat/components/WechatBindingSection';
+import { authService } from '@/modules/auth/api';
+import { useAuth } from '@/modules/auth/hooks';
+import { xidianService, type XidianBindingStatus, type XidianCaptchaChallenge } from '@/modules/xidian';
+import { WechatBindingSection } from '@/modules/wechat';
 
 export const ProfilePage: React.FC = () => {
   const user = useAppSelector(selectCurrentUser);

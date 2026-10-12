@@ -7,7 +7,7 @@ import type {
   KnowledgeRelationCreateData,
   KnowledgeRelationUpdateData,
   SimpleNode,
-} from '@/modules/admin/types/knowledgeAdmin';
+} from '@/modules/admin/api';
 import { RequestErrorNotice } from '@/components/feedback';
 import type { AppError } from '@/libs/http/apiClient';
 

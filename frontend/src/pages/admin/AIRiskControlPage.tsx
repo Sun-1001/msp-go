@@ -18,10 +18,9 @@ import {
   Users,
   X,
 } from 'lucide-react';
-import { AdminLayout } from '@/modules/admin/components/AdminLayout';
-import { aiRiskService } from '@/modules/admin/services/aiRiskService';
-import { aiConfigService } from '@/modules/ai-config/services/aiConfigService';
-import { AgentTypes } from '@/modules/ai-config/types/aiConfig';
+import { AdminLayout } from '@/modules/admin/layout';
+import { aiRiskService } from '@/modules/admin/api';
+import { aiConfigService, AgentTypes } from '@/modules/ai-config';
 import type {
   AIModelReviewCategory,
   AIModelReviewThresholds,
@@ -34,7 +33,7 @@ import type {
   AIStudentListResponse,
   AIStudentStatusFilter,
   UpdateAIRiskSettingsRequest,
-} from '@/modules/admin/types/aiRisk';
+} from '@/modules/admin/api';
 import { RequestErrorNotice } from '@/components/feedback';
 import type { AppError } from '@/libs/http/apiClient';
 import { Badge } from '@/components/ui/Badge';
@@ -44,7 +43,7 @@ import { Input } from '@/components/ui/Input';
 import { Progress } from '@/components/ui/Progress';
 import { Select } from '@/components/ui/Select';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/Tabs';
-import { isAdminRequestCancelled, toAdminAppError } from '@/modules/admin/utils/errorFeedback';
+import { isAdminRequestCancelled, toAdminAppError } from '@/modules/admin/api';
 
 type ViewTab = 'policy' | 'students' | 'events';
 type ModeratorConfigStatus = 'loading' | 'configured' | 'missing' | 'error';

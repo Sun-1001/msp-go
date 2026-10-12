@@ -1,4 +1,4 @@
-import type { UserItem, UserAccountStats, UserRole, UserStatus } from '@/modules/admin/types/adminUsers';
+import type { UserItem, UserAccountStats, UserRole, UserStatus } from '@/modules/admin/api';
 import type { AppError } from '@/libs/http/apiClient';
 
 /**

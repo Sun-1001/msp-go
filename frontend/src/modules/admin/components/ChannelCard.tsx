@@ -24,7 +24,7 @@ import {
 import { Button } from '@/components/ui/Button';
 import { Badge } from '@/components/ui/Badge';
 import { Card, CardContent } from '@/components/ui/Card';
-import type { LLMProvider, LLMModel, ProviderTestResult } from '@/modules/ai-config/types/aiConfig';
+import type { LLMProvider, LLMModel, ProviderTestResult } from '@/modules/ai-config';
 import {
   getAdminErrorDescription,
   isAdminRequestCancelled,

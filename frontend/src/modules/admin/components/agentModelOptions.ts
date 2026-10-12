@@ -2,7 +2,7 @@ import type {
   AgentModelConfig,
   LLMModel,
   LLMProvider,
-} from '@/modules/ai-config/types/aiConfig';
+} from '@/modules/ai-config';
 
 export interface LogicalModelOption {
   value: string;

@@ -1,4 +1,4 @@
-import type { Resource } from '@/modules/resource/types/resource';
+import type { Resource } from '@/modules/resource/api';
 
 export type FilterType = 'all' | 'video' | 'document';
 export type ViewMode = 'grid' | 'list';

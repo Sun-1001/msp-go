@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback } from 'react';
-import { AdminLayout } from '@/modules/admin/components/AdminLayout';
+import { AdminLayout } from '@/modules/admin/layout';
 import { Card, CardContent, CardHeader } from '../../components/ui/Card';
 import { Button } from '../../components/ui/Button';
 import { Badge } from '../../components/ui/Badge';
@@ -13,14 +13,14 @@ import {
   AlertCircle,
   Copy,
 } from 'lucide-react';
-import { passwordResetService } from '@/modules/password-reset/services/passwordResetService';
+import { passwordResetService } from '@/modules/password-reset';
 import type {
   PasswordResetRequestItem,
   PasswordResetReviewResponse,
-} from '@/modules/password-reset/types/passwordReset';
+} from '@/modules/password-reset';
 import { RequestErrorNotice } from '@/components/feedback';
 import type { AppError } from '@/libs/http/apiClient';
-import { isAdminRequestCancelled, toAdminAppError } from '@/modules/admin/utils/errorFeedback';
+import { isAdminRequestCancelled, toAdminAppError } from '@/modules/admin/api';
 
 type TabFilter = 'all' | 'pending' | 'approved' | 'rejected';
 

@@ -25,7 +25,7 @@ import {
 import { useToast } from '@/components/ui/Toast';
 import { RequestErrorNotice } from '@/components/feedback';
 import type { AppError } from '@/libs/http/apiClient';
-import { aiConfigService } from '@/modules/ai-config/services/aiConfigService';
+import { aiConfigService } from '@/modules/ai-config';
 import type {
   ConfigureEmbeddingRequest,
   EmbeddingMetric,
@@ -33,7 +33,7 @@ import type {
   EmbeddingProbeResult,
   LLMModel,
   LLMProvider,
-} from '@/modules/ai-config/types/aiConfig';
+} from '@/modules/ai-config';
 import { isAdminRequestCancelled, toAdminAppError } from '@/modules/admin/utils/errorFeedback';
 
 interface EmbeddingConfigPanelProps {

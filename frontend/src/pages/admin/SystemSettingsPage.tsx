@@ -1,5 +1,5 @@
 import React, { useCallback, useState, useEffect } from 'react';
-import { AdminLayout } from '@/modules/admin/components/AdminLayout';
+import { AdminLayout } from '@/modules/admin/layout';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '../../components/ui/Card';
 import { Button } from '../../components/ui/Button';
 import { Input } from '../../components/ui/Input';
@@ -20,8 +20,8 @@ import {
   Activity,
   RefreshCw,
 } from 'lucide-react';
-import { authService } from '@/modules/auth/services/authService';
-import { useAuth } from '@/modules/auth/hooks/useAuth';
+import { authService } from '@/modules/auth/api';
+import { useAuth } from '@/modules/auth/hooks';
 import { passwordSchema } from '@/libs/validation';
 import {
   systemSettingService,
@@ -30,14 +30,14 @@ import {
   type ExportableTable,
   type DataImportResponse,
   type DatabaseMonitorResponse,
-} from '@/modules/admin/services/systemSettingService';
+} from '@/modules/admin/api';
 import { base64ToBlob, downloadBlob } from '@/libs/utils/download';
 import { useSerialPolling } from '@/hooks/useSerialPolling';
-import { EmailSettingsPanel } from '@/modules/email/components/EmailSettingsPanel';
-import { StorageSettingsCard } from '@/modules/admin/components/StorageSettingsCard';
+import { EmailSettingsPanel } from '@/modules/email';
+import { StorageSettingsCard } from '@/modules/admin/settings';
 import { RequestErrorNotice } from '@/components/feedback';
 import type { AppError } from '@/libs/http/apiClient';
-import { isAdminRequestCancelled, toAdminAppError } from '@/modules/admin/utils/errorFeedback';
+import { isAdminRequestCancelled, toAdminAppError } from '@/modules/admin/api';
 
 type SettingsFeedbackError = string | AppError;
 

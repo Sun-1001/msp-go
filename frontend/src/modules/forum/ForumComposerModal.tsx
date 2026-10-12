@@ -4,8 +4,8 @@ import { Send } from 'lucide-react';
 import { Button } from '@/components/ui/Button';
 import { Input } from '@/components/ui/Input';
 import { Modal } from '@/components/ui/Modal';
-import { MessageAttachmentPicker } from '@/modules/message-center/MessageAttachmentPicker';
-import type { MessageAttachment } from '@/modules/message-center/attachmentTypes';
+import { MessageAttachmentPicker } from '@/modules/message-center/shared';
+import type { MessageAttachment } from '@/modules/message-center/api';
 
 import type { ForumPost, SaveForumPostPayload } from './types';
 

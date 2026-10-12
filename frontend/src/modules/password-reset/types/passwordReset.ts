@@ -1,6 +1,6 @@
 /** 密码重置相关类型定义 */
 
-import type { EmailNotificationResult } from '@/modules/email/types/email';
+import type { EmailNotificationResult } from '@/modules/email/api';
 
 // 用户端
 export interface PasswordResetSubmitRequest {

@@ -14,7 +14,7 @@ import {
   LegendComponent,
 } from 'echarts/components';
 import { CanvasRenderer } from 'echarts/renderers';
-import type { UserGrowthDataPoint } from '@/modules/admin/types/adminStats';
+import type { UserGrowthDataPoint } from '@/modules/admin/api';
 
 echarts.use([LineChart, GridComponent, TooltipComponent, LegendComponent, CanvasRenderer]);
 

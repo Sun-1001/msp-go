@@ -21,18 +21,17 @@ import { Badge } from '@/components/ui/Badge';
 import { Button } from '@/components/ui/Button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/Card';
 import { ExercisePanel, useExerciseViewModel } from '@/modules/exercise';
-import type { SubmitResult } from '@/modules/exercise/services/exerciseService';
-import { dailyQuestionService } from '@/modules/daily-question/services/dailyQuestionService';
+import { buildExerciseTutorLaunch, type SubmitResult } from '@/modules/exercise/api';
 import {
+  dailyQuestionService,
   getDailyQuestionPresentation,
   type DailyQuestionAssignment,
   type DailyQuestionHistory,
   type DailyQuestionHistoryItem,
-} from '@/modules/daily-question/types/dailyQuestion';
+} from '@/modules/daily-question/api';
 import { toAppError, type AppError } from '@/libs/http/apiClient';
 import { useSerialPolling } from '@/hooks/useSerialPolling';
-import { useShanghaiDate } from '@/modules/daily-question/hooks/useShanghaiDate';
-import { buildExerciseTutorLaunch } from '@/modules/exercise/tutorContext';
+import { useShanghaiDate } from '@/modules/daily-question';
 
 const isoDatePattern = /^\d{4}-\d{2}-\d{2}$/;
 

@@ -5,7 +5,7 @@ import { Button } from '@/components/ui/Button';
 import { useToast } from '@/components/ui/Toast';
 import { useSerialPolling } from '@/hooks/useSerialPolling';
 import { useAppSelector } from '@/store';
-import { selectCurrentUser, selectIsAuthenticated } from '@/modules/auth/store/authSlice';
+import { selectCurrentUser, selectIsAuthenticated } from '@/modules/auth/state';
 import { toAppErrorFeedback } from '@/libs/http/apiClient';
 import { formatDateOrFallback } from '@/libs/utils/dateFormat';
 import { AnnouncementContent } from './AnnouncementContent';

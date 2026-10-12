@@ -1,5 +1,5 @@
 import React, { useEffect, useCallback, useMemo, useReducer } from 'react';
-import { AdminLayout } from '@/modules/admin/components/AdminLayout';
+import { AdminLayout } from '@/modules/admin/layout';
 import { Card, CardContent, CardHeader, CardTitle } from '../../components/ui/Card';
 import { Button } from '../../components/ui/Button';
 import { Input } from '../../components/ui/Input';
@@ -20,22 +20,21 @@ import {
   Upload,
   Loader2,
 } from 'lucide-react';
-import { adminUserService } from '@/modules/admin/services/adminUserService';
-import { UserFormModal } from '@/modules/admin/components/UserFormModal';
-import { ImportUsersModal } from '@/modules/admin/components/ImportUsersModal';
+import { adminUserService } from '@/modules/admin/api';
+import { UserFormModal, ImportUsersModal } from '@/modules/admin/users';
 import { downloadBlob } from '@/libs/utils/download';
 import type {
   UserItem,
   UserListQuery,
   UserRole,
   UserStatus,
-} from '@/modules/admin/types/adminUsers';
+} from '@/modules/admin/api';
 import { accountManagementReducer, initialState } from './accountManagementReducer';
 import {
   getAdminErrorToast,
   isAdminRequestCancelled,
   toAdminAppError,
-} from '@/modules/admin/utils/errorFeedback';
+} from '@/modules/admin/api';
 
 export const AccountManagementPage: React.FC = () => {
   const { toast } = useToast();

@@ -1,9 +1,9 @@
-import type { ParsedQuestion } from '@/modules/question/types/questionImport';
+import type { ParsedQuestion } from '@/modules/question';
 import {
   MAX_AI_PARSE_TEXT_LENGTH,
   MAX_AI_PARSE_TEXTS,
   MAX_PARSED_IMPORT_QUESTIONS,
-} from '@/modules/question/types/questionImport';
+} from '@/modules/question';
 
 interface LimitedQuestionsResult {
   questions: ParsedQuestion[];

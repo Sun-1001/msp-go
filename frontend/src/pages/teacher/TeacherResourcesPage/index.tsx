@@ -1,9 +1,8 @@
 import React, { useCallback, useEffect, useMemo, useReducer, useRef, useState } from 'react';
 import { MainLayout } from '../../../components/layout/MainLayout';
-import { resourceService } from '@/modules/resource/services/resourceService';
-import { resourceApi, selectResourceScope, useDeleteResourceMutation } from '@/modules/resource/store/resourceSlice';
+import { resourceService, type Resource, type ResourceFilter, type ResourceStats } from '@/modules/resource/api';
+import { resourceApi, selectResourceScope, useDeleteResourceMutation } from '@/modules/resource/state';
 import { useAppDispatch, useAppSelector } from '@/store';
-import type { Resource, ResourceFilter, ResourceStats } from '@/modules/resource/types/resource';
 import type { FilterType, ViewMode } from './types';
 import { resourcePageReducer, initialState } from './reducer';
 import { ResourceStatsCards } from './components/ResourceStatsCards';

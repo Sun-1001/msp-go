@@ -2,8 +2,8 @@ import React from 'react';
 import { X, Edit, Trash2, Loader2 } from 'lucide-react';
 import { Button } from '@/components/ui/Button';
 import { Badge } from '@/components/ui/Badge';
-import { RELATION_TYPE_LABELS } from '@/modules/admin/types/knowledgeAdmin';
-import type { KnowledgeRelationAdmin } from '@/modules/admin/types/knowledgeAdmin';
+import { RELATION_TYPE_LABELS } from '@/modules/admin/api';
+import type { KnowledgeRelationAdmin } from '@/modules/admin/api';
 
 interface EdgeDetailPanelProps {
   relation: KnowledgeRelationAdmin;

@@ -1,5 +1,5 @@
 import { Graph } from '@antv/g6';
-import type { KnowledgeNode, KnowledgeEdge } from '@/modules/knowledge/types/knowledge';
+import type { KnowledgeNode, KnowledgeEdge } from '@/modules/knowledge/api';
 import {
   transformGraphData,
   getNodeConfig,

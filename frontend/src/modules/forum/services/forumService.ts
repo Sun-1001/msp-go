@@ -1,5 +1,5 @@
 import { apiClient } from '@/libs/http/apiClient';
-import type { MessageAttachment } from '@/modules/message-center/attachmentTypes';
+import type { MessageAttachment } from '@/modules/message-center/api';
 import type {
   CreateForumReplyPayload,
   ForumAuthor,

@@ -6,7 +6,7 @@
 
 import { createSlice, createAsyncThunk } from '@reduxjs/toolkit';
 import { toAppError, type AppError } from '@/libs/http/apiClient';
-import { logout } from '@/modules/auth/store/authSlice';
+import { logout } from '@/modules/auth/state';
 import { studentPortraitService } from '@/modules/student/services/studentPortraitService';
 import type { PortraitRangeType, StudentPortrait } from '@/modules/student/types/studentPortrait';
 

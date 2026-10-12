@@ -4,9 +4,9 @@ import { Input } from '@/components/ui/Input';
 import { Select } from '@/components/ui/Select';
 import { Badge } from '@/components/ui/Badge';
 import { Search, Plus, Edit, Trash2, Loader2 } from 'lucide-react';
-import { NODE_TYPE_LABELS } from '@/modules/admin/types/knowledgeAdmin';
+import { NODE_TYPE_LABELS } from '@/modules/admin/api';
 import { NODE_TYPE_OPTIONS } from '../constants';
-import type { KnowledgeNodeAdmin } from '@/modules/admin/types/knowledgeAdmin';
+import type { KnowledgeNodeAdmin } from '@/modules/admin/api';
 import { RequestErrorNotice } from '@/components/feedback';
 import type { AppError } from '@/libs/http/apiClient';
 

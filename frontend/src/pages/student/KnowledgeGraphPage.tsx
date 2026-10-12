@@ -28,25 +28,21 @@ import { cn } from '@/libs/utils/cn';
 import {
   KnowledgeGraph,
   KnowledgeGraphLegend,
+  KnowledgeGraphInspector,
+  KnowledgeGraphMobileSheet,
+  readStoredKnowledgeGraphViewMode,
+  storeKnowledgeGraphViewMode,
   type KnowledgeNode,
 } from '@/modules/knowledge';
 import {
-  KnowledgeGraphInspector,
-  KnowledgeGraphMobileSheet,
-} from '@/modules/knowledge/components/KnowledgeGraphInspector';
-import { knowledgeEdgeKey } from '@/modules/knowledge/components/graphRendererTypes';
-import {
-  readStoredKnowledgeGraphViewMode,
-  storeKnowledgeGraphViewMode,
-} from '@/modules/knowledge/hooks/useKnowledgeGraphMode';
-import { knowledgeService } from '@/modules/knowledge/services/knowledgeService';
-import { fetchKnowledgeGraph, selectNode, updateFilter } from '@/modules/knowledge/store/knowledgeSlice';
-import type {
-  KnowledgeGraphExperienceMode,
-  KnowledgeGraphViewMode,
-  LearningPathItem,
-  ResolvedKnowledgeGraphViewMode,
-} from '@/modules/knowledge/types/knowledge';
+  knowledgeEdgeKey,
+  knowledgeService,
+  type KnowledgeGraphExperienceMode,
+  type KnowledgeGraphViewMode,
+  type LearningPathItem,
+  type ResolvedKnowledgeGraphViewMode,
+} from '@/modules/knowledge/api';
+import { fetchKnowledgeGraph, selectNode, updateFilter } from '@/modules/knowledge/state';
 import { useAppDispatch, useAppSelector } from '@/store';
 
 type MasteryFilter = 'all' | 'mastered' | 'learning' | 'weak';

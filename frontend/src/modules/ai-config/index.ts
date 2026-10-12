@@ -1,0 +1,25 @@
+export { aiConfigService } from './services/aiConfigService';
+export { AgentTypeDisplayNames, AgentTypes } from './types/aiConfig';
+export type {
+  AgentModelConfig,
+  AgentTypeInfo,
+  ConfigureEmbeddingRequest,
+  CreateModelRequest,
+  CreateProviderRequest,
+  CreateProviderWithModelsRequest,
+  EmbeddingMetric,
+  EmbeddingModelVersion,
+  EmbeddingProbeResult,
+  FetchModelsResponse,
+  LLMModel,
+  LLMProvider,
+  ModelCreateSimple,
+  ModelsUpdateRequest,
+  ModelsUpdateResponse,
+  ProviderPreset,
+  ProviderTestResult,
+  ProviderWithModelsResponse,
+  UpdateAgentConfigRequest,
+  UpdateModelRequest,
+  UpdateProviderRequest,
+} from './types/aiConfig';

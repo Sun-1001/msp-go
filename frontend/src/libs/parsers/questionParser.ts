@@ -5,7 +5,7 @@
  * 纯前端实现，不依赖后端
  */
 
-import type { ParsedQuestion } from '@/modules/question/types/questionImport';
+import type { ParsedQuestion } from '@/modules/question';
 
 // ==================== 常量定义 ====================
 

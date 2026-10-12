@@ -1,8 +1,8 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { useNavigate, useLocation } from 'react-router-dom';
 import { useAppSelector } from '@/store';
-import { selectCurrentUser } from '@/modules/auth/store/authSlice';
-import { useAuth } from '@/modules/auth/hooks/useAuth';
+import { selectCurrentUser } from '@/modules/auth/state';
+import { useAuth } from '@/modules/auth/hooks';
 import { animationCombos } from '@/libs/animations';
 import { Button } from '@/components/ui/Button';
 import {
@@ -23,7 +23,7 @@ import {
   MessagesSquare,
 } from 'lucide-react';
 import { ThemeToggle } from '@/components/ui/ThemeToggle';
-import { passwordResetService } from '@/modules/password-reset/services/passwordResetService';
+import { passwordResetService } from '@/modules/password-reset';
 import { useSerialPolling } from '@/hooks/useSerialPolling';
 
 interface AdminLayoutProps {

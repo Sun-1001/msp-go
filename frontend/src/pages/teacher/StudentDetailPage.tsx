@@ -19,8 +19,7 @@ import {
   XCircle,
   Loader2,
 } from 'lucide-react';
-import { teacherService } from '@/modules/teacher/services/teacherService';
-import type { StudentDetailData } from '@/modules/teacher/types/teacher';
+import { teacherService, type StudentDetailData } from '@/modules/teacher';
 import { toAppError, type AppError } from '@/libs/http/apiClient';
 
 const getActivityIcon = (_type: string, status: string) => {

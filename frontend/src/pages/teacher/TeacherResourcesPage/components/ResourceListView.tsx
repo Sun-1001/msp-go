@@ -1,5 +1,5 @@
 import React, { useCallback } from 'react';
-import type { Resource } from '@/modules/resource/types/resource';
+import type { Resource } from '@/modules/resource/api';
 import { Card, CardContent } from '../../../../components/ui/Card';
 import { Button } from '../../../../components/ui/Button';
 import { Video, FileText, Star, Eye, Edit, Trash2, ExternalLink, Check } from 'lucide-react';

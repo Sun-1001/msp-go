@@ -1,5 +1,5 @@
 import { Graph } from '@antv/g6';
-import type { SimpleNode, KnowledgeRelationAdmin } from '@/modules/admin/types/knowledgeAdmin';
+import type { SimpleNode, KnowledgeRelationAdmin } from '@/modules/admin/api';
 import {
   transformAdminGraphData,
   getAdminNodeConfig,

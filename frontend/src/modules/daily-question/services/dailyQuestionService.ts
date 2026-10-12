@@ -2,7 +2,7 @@ import { apiClient } from '@/libs/http/apiClient';
 import {
   mapExerciseQuestion,
   type ExerciseQuestionResponse,
-} from '@/modules/exercise/services/exerciseService';
+} from '@/modules/exercise/api';
 import type {
   DailyQuestionAssignment,
   DailyQuestionClassSettings,

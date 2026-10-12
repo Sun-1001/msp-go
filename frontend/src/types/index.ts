@@ -69,4 +69,4 @@ export type {
   SystemAlert,
   SystemStatusResponse,
   UserGrowthPeriod,
-} from '@/modules/admin/types/adminStats';
+} from '@/modules/admin/api';

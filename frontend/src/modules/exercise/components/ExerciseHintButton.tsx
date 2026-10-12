@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { MessageCircle } from 'lucide-react';
 import { Button } from '@/components/ui/Button';
-import { sessionService } from '@/modules/session/services/sessionService';
+import { sessionService } from '@/modules/session/api';
 import { toAppError } from '@/libs/http/appError';
 
 export function ExerciseHintButton({ exerciseId }: { exerciseId: string }) {

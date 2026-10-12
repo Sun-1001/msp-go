@@ -6,7 +6,7 @@
  */
 
 import { createSelector } from '@reduxjs/toolkit';
-import type { LLMModel, LLMProvider } from '@/modules/ai-config/types/aiConfig';
+import type { LLMModel, LLMProvider } from '@/modules/ai-config';
 
 // ========== 基础 Selector ==========
 

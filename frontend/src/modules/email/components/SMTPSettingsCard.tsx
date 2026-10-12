@@ -20,7 +20,7 @@ import { Input } from '@/components/ui/Input';
 import { RequestErrorNotice } from '@/components/feedback';
 import { emailSchema, emailSettingsSchema } from '@/libs/validation';
 import type { AppError } from '@/libs/http/apiClient';
-import { isAdminRequestCancelled, toAdminAppError } from '@/modules/admin/utils/errorFeedback';
+import { isAdminRequestCancelled, toAdminAppError } from '@/modules/admin/api';
 import { adminEmailService } from '@/modules/email/services/adminEmailService';
 import type {
   EmailSettings,

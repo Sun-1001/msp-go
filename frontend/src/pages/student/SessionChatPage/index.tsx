@@ -36,11 +36,11 @@ import {
   selectSessionsLoadingState,
   selectSessionsError,
   selectModeUpdateState,
-} from '@/modules/session/store/sessionSlice';
+} from '@/modules/session/state';
 import type {
   ChatMode,
   DraftSessionIdentity,
-} from '@/modules/session/types';
+} from '@/modules/session/api';
 import type { SSEController } from '../../../libs/http/sseClient';
 import { ChatHeader } from './components/ChatHeader';
 import { ChatSidebar } from './components/ChatSidebar';
@@ -56,17 +56,15 @@ import {
 import { useImageUpload } from './hooks/useImageUpload';
 import { useFileUpload } from './hooks/useFileUpload';
 import { CHAT_MODES, QUICK_ACTIONS, ANSWER_ACTIONS } from './constants.tsx';
-import { StudyPanel } from '@/modules/session/components/StudyPanel';
-import { useExerciseTutorContext } from '@/modules/exercise/hooks/useExerciseTutorContext';
-import { useBoundExerciseTutor } from '@/modules/exercise/hooks/useBoundExerciseTutor';
-import { ExerciseTutorQuestion } from '@/modules/exercise/components/ExerciseTutorQuestion';
-import type { ExerciseTutorLaunchState } from '@/modules/exercise/tutorContext';
-import type { StudyAction, StudyProgress } from '@/modules/session/study';
+import { StudyPanel } from '@/modules/session';
+import { useExerciseTutorContext, useBoundExerciseTutor, ExerciseTutorQuestion } from '@/modules/exercise/tutor';
+import type { ExerciseTutorLaunchState } from '@/modules/exercise/api';
+import type { StudyAction, StudyProgress } from '@/modules/session/api';
 import { useToast, type ToastOptions } from '@/components/ui/Toast';
 import {
   isDefinitiveDraftIdentityError,
   isSessionNotFoundError,
-} from '@/modules/session/errors';
+} from '@/modules/session/api';
 import {
   formatAppErrorDescription,
   toAppError,

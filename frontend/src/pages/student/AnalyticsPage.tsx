@@ -20,9 +20,8 @@ import { Badge } from '../../components/ui/Badge';
 import { Progress } from '../../components/ui/Progress';
 import { Select } from '../../components/ui/Select';
 import { apiClient, toAppError, type AppError } from '@/libs/http/apiClient';
-import { StudentPortraitInsights } from '@/modules/student/components/StudentPortraitInsights';
-import { studentPortraitService } from '@/modules/student/services/studentPortraitService';
-import type { PortraitInsights, PortraitRangeType } from '@/modules/student/types/studentPortrait';
+import { StudentPortraitInsights } from '@/modules/student';
+import { studentPortraitService, type PortraitInsights, type PortraitRangeType } from '@/modules/student/api';
 import {
   Clock,
   BookOpen,

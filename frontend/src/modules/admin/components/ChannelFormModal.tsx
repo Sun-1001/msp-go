@@ -20,7 +20,7 @@ import {
   normalizeProviderPresetCode,
   PROVIDER_PRESETS,
 } from '../constants/providerPresets';
-import { aiConfigService } from '@/modules/ai-config/services/aiConfigService';
+import { aiConfigService } from '@/modules/ai-config';
 import type {
   CreateProviderWithModelsRequest,
   FetchModelsResponse,
@@ -30,7 +30,7 @@ import type {
   ModelsUpdateResponse,
   ProviderWithModelsResponse,
   UpdateProviderRequest,
-} from '@/modules/ai-config/types/aiConfig';
+} from '@/modules/ai-config';
 import { ChannelAdvancedSettings } from './ChannelAdvancedSettings';
 import { ChannelApiConfig } from './ChannelApiConfig';
 import { ChannelBasicFields } from './ChannelBasicFields';

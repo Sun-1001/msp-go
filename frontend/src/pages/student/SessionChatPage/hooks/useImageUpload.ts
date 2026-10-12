@@ -1,6 +1,6 @@
 import { useState, useCallback, useRef, useEffect } from 'react';
-import { uploadService } from '@/modules/upload/services/uploadService';
-import { MAX_CHAT_IMAGES } from '@/modules/session/limits';
+import { uploadService } from '@/modules/upload';
+import { MAX_CHAT_IMAGES } from '@/modules/session/api';
 
 interface UseImageUploadOptions {
   onError?: (message: string) => void;

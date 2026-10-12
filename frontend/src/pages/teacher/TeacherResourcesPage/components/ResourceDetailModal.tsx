@@ -1,5 +1,5 @@
 import React from 'react';
-import type { Resource } from '@/modules/resource/types/resource';
+import type { Resource } from '@/modules/resource/api';
 import { Modal } from '../../../../components/ui/Modal';
 import { Button } from '../../../../components/ui/Button';
 import {

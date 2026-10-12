@@ -8,7 +8,7 @@ import {
 } from '@/modules/exercise/services/exerciseService';
 import { logger } from '@/libs/utils/logger';
 import { toAppError, type AppError } from '@/libs/http/apiClient';
-import { uploadService } from '@/modules/upload/services/uploadService';
+import { uploadService } from '@/modules/upload';
 import { validateAnswerImageFile } from '../utils/answerImageValidation';
 
 const exerciseLogger = logger.createContextLogger('ExerciseViewModel');

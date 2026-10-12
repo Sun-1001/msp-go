@@ -10,8 +10,8 @@ import LoadingFallback from '@/components/LoadingFallback';
 import { ThemeProvider } from './ThemeProvider';
 import { AuthProvider } from './AuthProvider';
 import { useRateLimitToast } from '@/hooks/useRateLimitToast';
-import { SystemAnnouncementDialog } from '@/modules/announcement/SystemAnnouncementDialog';
-import { AIPracticeProvider } from '@/modules/exercise/components/AIPracticeProvider';
+import { SystemAnnouncementDialog } from '@/modules/announcement/notifications';
+import { AIPracticeProvider } from '@/modules/exercise/provider';
 
 /** 全局事件监听桥接（需要在 ToastProvider 内部） */
 const GlobalEventListeners: React.FC<{ children: React.ReactNode }> = ({ children }) => {

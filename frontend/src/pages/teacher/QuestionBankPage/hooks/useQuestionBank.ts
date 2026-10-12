@@ -1,8 +1,7 @@
 import { useState, useCallback, useEffect, useRef } from 'react';
 import { useDebounce } from '../../../../hooks/useDebounce';
 import { useToast } from '../../../../components/ui/Toast';
-import { questionService } from '@/modules/question/services/questionService';
-import type { Question, QuestionStats } from '@/modules/question/types/question';
+import { questionService, type Question, type QuestionStats } from '@/modules/question';
 import { logger } from '../../../../libs/utils/logger';
 import { toAppError, type AppError } from '@/libs/http/apiClient';
 

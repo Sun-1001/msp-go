@@ -1,5 +1,5 @@
 import type { Graph } from '@antv/g6';
-import type { KnowledgeNode, KnowledgeEdge } from '@/modules/knowledge/types/knowledge';
+import type { KnowledgeNode, KnowledgeEdge } from '@/modules/knowledge/api';
 
 /**
  * 根据掌握度获取颜色

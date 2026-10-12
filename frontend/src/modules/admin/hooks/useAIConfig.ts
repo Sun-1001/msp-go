@@ -37,7 +37,7 @@ import {
   selectSelectedProviderId,
   selectSelectedModelId,
   selectSelectedAgentType,
-} from '@/modules/ai-config/store/aiConfigSlice';
+} from '@/modules/ai-config/state';
 import {
   selectActiveModels,
   selectActiveProviders,
@@ -58,7 +58,7 @@ import type {
   UpdateModelRequest,
   UpdateAgentConfigRequest,
   ModelsUpdateRequest,
-} from '@/modules/ai-config/types/aiConfig';
+} from '@/modules/ai-config';
 import type { LoadingState } from '@/types';
 
 const emptyProviders: LLMProvider[] = [];

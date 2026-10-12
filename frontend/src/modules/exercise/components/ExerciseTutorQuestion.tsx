@@ -1,5 +1,5 @@
 import { MarkdownContent } from '@/components/chat/MarkdownContent';
-import type { ExerciseTutorResponse } from '@/modules/session/services/sessionService';
+import type { ExerciseTutorResponse } from '@/modules/session/api';
 
 export function ExerciseTutorQuestion({ question }: { question: ExerciseTutorResponse['exercise'] }) {
   return <section aria-label="辅导题目" className="min-w-0 rounded-2xl border border-primary-200 bg-primary-50/50 p-4 text-sm text-surface-800 dark:border-primary-900 dark:bg-primary-950/20 dark:text-surface-200 sm:p-5">

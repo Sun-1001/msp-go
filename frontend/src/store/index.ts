@@ -3,17 +3,15 @@ import { useDispatch, useSelector } from 'react-redux';
 import { api, resetQueryState, selectApiScope } from './api';
 
 // 各模块的 reducer 导入
-import authReducer, { logout, setCredentials } from '@/modules/auth/store/authSlice';
+import { authReducer, logout, setCredentials } from '@/modules/auth/state';
 import uiReducer from './slices/uiSlice'; // 全局 UI 状态，保留在 store 层
-import exerciseReducer from '@/modules/exercise/store/exerciseSlice';
-import sessionReducer from '@/modules/session/store/sessionSlice';
-import mistakeReducer from '@/modules/mistake/store/mistakeSlice';
-import aiConfigReducer from '@/modules/ai-config/store/aiConfigSlice';
-import adminStatsReducer from '@/modules/admin/store/adminStatsSlice';
-import securityLogReducer from '@/modules/admin/store/securityLogSlice';
-import studentPortraitReducer from '@/modules/student/store/studentPortraitSlice';
-import knowledgeReducer from '@/modules/knowledge/store/knowledgeSlice';
-import knowledgeAdminReducer from '@/modules/admin/store/knowledgeAdminSlice';
+import { exerciseReducer } from '@/modules/exercise/state';
+import { sessionReducer } from '@/modules/session/state';
+import { mistakeReducer } from '@/modules/mistake/state';
+import { aiConfigReducer } from '@/modules/ai-config/state';
+import { adminStatsReducer, securityLogReducer, knowledgeAdminReducer } from '@/modules/admin/state';
+import { studentPortraitReducer } from '@/modules/student/state';
+import { knowledgeReducer } from '@/modules/knowledge/state';
 
 const listenerMiddleware = createListenerMiddleware();
 

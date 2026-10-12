@@ -4,7 +4,7 @@
  * 定义常见 LLM 提供商的默认配置和模型列表
  */
 
-import type { ProviderPreset } from '@/modules/ai-config/types/aiConfig';
+import type { ProviderPreset } from '@/modules/ai-config';
 
 /**
  * 提供商预设列表

@@ -11,7 +11,7 @@ import { getHomePath } from '@/modules/auth/constants/homePath';
 import { useAuth } from '@/modules/auth/hooks/useAuth';
 import { animationCombos } from '@/libs/animations';
 import { ResponsiveNavigation } from '@/modules/auth/components/ResponsiveNavigation';
-import { MessagePreviewBell } from '@/modules/message-center/components/MessagePreviewBell';
+import { MessagePreviewBell } from '@/modules/message-center/notifications';
 
 interface HeaderProps {
   variant?: 'default' | 'transparent' | 'dark';

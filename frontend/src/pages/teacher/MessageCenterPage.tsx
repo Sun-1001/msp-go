@@ -28,45 +28,39 @@ import { cn } from '@/libs/utils/cn';
 import { toAppError, type AppError } from '@/libs/http/apiClient';
 import { formatRelativeTime } from '@/libs/utils/dateFormat';
 import { useSerialPolling } from '@/hooks/useSerialPolling';
-import { classService } from '@/modules/classroom/services/classService';
+import { classService } from '@/modules/classroom';
 import {
   conversationService,
-  type Contact,
-} from '@/modules/message-center/services/conversationService';
-import {
   noticeService,
-  type TeacherNoticeItem,
-  type TeacherNoticeListItem,
-} from '@/modules/message-center/services/noticeService';
-import {
   qaThreadService,
-  type TeacherThreadItem,
-  type ThreadDetail,
-} from '@/modules/message-center/services/qaThreadService';
-import {
-  refreshMessageCenterSummaryAfterMutation,
-  useMessageCenterSummary,
-} from '@/modules/message-center/components/useMessageCenterSummary';
-import { usePageVisibility } from '@/modules/message-center/components/usePageVisibility';
-import {
   fetchMessageCenterPage,
   fetchStableOffsetMessageWindow,
   hasMinimumGlobalSearchCharacters,
   mergeMessagesByID,
   appendDeliveredMessage,
-} from '@/modules/message-center/pageUtils';
-import { MessageCenterSideTab } from '@/modules/message-center/MessageCenterSideTab';
-import { MessageCenterListPagination } from '@/modules/message-center/MessageCenterListPagination';
-import { MessageCenterFilterMenu } from '@/modules/message-center/MessageCenterFilterMenu';
-import { MessageAttachmentPicker } from '@/modules/message-center/MessageAttachmentPicker';
-import { MessageAttachments } from '@/modules/message-center/MessageAttachments';
-import { MessageText } from '@/modules/message-center/MessageText';
-import { useVisibleMessageCutoff } from '@/modules/message-center/components/useVisibleMessageCutoff';
-import { usePrivateConversationDetail } from '@/modules/message-center/components/usePrivateConversationDetail';
-import { ConversationDetailPanel } from '@/modules/message-center/ConversationDetailPanel';
-import { NewConversationModal } from '@/modules/message-center/NewConversationModal';
-import { MessageComposer } from '@/modules/message-center/MessageComposer';
-import type { MessageAttachment } from '@/modules/message-center/attachmentTypes';
+  type Contact,
+  type TeacherNoticeItem,
+  type TeacherNoticeListItem,
+  type TeacherThreadItem,
+  type ThreadDetail,
+  type MessageAttachment,
+} from '@/modules/message-center/api';
+import {
+  refreshMessageCenterSummaryAfterMutation,
+  useMessageCenterSummary,
+  usePageVisibility,
+  MessageCenterSideTab,
+  MessageCenterListPagination,
+  MessageCenterFilterMenu,
+  MessageAttachmentPicker,
+  MessageAttachments,
+  MessageText,
+  useVisibleMessageCutoff,
+  usePrivateConversationDetail,
+  ConversationDetailPanel,
+  NewConversationModal,
+  MessageComposer,
+} from '@/modules/message-center';
 import { ForumCenter } from '@/modules/forum';
 
 // ---------------------------------------------------------------------------

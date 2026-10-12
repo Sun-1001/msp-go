@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { sessionService, type ExerciseTutorResponse } from '@/modules/session/services/sessionService';
+import { sessionService, type ExerciseTutorResponse } from '@/modules/session/api';
 import { toAppError, type AppError } from '@/libs/http/appError';
 
 export function useBoundExerciseTutor(sessionId: string | null) {

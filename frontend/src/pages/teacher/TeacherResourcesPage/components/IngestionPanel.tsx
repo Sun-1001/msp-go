@@ -5,8 +5,7 @@ import { ConfirmDialog } from '@/components/ui/ConfirmDialog';
 import { RequestErrorNotice } from '@/components/feedback';
 import { useSerialPolling } from '@/hooks/useSerialPolling';
 import { toAppError, type AppError } from '@/libs/http/apiClient';
-import { ingestionService } from '@/modules/resource/services/ingestionService';
-import { ingestionErrorMessage, ingestionStageLabel, ingestionStatusLabel, isIngestionPending, type IngestionListResponse, type IngestionStatus } from '@/modules/resource/types/ingestion';
+import { ingestionService, ingestionErrorMessage, ingestionStageLabel, ingestionStatusLabel, isIngestionPending, type IngestionListResponse, type IngestionStatus } from '@/modules/resource/api';
 
 interface IngestionPageProps {
   page: number;

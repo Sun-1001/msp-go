@@ -10,12 +10,10 @@ import { Modal } from '../../../../components/ui/Modal';
 import { Button } from '../../../../components/ui/Button';
 import { Download, FileJson, FileText, Loader2 } from 'lucide-react';
 import { exportQuestions } from '../../../../libs/export/questionExporter';
-import { questionService } from '@/modules/question/services/questionService';
+import { questionService, type Question, type QuestionListParams, type ExportFormat, type ExportOptions } from '@/modules/question';
 import { logger } from '../../../../libs/utils/logger';
 import { useToast } from '@/components/ui/Toast';
 import { toAppError } from '@/libs/http/apiClient';
-import type { Question, QuestionListParams } from '@/modules/question/types/question';
-import type { ExportFormat, ExportOptions } from '@/modules/question/types/questionImport';
 
 const log = logger.createContextLogger('QuestionExportModal');
 

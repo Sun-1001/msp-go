@@ -15,7 +15,7 @@ import {
   Lightbulb,
 } from 'lucide-react';
 import { cn } from '../../../../libs/utils/cn';
-import type { ChatSessionListItem } from '@/modules/session/types';
+import type { ChatSessionListItem } from '@/modules/session/api';
 import { RequestErrorNotice } from '@/components/feedback';
 import type { AppError } from '@/libs/http/appError';
 

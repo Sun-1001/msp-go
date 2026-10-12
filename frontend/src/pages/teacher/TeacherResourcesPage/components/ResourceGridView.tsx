@@ -1,5 +1,5 @@
 import React from 'react';
-import type { Resource } from '@/modules/resource/types/resource';
+import type { Resource } from '@/modules/resource/api';
 import { ResourceCard } from './ResourceCard';
 import { Card, CardContent } from '../../../../components/ui/Card';
 import { Plus } from 'lucide-react';

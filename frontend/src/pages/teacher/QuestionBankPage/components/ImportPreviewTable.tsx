@@ -11,7 +11,7 @@ import { Input } from '../../../../components/ui/Input';
 import { Select } from '../../../../components/ui/Select';
 import { MathText } from '../../../../libs/math/MathText';
 import { Edit, Trash2, Sparkles, ChevronUp, Check, X } from 'lucide-react';
-import type { ParsedQuestion } from '@/modules/question/types/questionImport';
+import type { ParsedQuestion } from '@/modules/question';
 
 interface ImportPreviewTableProps {
   questions: ParsedQuestion[];

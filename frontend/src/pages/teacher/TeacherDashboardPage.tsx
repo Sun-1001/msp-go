@@ -15,9 +15,8 @@ import {
   Loader2,
 } from 'lucide-react';
 import { cn } from '../../libs/utils/cn';
-import { teacherService } from '@/modules/teacher/services/teacherService';
+import { teacherService, type DashboardStats, type TeacherAnalyticsData } from '@/modules/teacher';
 import { DashboardExportModal } from './DashboardExportModal';
-import type { DashboardStats, TeacherAnalyticsData } from '@/modules/teacher/types/teacher';
 import { toAppError, type AppError } from '@/libs/http/apiClient';
 
 const TIME_RANGE_OPTIONS = [

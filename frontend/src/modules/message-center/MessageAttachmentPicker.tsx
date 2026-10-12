@@ -4,7 +4,7 @@ import { Image as ImageIcon, Loader2, Paperclip, X } from 'lucide-react';
 import { toAppErrorFeedback, type AppErrorFeedback } from '@/libs/http/apiClient';
 import { MAX_MESSAGE_ATTACHMENTS, type MessageAttachment } from '@/modules/message-center/attachmentTypes';
 import { MessageImagePreview } from '@/modules/message-center/MessageImagePreview';
-import { uploadService } from '@/modules/upload/services/uploadService';
+import { uploadService } from '@/modules/upload';
 
 interface MessageAttachmentPickerProps {
   value: MessageAttachment[];

@@ -27,12 +27,12 @@ import {
   useGetResourcesQuery,
   useGetResourceStatsQuery,
   useToggleFavoriteMutation,
-} from '@/modules/resource/store/resourceSlice';
+} from '@/modules/resource/state';
 import { getInitialResourceSearch, openResourceUrl } from '@/libs/utils/resourceUtils';
-import type { ResourceType, Resource, ResourceFilter } from '@/modules/resource/types/resource';
+import type { ResourceType, Resource, ResourceFilter } from '@/modules/resource/api';
 import { toAppError, toAppErrorFeedback } from '@/libs/http/appError';
 import { useToast } from '@/components/ui/Toast';
-import { KnowledgeSearch } from '@/modules/resource/components/KnowledgeSearch';
+import { KnowledgeSearch } from '@/modules/resource';
 
 const typeOptions = [
   { value: '', label: '全部类型' },

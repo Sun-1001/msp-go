@@ -57,7 +57,16 @@ frontend/src/
 └── types/        # 公共 API 与模型类型
 ```
 
-页面保持为组合层，业务逻辑进入模块 Hook 或 Service。模块外部通过 `index.ts` 公共接口访问，避免深层路径耦合。
+页面保持为组合层，业务逻辑进入模块 Hook 或 Service。模块外部必须通过声明的公共入口访问，不能依赖模块的内部目录结构；模块内部可以使用相对路径或指向本模块实现文件的别名，但不能反向导入自己的根 `index.ts`。
+
+公共入口按依赖和加载用途划分，而不是把所有实现合并成一个大 barrel：
+
+- `@/modules/<name>` 对应根 `index.ts`，只显式导出需要对外提供的接口。只有 Service 和类型的小模块直接使用此入口；已有组合入口保留兼容导出。只有空目录的占位模块不需要为凑齐入口数量创建空文件。
+- 混合 UI 与业务能力的模块按需提供 `@/modules/<name>/api`，导出不依赖 UI 的 Service、业务类型和纯函数；类型使用 `export type`，不因类型引用初始化 UI 或查询端点。
+- Redux reducer、action、selector 和 RTK Query 接口通过 `@/modules/<name>/state` 暴露。根 Store 从这些状态入口装配，不通过包含组件或 Hook 的组合入口加载 reducer。
+- 对启动链和懒加载边界有影响的能力使用显式登记的窄入口，例如 `auth/routing`、`auth/navigation`、`exercise/provider`、`message-center/notifications`；教师每日题、管理员各页面和练习辅导也保留独立入口，避免不同页面的 UI 被提前关联加载。公共入口不批量导出内部渲染器，知识图谱的 2D/3D 实现继续按需加载。
+
+入口清单与约束位于 [frontend/eslint.config.js](../../frontend/eslint.config.js)。本地 `architecture/module-public-api` 规则按导入方和规范化后的目标路径判断模块边界，覆盖静态 import/re-export、类型引用、静态字符串形式的 `import()` 和 `require()`，同时检查别名及相对路径；不能通过换成相对路径绕过私有实现限制。新增公共子入口必须同步登记清单，不直接放开整个 `components/`、`hooks/`、`services/`、`store/` 或 `types/` 目录。现有 `npm run lint` 及 CI 的相同检查负责阻止边界回退。
 
 资源与 AI 配置的服务端状态使用 Redux Toolkit 内置的 RTK Query。`store/api.ts` 创建共享 `api`，根 Store 只挂载一个查询 reducer 和 middleware；资源与 AI 配置模块分别通过 `enhanceEndpoints`、`injectEndpoints` 添加标签和端点，导出的 `resourceApi`、`aiConfigApi` 是同一实例的类型化接口。请求通过统一身份检查、`AbortSignal` 和 `AppError` 边界调用既有 Service，保留 HTTP 层的认证刷新、CSRF 和限流重试，不另建 HTTP 客户端，也不将查询结果复制回普通 slice。
 

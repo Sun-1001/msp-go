@@ -4,7 +4,7 @@ import {
   validateDocumentFile,
   type ParsedDocument,
 } from '@/libs/utils/documentParser';
-import { MAX_CHAT_DOCUMENTS } from '@/modules/session/limits';
+import { MAX_CHAT_DOCUMENTS } from '@/modules/session/api';
 
 export interface FileUploadItem {
   /** 原始文件 */

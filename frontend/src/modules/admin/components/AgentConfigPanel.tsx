@@ -23,14 +23,14 @@ import { Card } from '@/components/ui/Card';
 import { useToast } from '@/components/ui/Toast';
 import { RequestErrorNotice } from '@/components/feedback';
 import type { AppError } from '@/libs/http/apiClient';
-import { AgentTypeDisplayNames } from '@/modules/ai-config/types/aiConfig';
+import { AgentTypeDisplayNames } from '@/modules/ai-config';
 import type {
   AgentModelConfig,
   AgentTypeInfo,
   LLMModel,
   LLMProvider,
   UpdateAgentConfigRequest,
-} from '@/modules/ai-config/types/aiConfig';
+} from '@/modules/ai-config';
 import { buildLogicalModelOptions, resolveAgentModelKey } from './agentModelOptions';
 import { isAdminRequestCancelled, toAdminAppError } from '@/modules/admin/utils/errorFeedback';
 

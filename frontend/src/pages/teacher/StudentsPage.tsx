@@ -12,10 +12,8 @@ import {
   TrendingDown,
   Eye,
 } from 'lucide-react';
-import { classService } from '@/modules/classroom/services/classService';
-import { teacherService } from '@/modules/teacher/services/teacherService';
-import type { ClassInfo } from '@/modules/classroom/types/classroom';
-import type { StudentsStats, TeacherStudentListItem } from '@/modules/teacher/types/teacher';
+import { classService, type ClassInfo } from '@/modules/classroom';
+import { teacherService, type StudentsStats, type TeacherStudentListItem } from '@/modules/teacher';
 import { toAppError, type AppError } from '@/libs/http/apiClient';
 
 type StudentRow = TeacherStudentListItem;

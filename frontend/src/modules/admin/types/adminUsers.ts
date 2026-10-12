@@ -2,7 +2,7 @@
  * 管理员用户管理相关类型定义
  */
 
-import type { EmailNotificationResult } from '@/modules/email/types/email';
+import type { EmailNotificationResult } from '@/modules/email/api';
 
 // ========== 用户状态和角色 ==========
 

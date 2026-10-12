@@ -17,7 +17,7 @@ import { normalizeSafeImageAttachmentUrl } from '../../libs/utils/safeUrl';
 import { MarkdownContent } from './MarkdownContent';
 import { StreamingMarkdownContent } from './StreamingMarkdownContent';
 import { KnowledgeSources } from './KnowledgeSources';
-import type { SessionKnowledge } from '@/modules/session/knowledge';
+import type { SessionKnowledge } from '@/modules/session/api';
 
 export interface MessageItemProps {
   id: string;
