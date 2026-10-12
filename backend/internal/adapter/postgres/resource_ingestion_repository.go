@@ -145,7 +145,7 @@ func (r ResourceRepository) RegisterIngestion(ctx context.Context, ownerID strin
 			return err
 		}
 		if uploadpath.IsLocalPath(input.Source.URI) {
-			access := UploadAccessRepository{Repository: tx.Repository}
+			access := UploadAccessRepository(tx)
 			if err := access.RecordLocalUpload(ctx, ownerID, input.Source.URI); err != nil {
 				return err
 			}

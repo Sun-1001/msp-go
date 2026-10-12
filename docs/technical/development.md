@@ -97,6 +97,7 @@ Go 后端：
 Set-Location backend
 go vet ./...
 go build ./...
+staticcheck ./...
 gofmt -w <changed-go-files>
 ```
 
@@ -114,6 +115,8 @@ npm run build
 git diff --check
 git status --short
 ```
+
+每次 push 或 PR 会由 GitHub Actions 的 Quality Check 工作流执行相同的静态检查：后端 `go build ./...`、`go vet ./...`、`staticcheck ./...`，前端 `npm run lint` 与 `npx tsc -b`；本地可用上述命令提前自检。`backend/staticcheck.conf` 关闭了 ST1005，因为 LLM/OpenAI 适配层中的错误字符串刻意以 Responses API、Eino、OpenAI 等专有名词开头。
 
 ## 临时测试规则
 
