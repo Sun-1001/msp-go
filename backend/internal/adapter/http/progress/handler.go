@@ -21,7 +21,7 @@ type Service interface {
 	SetLearningGoal(context.Context, string, string) (progressapp.LearningGoalResponse, error)
 	GetMasteryVector(context.Context, string) (progressapp.MasteryResponse, error)
 	GetLearningPath(context.Context, string, string) (progressapp.PathResponse, error)
-	GetKnowledgeGraphView(context.Context, string, progressapp.KnowledgeNodeFilter) (progressapp.GraphResponse, error)
+	GetCourseConcepts(context.Context) ([]progressapp.ConceptOption, error)
 	GetStatistics(context.Context, string, string) (progressapp.StatisticsResponse, error)
 	GetClassRanking(context.Context, string) (progressapp.ClassRankingResponse, error)
 	GetPortraitInsights(context.Context, string, string) (progressapp.PortraitInsightsResponse, error)
@@ -62,7 +62,7 @@ func (h *Handler) Register(mux *http.ServeMux, prefix string) {
 	mux.HandleFunc("PUT "+prefix+"/learning-goal", h.setLearningGoal)
 	mux.HandleFunc("GET "+prefix+"/mastery", h.mastery)
 	mux.HandleFunc("GET "+prefix+"/path", h.path)
-	mux.HandleFunc("GET "+prefix+"/knowledge-graph", h.knowledgeGraph)
+	mux.HandleFunc("GET "+prefix+"/concepts", h.concepts)
 	mux.HandleFunc("GET "+prefix+"/statistics", h.statistics)
 	mux.HandleFunc("GET "+prefix+"/class-ranking", h.classRanking)
 	mux.HandleFunc("GET "+prefix+"/portrait-insights", h.portraitInsights)
@@ -121,7 +121,7 @@ func (h *Handler) setLearningGoal(w http.ResponseWriter, r *http.Request) {
 		case errors.Is(err, progressapp.ErrInvalidLearningGoal):
 			writeProgressError(w, http.StatusUnprocessableEntity, "VALIDATION_ERROR", "target_id 不能为空")
 		case errors.Is(err, progressapp.ErrLearningGoalTargetNotFound):
-			writeProgressError(w, http.StatusNotFound, "NOT_FOUND", "知识节点不存在")
+			writeProgressError(w, http.StatusNotFound, "NOT_FOUND", "课程分类不存在")
 		default:
 			h.logProgressError("set learning goal failed", err)
 			writeProgressError(w, http.StatusInternalServerError, "INTERNAL_ERROR", "保存学习目标失败")
@@ -159,20 +159,15 @@ func (h *Handler) path(w http.ResponseWriter, r *http.Request) {
 	httpjson.Write(w, http.StatusOK, response)
 }
 
-func (h *Handler) knowledgeGraph(w http.ResponseWriter, r *http.Request) {
-	principal, ok := h.requirePrincipal(w, r)
+func (h *Handler) concepts(w http.ResponseWriter, r *http.Request) {
+	_, ok := h.requirePrincipal(w, r)
 	if !ok {
 		return
 	}
-	query := r.URL.Query()
-	response, err := h.service.GetKnowledgeGraphView(r.Context(), principal.UserID, progressapp.KnowledgeNodeFilter{
-		Chapter:  query.Get("chapter"),
-		NodeType: query.Get("type"),
-		Search:   query.Get("search"),
-	})
+	response, err := h.service.GetCourseConcepts(r.Context())
 	if err != nil {
-		h.logProgressError("get knowledge graph failed", err)
-		writeProgressError(w, http.StatusInternalServerError, "INTERNAL_ERROR", "获取知识图谱失败")
+		h.logProgressError("get course concepts failed", err)
+		writeProgressError(w, http.StatusInternalServerError, "INTERNAL_ERROR", "获取课程分类失败")
 		return
 	}
 	httpjson.Write(w, http.StatusOK, response)

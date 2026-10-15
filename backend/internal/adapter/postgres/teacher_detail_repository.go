@@ -115,7 +115,7 @@ func (r TeacherRepository) GetStudentDetailSnapshot(
 			coalesce((
 				SELECT json_object_agg(mastery.concept_id, coalesce(node.name, ''))
 				FROM mastery_concepts mastery
-				LEFT JOIN public.knowledge_nodes node ON node.id = mastery.concept_id
+				LEFT JOIN public.course_concepts node ON node.id = mastery.concept_id
 			), '{}'::json)
 		FROM enrollment e
 		LEFT JOIN public.users u ON u.id = $2

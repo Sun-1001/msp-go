@@ -32,7 +32,7 @@ func (r SessionRepository) ReadStudentContext(ctx context.Context, userID string
 const studentContextQuery = `
 WITH matches AS MATERIALIZED (
 	SELECT kn.id, kn.name, matched.priority, matched.length
-	FROM public.knowledge_nodes kn
+	FROM public.course_concepts kn
 	JOIN LATERAL (
 		SELECT candidate.priority, char_length(candidate.name) AS length
 		FROM (VALUES (btrim(kn.name), 0, $2::text), (btrim(kn.name_en), 0, $2::text),
@@ -47,7 +47,7 @@ WITH matches AS MATERIALIZED (
 ), recent AS MATERIALIZED (
 	SELECT kn.id, kn.name, 2 AS priority, 0 AS length
 	FROM public.student_concept_dkt_states state
-	JOIN public.knowledge_nodes kn ON kn.id = state.concept_id
+	JOIN public.course_concepts kn ON kn.id = state.concept_id
 	WHERE NOT EXISTS (SELECT 1 FROM matches)
 		AND state.student_id = $1 AND state.attempt_count > 0
 		AND state.last_attempt_at <= $4::timestamp
@@ -69,9 +69,8 @@ WITH matches AS MATERIALIZED (
 	SELECT DISTINCT selected.id AS target_id, selected.name AS target_name,
 		selected.priority, selected.length, kn.id, kn.name
 	FROM selected
-	JOIN public.knowledge_relations relation ON relation.source_id = selected.id
-		AND relation.relation_type = 'HAS_PREREQUISITE'
-	JOIN public.knowledge_nodes kn ON kn.id = relation.target_id
+	JOIN public.course_prerequisites relation ON relation.concept_id = selected.id
+	JOIN public.course_concepts kn ON kn.id = relation.prerequisite_id
 	ORDER BY selected.priority, selected.length DESC, selected.id, kn.id
 	LIMIT 12
 ), prerequisites AS (
@@ -128,7 +127,7 @@ WITH matches AS MATERIALIZED (
 		'occurred_at', to_char(errors.submitted_at, 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"'),
 		'concept_names', coalesce((SELECT json_agg(names.name ORDER BY names.id) FROM (
 			SELECT DISTINCT kn.id, kn.name FROM json_array_elements_text(errors.concept_ids) binding(id)
-			JOIN public.knowledge_nodes kn ON kn.id = binding.id
+			JOIN public.course_concepts kn ON kn.id = binding.id
 			ORDER BY kn.id LIMIT 3
 		) names), '[]'::json)) AS value
 	FROM errors

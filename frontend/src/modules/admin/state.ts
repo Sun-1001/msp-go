@@ -8,28 +8,4 @@ export {
   resetTrafficMetrics,
   setUserGrowthPeriod,
 } from './store/adminStatsSlice';
-export {
-  default as knowledgeAdminReducer,
-  closeNodeModal,
-  closeRelationModal,
-  createNode,
-  createRelation,
-  deleteNode,
-  deleteRelation,
-  fetchAllNodesSimple,
-  fetchChapters,
-  fetchNodes,
-  fetchRelations,
-  fetchStats,
-  openNodeModal,
-  openRelationModal,
-  setActiveTab,
-  setChapterFilter,
-  setDeleteConfirm,
-  setNodePage,
-  setSearchTerm,
-  setTypeFilter,
-  updateNode,
-  updateRelation,
-} from './store/knowledgeAdminSlice';
 export { default as securityLogReducer } from './store/securityLogSlice';

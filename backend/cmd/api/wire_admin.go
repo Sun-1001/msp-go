@@ -12,7 +12,6 @@ import (
 	adminstoragehttp "mathstudy/backend/internal/adapter/http/adminstorage"
 	adminuserhttp "mathstudy/backend/internal/adapter/http/adminuser"
 	announcementhttp "mathstudy/backend/internal/adapter/http/announcement"
-	knowledgehttp "mathstudy/backend/internal/adapter/http/knowledge"
 	securityloghttp "mathstudy/backend/internal/adapter/http/securitylog"
 	adapterpostgres "mathstudy/backend/internal/adapter/postgres"
 	storageadapter "mathstudy/backend/internal/adapter/storage"
@@ -23,13 +22,11 @@ import (
 	adminuserapp "mathstudy/backend/internal/application/adminuser"
 	announcementapp "mathstudy/backend/internal/application/announcement"
 	emailapp "mathstudy/backend/internal/application/email"
-	knowledgeapp "mathstudy/backend/internal/application/knowledge"
 	securitylogapp "mathstudy/backend/internal/application/securitylog"
 	"mathstudy/backend/internal/platform/config"
 )
 
 type adminModule struct {
-	knowledgeHandler         *knowledgehttp.Handler
 	emailService             *emailapp.Service
 	adminEmailHandler        *adminemailhttp.Handler
 	adminUserService         *adminuserapp.Service
@@ -54,7 +51,6 @@ func wireAdmin(ctx context.Context, cfg config.Config, logger *slog.Logger, infr
 		return nil, err
 	}
 	return &adminModule{
-		knowledgeHandler:         accounts.knowledgeHandler,
 		emailService:             accounts.emailService,
 		adminEmailHandler:        accounts.adminEmailHandler,
 		adminUserService:         accounts.adminUserService,
@@ -71,7 +67,6 @@ func wireAdmin(ctx context.Context, cfg config.Config, logger *slog.Logger, infr
 }
 
 type adminAccountsModule struct {
-	knowledgeHandler    *knowledgehttp.Handler
 	emailService        *emailapp.Service
 	adminEmailHandler   *adminemailhttp.Handler
 	adminUserService    *adminuserapp.Service
@@ -82,18 +77,6 @@ type adminAccountsModule struct {
 }
 
 func wireAdminAccounts(logger *slog.Logger, infra *infrastructure, auth *authModule, ai *aiModule) (*adminAccountsModule, error) {
-	knowledgeRepo, err := adapterpostgres.NewKnowledgeRepository(infra.db)
-	if err != nil {
-		return nil, stepFailed("configure knowledge repository", err)
-	}
-	knowledgeService, err := knowledgeapp.NewService(knowledgeRepo)
-	if err != nil {
-		return nil, stepFailed("configure knowledge service", err)
-	}
-	knowledgeHandler, err := knowledgehttp.NewHandler(logger, knowledgeService, auth.service)
-	if err != nil {
-		return nil, stepFailed("configure knowledge handler", err)
-	}
 	emailRepo, err := adapterpostgres.NewEmailRepository(infra.db)
 	if err != nil {
 		return nil, stepFailed("configure email repository", err)
@@ -136,7 +119,6 @@ func wireAdminAccounts(logger *slog.Logger, infra *infrastructure, auth *authMod
 		return nil, stepFailed("configure announcement handler", err)
 	}
 	return &adminAccountsModule{
-		knowledgeHandler:    knowledgeHandler,
 		emailService:        emailService,
 		adminEmailHandler:   adminEmailHandler,
 		adminUserService:    adminUserService,

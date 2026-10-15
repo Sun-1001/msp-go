@@ -41,7 +41,7 @@ func (h *Handler) startPortraitAction(w http.ResponseWriter, r *http.Request) {
 		case errors.Is(err, progressapp.ErrInvalidPortraitAction):
 			writeProgressError(w, http.StatusUnprocessableEntity, "VALIDATION_ERROR", "concept_id 不能为空")
 		case errors.Is(err, progressapp.ErrPortraitActionConceptNotFound):
-			writeProgressError(w, http.StatusNotFound, "NOT_FOUND", "知识节点不存在")
+			writeProgressError(w, http.StatusNotFound, "NOT_FOUND", "课程分类不存在")
 		default:
 			h.logProgressError("start portrait action failed", err)
 			writeProgressError(w, http.StatusInternalServerError, "INTERNAL_ERROR", "开始画像行动失败")

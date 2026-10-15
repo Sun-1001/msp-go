@@ -44,7 +44,7 @@ func (r QuestionRepository) MatchConceptIDs(ctx context.Context, groupName strin
 	}
 	rows, err := r.DB().Query(ctx, `
 		SELECT DISTINCT id
-		FROM public.knowledge_nodes
+		FROM public.course_concepts
 		WHERE `+strings.Join(conditions, " OR ")+`
 		ORDER BY id`,
 		args...,
@@ -84,7 +84,7 @@ func (r QuestionRepository) MatchConceptIDsBatch(ctx context.Context, groupNames
 	rows, err := r.DB().Query(ctx, `
 		SELECT DISTINCT inputs.input_index, kn.id
 		FROM unnest($1::integer[], $2::text[]) AS inputs(input_index, keyword)
-		JOIN public.knowledge_nodes kn ON
+		JOIN public.course_concepts kn ON
 			kn.name ILIKE '%' || inputs.keyword || '%' OR
 			kn.chapter ILIKE '%' || inputs.keyword || '%'
 		ORDER BY inputs.input_index, kn.id`,
@@ -118,7 +118,7 @@ func (r QuestionRepository) ConceptIDsExist(ctx context.Context, conceptIDs []st
 	}
 	return r.Exists(ctx, `
 		SELECT count(DISTINCT id) = cardinality($1::varchar[])
-		FROM public.knowledge_nodes
+		FROM public.course_concepts
 		WHERE id = ANY($1::varchar[])`,
 		conceptIDs,
 	)

@@ -18,7 +18,7 @@ const publicModuleEntries = {
   email: ['api'],
   exercise: ['api', 'state', 'provider', 'tutor', 'math'],
   forum: ['api'],
-  knowledge: ['api', 'state'],
+  curriculum: ['api'],
   'message-center': ['api', 'notifications', 'shared'],
   mistake: ['api', 'state'],
   resource: ['api', 'state'],

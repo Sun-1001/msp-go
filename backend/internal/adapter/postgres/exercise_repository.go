@@ -532,7 +532,7 @@ func (r ExerciseRepository) GetKnowledgeConcept(ctx context.Context, conceptID s
 	var chapter pgtype.Text
 	err := r.DB().QueryRow(ctx, `
 		SELECT id, name, description, chapter
-		FROM public.knowledge_nodes
+		FROM public.course_concepts
 		WHERE id = $1`,
 		conceptID,
 	).Scan(&concept.ID, &concept.Name, &concept.Description, &chapter)

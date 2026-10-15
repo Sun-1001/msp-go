@@ -88,15 +88,15 @@ func (r ProgressRepository) MasteryStatesForStudents(ctx context.Context, studen
 	return states, rows.Err()
 }
 
-// KnowledgeNodeNames resolves only the concepts present in the portrait cohort.
-func (r ProgressRepository) KnowledgeNodeNames(ctx context.Context, conceptIDs []string) (map[string]string, error) {
+// CourseConceptNames resolves only the concepts present in the portrait cohort.
+func (r ProgressRepository) CourseConceptNames(ctx context.Context, conceptIDs []string) (map[string]string, error) {
 	names := map[string]string{}
 	if len(conceptIDs) == 0 {
 		return names, nil
 	}
 	rows, err := r.DB().Query(ctx, `
 		SELECT id, name
-		FROM public.knowledge_nodes
+		FROM public.course_concepts
 		WHERE id = ANY($1::varchar[])`,
 		conceptIDs,
 	)
@@ -161,7 +161,7 @@ func (r ProgressRepository) StartPortraitAction(ctx context.Context, userID stri
 		SELECT
 			$1, $2, kn.id, 'practice', 10,
 			coalesce(state.attempt_count, 0), $4, $4, $4
-		FROM public.knowledge_nodes kn
+		FROM public.course_concepts kn
 		LEFT JOIN public.student_concept_dkt_states state
 			ON state.student_id = $2
 			AND state.concept_id = kn.id

@@ -39,7 +39,7 @@ const audienceContent: readonly AudienceContent[] = [
     features: [
       { icon: BrainCircuit, title: 'AI 学习会话', description: '围绕你的推理继续追问，按关键步骤提示与验证。' },
       { icon: Target, title: '智能练习', description: '根据当前知识点和错误类型安排难度合适的下一题。' },
-      { icon: Network, title: '知识图谱与错题', description: '把前置概念、薄弱点和错误记录放回同一条知识链。' },
+      { icon: Network, title: '笔记与知识关联', description: '把学习材料与自己的思考连接起来，建立个人笔记网络。' },
       { icon: BarChart3, title: '学习分析与路径', description: '用掌握变化调整今日任务，不让复习只凭感觉。' },
     ],
   },

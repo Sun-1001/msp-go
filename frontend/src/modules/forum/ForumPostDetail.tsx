@@ -321,9 +321,9 @@ export function ForumPostDetailPane({
           <div className="space-y-5 px-4 py-5 sm:px-6">
             <ForumMarkdown content={post.content} className="text-[15px] leading-8" />
             <MessageAttachments attachments={post.attachments} />
-            {post.tags.length > 0 || post.knowledgeNodeName ? (
+            {post.tags.length > 0 || post.conceptName ? (
               <div className="flex flex-wrap gap-1.5">
-                {post.knowledgeNodeName ? <Badge variant="outline">{post.knowledgeNodeName}</Badge> : null}
+                {post.conceptName ? <Badge variant="outline">{post.conceptName}</Badge> : null}
                 {post.tags.map((tag) => <Badge key={tag} variant="secondary">#{tag}</Badge>)}
               </div>
             ) : null}

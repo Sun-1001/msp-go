@@ -34,7 +34,7 @@ const journeyStages: readonly JourneyStage[] = [
     icon: BrainCircuit,
     tone: 'text-secondary-700 dark:text-secondary-300',
     iconTone: 'bg-secondary-600 text-white',
-    outcomes: ['识别题目与数学公式', '保留多轮推理上下文', '关联对应知识节点'],
+    outcomes: ['识别题目与数学公式', '保留多轮推理上下文', '整理为个人学习笔记'],
   },
   {
     phase: '复习',

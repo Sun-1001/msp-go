@@ -51,8 +51,8 @@ export interface ForumPost {
   content: string;
   attachments: MessageAttachment[];
   tags: string[];
-  knowledgeNodeId: string;
-  knowledgeNodeName: string;
+  conceptId: string;
+  conceptName: string;
   author: ForumAuthor;
   status: ForumPostStatus;
   acceptedReplyId: string;
@@ -103,7 +103,7 @@ export interface SaveForumPostPayload {
   content: string;
   attachments: MessageAttachment[];
   tags: string[];
-  knowledgeNodeId?: string;
+  conceptId?: string;
 }
 
 export interface CreateForumReplyPayload {

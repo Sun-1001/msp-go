@@ -7,7 +7,7 @@ import {
 } from '@/modules/exercise';
 import { useAIPractice, type ExerciseMode } from '@/modules/exercise/provider';
 import { ExerciseHintButton } from '@/modules/exercise/tutor';
-import { knowledgeService, type KnowledgeNode } from '@/modules/knowledge/api';
+import { curriculumService, type CourseConcept } from '@/modules/curriculum/api';
 import { Badge } from '@/components/ui/Badge';
 import { Button } from '@/components/ui/Button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/Card';
@@ -109,7 +109,7 @@ export const ExercisePage: React.FC = () => {
   const knowledgeLoaded = useRef(false);
   const knowledgeLoadInFlight = useRef(false);
   const knowledgeRequestId = useRef(0);
-  const [knowledgeNodes, setKnowledgeNodes] = useState<KnowledgeNode[]>([]);
+  const [concepts, setCourseConcepts] = useState<CourseConcept[]>([]);
   const [isLoadingKnowledge, setIsLoadingKnowledge] = useState(false);
   const [knowledgeError, setKnowledgeError] = useState<AppError | null>(null);
   const [dailyAssignment, setDailyAssignment] = useState<DailyQuestionAssignment | null>(null);
@@ -153,7 +153,7 @@ export const ExercisePage: React.FC = () => {
     };
   }, []);
 
-  const loadKnowledgeNodes = useCallback(async (force = false) => {
+  const loadCourseConcepts = useCallback(async (force = false) => {
     if ((!force && knowledgeLoaded.current) || knowledgeLoadInFlight.current) return;
 
     const requestId = knowledgeRequestId.current + 1;
@@ -163,22 +163,22 @@ export const ExercisePage: React.FC = () => {
     setKnowledgeError(null);
 
     try {
-      const graph = await knowledgeService.getKnowledgeGraph();
+      const concepts = await curriculumService.getConcepts();
       if (requestId !== knowledgeRequestId.current) return;
       knowledgeLoaded.current = true;
-      setKnowledgeNodes(graph.nodes);
-      if (graph.nodes.length === 0) {
+      setCourseConcepts(concepts);
+      if (concepts.length === 0) {
         setSelectedConceptId('');
-        setKnowledgeError(makeUiError('暂无可用知识点，请联系管理员配置'));
+        setKnowledgeError(makeUiError('暂无可用课程分类，请联系平台支持'));
         return;
       }
       const requestedNode = requestedConceptId
-        ? graph.nodes.find((node) => node.id === requestedConceptId)
-        : requestedTopic ? graph.nodes.find((node) => node.label === requestedTopic) : null;
+        ? concepts.find((node) => node.id === requestedConceptId)
+        : requestedTopic ? concepts.find((node) => node.label === requestedTopic) : null;
       const conceptRequest = requestedConceptId || requestedTopic;
       const applyRequestedNode = requestedNode && appliedConceptRequest.current !== conceptRequest;
       if (applyRequestedNode) appliedConceptRequest.current = conceptRequest;
-      setSelectedConceptId((current) => applyRequestedNode ? requestedNode.id : current || graph.nodes[0]?.id || '');
+      setSelectedConceptId((current) => applyRequestedNode ? requestedNode.id : current || concepts[0]?.id || '');
       if (requestedConceptId && !requestedNode) {
         setKnowledgeError(makeUiError(INVALID_CONCEPT_MESSAGE));
       }
@@ -200,14 +200,14 @@ export const ExercisePage: React.FC = () => {
 
   useEffect(() => {
     if (mode === 'ai') {
-      void loadKnowledgeNodes();
+      void loadCourseConcepts();
     }
-  }, [loadKnowledgeNodes, mode]);
+  }, [loadCourseConcepts, mode]);
 
   useEffect(() => {
-    if (mode !== 'ai' || !requestedConceptId || knowledgeNodes.length === 0) return;
+    if (mode !== 'ai' || !requestedConceptId || concepts.length === 0) return;
     if (appliedConceptRequest.current === requestedConceptId) return;
-    const requestedNode = knowledgeNodes.find((node) => node.id === requestedConceptId);
+    const requestedNode = concepts.find((node) => node.id === requestedConceptId);
     if (!requestedNode) {
       setKnowledgeError(makeUiError(INVALID_CONCEPT_MESSAGE));
       return;
@@ -215,12 +215,12 @@ export const ExercisePage: React.FC = () => {
     setSelectedConceptId(requestedNode.id);
     appliedConceptRequest.current = requestedConceptId;
     setKnowledgeError((current) => current?.message === INVALID_CONCEPT_MESSAGE ? null : current);
-  }, [appliedConceptRequest, knowledgeNodes, mode, requestedConceptId, setSelectedConceptId]);
+  }, [appliedConceptRequest, concepts, mode, requestedConceptId, setSelectedConceptId]);
 
   useEffect(() => {
     if (!shouldAutoStart || mode !== 'ai' || isLoadingKnowledge) return;
     if (aiQuestion || isGenerating) return;
-    if (!knowledgeNodes.some((node) => node.id === requestedConceptId)) return;
+    if (!concepts.some((node) => node.id === requestedConceptId)) return;
     if (autoStartedRequest.current === requestedConceptId) return;
 
     autoStartedRequest.current = requestedConceptId;
@@ -233,7 +233,7 @@ export const ExercisePage: React.FC = () => {
     difficulty,
     isGenerating,
     isLoadingKnowledge,
-    knowledgeNodes,
+    concepts,
     mode,
     requestAIQuestion,
     requestedConceptId,
@@ -243,11 +243,11 @@ export const ExercisePage: React.FC = () => {
   ]);
 
   const knowledgeOptions = useMemo(
-    () => knowledgeNodes.map((node) => ({
+    () => concepts.map((node) => ({
       value: node.id,
       label: node.chapter ? `${node.chapter} · ${node.label}` : node.label,
     })),
-    [knowledgeNodes],
+    [concepts],
   );
 
   const generateQuestion = () => {
@@ -257,14 +257,14 @@ export const ExercisePage: React.FC = () => {
 
   const retryKnowledgeLoad = () => {
     knowledgeLoaded.current = false;
-    return loadKnowledgeNodes(true);
+    return loadCourseConcepts(true);
   };
 
   const handleModeChange = (value: string) => {
     const nextMode: ExerciseMode = value === 'ai' ? 'ai' : 'class';
     setMode(nextMode);
     if (nextMode === 'ai') {
-      void loadKnowledgeNodes();
+      void loadCourseConcepts();
     }
   };
 

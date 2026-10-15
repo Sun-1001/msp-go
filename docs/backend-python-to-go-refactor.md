@@ -1,5 +1,7 @@
 # 后端 Python 到 Go 重构迁移文档
 
+> 2026-10-15 功能更新：本文旧图谱及管理员节点管理条目为历史迁移记录，对应运行代码与接口现已移除。当前使用个人笔记和二维知识关联，数据库迁移至 0032；以[知识关联说明](technical/note-network.md)和当前架构文档为准。
+
 > 文档定位：本文是仓库规则要求保留的迁移阶段跟踪与验证证据，不作为通用路线图。当前跨模块未完成事项统一维护在 [项目待办](TODO.md)；任何迁移阶段的开始、阻塞、恢复或完成仍必须同步更新本文。
 
 **Document status**: P4 in progress; P5 done; P6 AI/Agent in progress (Eino Tutor/Portrait/Diagnostician/Math Solver/Question Parser/Question Generator/OCR/Content Moderator Agents, admin LLM/Agent config loop, and uniform student AI risk center wired; unified channel scheduling/model catalog slice in progress; OCR, general-math, student AI risk-control, model-moderation, and multi-key channel-management slices delivered, token streaming and live external-provider quality acceptance pending); P7 in progress; P8 static contract handoff done; P9 Python backend removed by user confirmation; repository-wide quality cleanup batch done 2026-07-12

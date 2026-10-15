@@ -76,7 +76,7 @@ export function ForumComposerModal({
       content,
       attachments,
       tags,
-      knowledgeNodeId: post?.knowledgeNodeId || undefined,
+      conceptId: post?.conceptId || undefined,
     });
   };
 

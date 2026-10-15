@@ -47,7 +47,7 @@ const portraitReadColumns = `
 		FROM (
 			SELECT kn.name
 			FROM public.student_concept_dkt_states state
-			JOIN public.knowledge_nodes kn ON kn.id = state.concept_id
+			JOIN public.course_concepts kn ON kn.id = state.concept_id
 			WHERE state.student_id = sp.student_id
 			ORDER BY state.last_attempt_at DESC NULLS LAST
 			LIMIT 5
@@ -109,7 +109,7 @@ func (r PortraitRepository) GetRangeStats(ctx context.Context, userID string, st
 			coalesce((
 				SELECT json_agg(coalesce(kn.name, recent.value) ORDER BY recent.latest_at DESC)
 				FROM recent_concepts recent
-				LEFT JOIN public.knowledge_nodes kn ON kn.id = recent.value
+				LEFT JOIN public.course_concepts kn ON kn.id = recent.value
 			), '[]'::json)
 		FROM activity`,
 		userID,
@@ -141,7 +141,7 @@ func (r PortraitRepository) ListMasteryStates(ctx context.Context, userID string
 	rows, err := r.DB().Query(ctx, `
 		SELECT state.concept_id, kn.name, state.mastery_prob, state.last_attempt_at
 		FROM public.student_concept_dkt_states state
-		JOIN public.knowledge_nodes kn ON kn.id = state.concept_id
+		JOIN public.course_concepts kn ON kn.id = state.concept_id
 		WHERE state.student_id = $1
 		ORDER BY state.concept_id`,
 		userID,

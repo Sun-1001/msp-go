@@ -7,7 +7,7 @@ const DailyQuestionPage = lazy(() => import('@/pages/student/DailyQuestionPage')
 const SessionChatPage = lazy(() => import('@/pages/student/SessionChatPage').then(m => ({ default: m.default })));
 const MistakeBookPage = lazy(() => import('@/pages/student/MistakeBookPage').then(m => ({ default: m.MistakeBookPage })));
 const MistakeRedoPage = lazy(() => import('@/pages/student/MistakeRedoPage').then(m => ({ default: m.MistakeRedoPage })));
-const KnowledgeGraphPage = lazy(() => import('@/pages/student/KnowledgeGraphPage').then(m => ({ default: m.KnowledgeGraphPage })));
+const NotesPage = lazy(() => import('@/pages/student/NotesPage').then(m => ({ default: m.NotesPage })));
 const LearningPathPage = lazy(() => import('@/pages/student/LearningPathPage').then(m => ({ default: m.LearningPathPage })));
 const DiagnosisReportPage = lazy(() => import('@/pages/student/DiagnosisReportPage').then(m => ({ default: m.DiagnosisReportPage })));
 const AnalyticsPage = lazy(() => import('@/pages/student/AnalyticsPage').then(m => ({ default: m.AnalyticsPage })));
@@ -27,7 +27,8 @@ export const studentRoutes: RouteConfig[] = [
   { path: '/messages', component: MessageCenterPage, protected: true, requiredRole: 'student' },
   { path: '/mistake-book', component: MistakeBookPage, protected: true, requiredRole: 'student' },
   { path: '/mistake-book/:attemptId/redo', component: MistakeRedoPage, protected: true, requiredRole: 'student' },
-  { path: '/knowledge-graph', component: KnowledgeGraphPage, protected: true, requiredRole: 'student' },
+  { path: '/notes', component: NotesPage, protected: true, requiredRole: 'student' },
+  { path: '/notes/:noteId', component: NotesPage, protected: true, requiredRole: 'student' },
   { path: '/learning-path', component: LearningPathPage, protected: true, requiredRole: 'student' },
   { path: '/diagnosis/:id', component: DiagnosisReportPage, protected: true, requiredRole: 'student' },
   { path: '/analytics', component: AnalyticsPage, protected: true, requiredRole: 'student' },

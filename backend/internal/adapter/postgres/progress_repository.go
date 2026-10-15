@@ -3,7 +3,6 @@ package postgres
 import (
 	"context"
 	"fmt"
-	"strings"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -104,7 +103,7 @@ func (r ProgressRepository) GetOverviewSnapshot(ctx context.Context, userID stri
 func (r ProgressRepository) GetLearningGoal(ctx context.Context, userID string) (progressapp.LearningGoal, bool, error) {
 	var goal progressapp.LearningGoal
 	err := r.DB().QueryRow(ctx, `
-		SELECT target_node_id, updated_at
+		SELECT target_concept_id, updated_at
 		FROM public.student_learning_goals
 		WHERE student_id = $1`,
 		userID,
@@ -128,15 +127,15 @@ func (r ProgressRepository) UpsertLearningGoal(
 	var goal progressapp.LearningGoal
 	err := r.DB().QueryRow(ctx, `
 		INSERT INTO public.student_learning_goals (
-			student_id, target_node_id, created_at, updated_at
+			student_id, target_concept_id, created_at, updated_at
 		)
 		SELECT $1, id, $3, $3
-		FROM public.knowledge_nodes
+		FROM public.course_concepts
 		WHERE id = $2
 		ON CONFLICT (student_id) DO UPDATE SET
-			target_node_id = EXCLUDED.target_node_id,
+			target_concept_id = EXCLUDED.target_concept_id,
 			updated_at = EXCLUDED.updated_at
-		RETURNING target_node_id, updated_at`,
+		RETURNING target_concept_id, updated_at`,
 		userID,
 		targetID,
 		now,
@@ -287,92 +286,6 @@ func (r ProgressRepository) ListMasteryStates(ctx context.Context, userID string
 	return states, rows.Err()
 }
 
-// ListKnowledgeNodes returns knowledge graph nodes with optional filters.
-func (r ProgressRepository) ListKnowledgeNodes(ctx context.Context, filter progressapp.KnowledgeNodeFilter) ([]progressapp.KnowledgeNode, error) {
-	nodeType := progressNodeTypeToDB(filter.NodeType)
-	rows, err := r.DB().Query(ctx, `
-		SELECT id, name, node_type::text, description, chapter, difficulty, latex_formula, created_at
-		FROM public.knowledge_nodes
-		WHERE
-			($1 = '' OR chapter = $1) AND
-			($2 = '' OR node_type::text = $2) AND
-			(
-				$3 = '' OR
-				name ILIKE '%' || $3 || '%' OR
-				name_en ILIKE '%' || $3 || '%' OR
-				description ILIKE '%' || $3 || '%'
-			)
-		ORDER BY created_at`,
-		filter.Chapter,
-		nodeType,
-		filter.Search,
-	)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-
-	nodes := []progressapp.KnowledgeNode{}
-	for rows.Next() {
-		node, err := scanKnowledgeNode(rows)
-		if err != nil {
-			return nil, err
-		}
-		nodes = append(nodes, node)
-	}
-	return nodes, rows.Err()
-}
-
-// ListKnowledgeRelations returns all knowledge graph relations.
-func (r ProgressRepository) ListKnowledgeRelations(ctx context.Context) ([]progressapp.KnowledgeRelation, error) {
-	rows, err := r.DB().Query(ctx, `
-		SELECT id, source_id, target_id, relation_type::text, created_at
-		FROM public.knowledge_relations
-		ORDER BY created_at`)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	return scanKnowledgeRelations(rows)
-}
-
-// ListKnowledgeRelationsForNodes returns relations whose endpoints are both in nodeIDs.
-func (r ProgressRepository) ListKnowledgeRelationsForNodes(ctx context.Context, nodeIDs []string) ([]progressapp.KnowledgeRelation, error) {
-	if len(nodeIDs) == 0 {
-		return []progressapp.KnowledgeRelation{}, nil
-	}
-	rows, err := r.DB().Query(ctx, `
-		SELECT id, source_id, target_id, relation_type::text, created_at
-		FROM public.knowledge_relations
-		WHERE source_id = ANY($1::varchar[]) AND target_id = ANY($1::varchar[])
-		ORDER BY created_at`,
-		nodeIDs,
-	)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	return scanKnowledgeRelations(rows)
-}
-
-func scanKnowledgeRelations(rows pgx.Rows) ([]progressapp.KnowledgeRelation, error) {
-	relations := []progressapp.KnowledgeRelation{}
-	for rows.Next() {
-		var relation progressapp.KnowledgeRelation
-		if err := rows.Scan(
-			&relation.ID,
-			&relation.SourceID,
-			&relation.TargetID,
-			&relation.RelationType,
-			&relation.CreatedAt,
-		); err != nil {
-			return nil, err
-		}
-		relations = append(relations, relation)
-	}
-	return relations, rows.Err()
-}
-
 // ListLearningStatsByDay returns submitted attempt aggregates grouped by day.
 func (r ProgressRepository) ListLearningStatsByDay(ctx context.Context, userID string, start time.Time, end time.Time) ([]progressapp.PeriodStat, error) {
 	return r.listLearningStats(ctx, userID, start, end, "day")
@@ -496,7 +409,7 @@ func (r ProgressRepository) AttemptStatsForStudents(ctx context.Context, teacher
 func (r ProgressRepository) DistinctChapters(ctx context.Context) ([]string, error) {
 	rows, err := r.DB().Query(ctx, `
 		SELECT DISTINCT chapter
-		FROM public.knowledge_nodes
+		FROM public.course_concepts
 		WHERE chapter IS NOT NULL AND chapter <> ''
 		ORDER BY chapter`)
 	if err != nil {
@@ -552,38 +465,4 @@ func (r ProgressRepository) listLearningStats(ctx context.Context, userID string
 		stats = append(stats, stat)
 	}
 	return stats, rows.Err()
-}
-
-func scanKnowledgeNode(rows pgx.Rows) (progressapp.KnowledgeNode, error) {
-	var node progressapp.KnowledgeNode
-	var chapter pgtype.Text
-	var latexFormula pgtype.Text
-	if err := rows.Scan(
-		&node.ID,
-		&node.Name,
-		&node.NodeType,
-		&node.Description,
-		&chapter,
-		&node.Difficulty,
-		&latexFormula,
-		&node.CreatedAt,
-	); err != nil {
-		return progressapp.KnowledgeNode{}, err
-	}
-	node.Chapter = textPtr(chapter)
-	node.LatexFormula = textPtr(latexFormula)
-	return node, nil
-}
-
-func progressNodeTypeToDB(value string) string {
-	switch strings.ToLower(strings.TrimSpace(value)) {
-	case "concept":
-		return "CONCEPT"
-	case "theorem":
-		return "THEOREM"
-	case "method":
-		return "METHOD"
-	default:
-		return ""
-	}
 }

@@ -29,23 +29,13 @@ export interface Teacher extends User {
   title?: string;
 }
 
-// 知识节点
-export interface KnowledgeNode {
-  id: string;
-  name: string;
-  description?: string;
-  parentId?: string;
-  level: number;
-  order: number;
-}
-
 // 练习题
 export interface Exercise {
   id: string;
   title: string;
   content: string;
   difficulty: DifficultyLevel;
-  knowledgeNodeIds: string[];
+  conceptIds: string[];
   solution?: string;
   hints?: string[];
   createdAt: string;
@@ -128,28 +118,6 @@ export interface DiagnosisReport {
   suggestions: string[];
   relatedConcepts: string[];
   createdAt: string;
-}
-
-// 学习路径
-export interface LearningPath {
-  id: string;
-  studentId: string;
-  name: string;
-  description?: string;
-  nodes: LearningPathNode[];
-  progress: number;
-  createdAt: string;
-  updatedAt: string;
-}
-
-// 学习路径节点
-export interface LearningPathNode {
-  id: string;
-  knowledgeNodeId: string;
-  knowledgeNode?: KnowledgeNode;
-  order: number;
-  status: 'locked' | 'available' | 'in_progress' | 'completed';
-  progress: number;
 }
 
 // 课程

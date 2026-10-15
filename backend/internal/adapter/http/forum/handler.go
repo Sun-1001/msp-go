@@ -198,7 +198,7 @@ type createPostRequest struct {
 	Content         string                         `json:"content"`
 	Attachments     []messageattachment.Attachment `json:"attachments"`
 	Tags            []string                       `json:"tags"`
-	KnowledgeNodeID string                         `json:"knowledge_node_id"`
+	CourseConceptID string                         `json:"concept_id"`
 }
 
 func (h *Handler) createPost(w http.ResponseWriter, r *http.Request) {
@@ -216,7 +216,7 @@ func (h *Handler) createPost(w http.ResponseWriter, r *http.Request) {
 	response, err := h.service.CreatePost(r.Context(), principal.UserID, principal.Role, forumapp.CreatePostInput{
 		BoardID: request.BoardID, BoardSlug: request.BoardSlug, Type: request.Type,
 		Title: request.Title, Content: request.Content, Attachments: request.Attachments,
-		Tags: request.Tags, KnowledgeNodeID: request.KnowledgeNodeID,
+		Tags: request.Tags, CourseConceptID: request.CourseConceptID,
 	})
 	if err != nil {
 		h.handleError(w, "create forum post failed", err, "发布帖子失败")
@@ -234,7 +234,7 @@ type updatePostRequest struct {
 	Content         *string                         `json:"content"`
 	Attachments     *[]messageattachment.Attachment `json:"attachments"`
 	Tags            *[]string                       `json:"tags"`
-	KnowledgeNodeID *string                         `json:"knowledge_node_id"`
+	CourseConceptID *string                         `json:"concept_id"`
 }
 
 func (h *Handler) updatePost(w http.ResponseWriter, r *http.Request) {
@@ -252,7 +252,7 @@ func (h *Handler) updatePost(w http.ResponseWriter, r *http.Request) {
 	response, err := h.service.UpdatePost(r.Context(), principal.UserID, r.PathValue("id"), principal.Role, forumapp.UpdatePostInput{
 		BoardID: request.BoardID, BoardSlug: request.BoardSlug, Type: request.Type,
 		Title: request.Title, Content: request.Content, Attachments: request.Attachments,
-		Tags: request.Tags, KnowledgeNodeID: request.KnowledgeNodeID,
+		Tags: request.Tags, CourseConceptID: request.CourseConceptID,
 	})
 	if err != nil {
 		h.handleError(w, "update forum post failed", err, "更新帖子失败")

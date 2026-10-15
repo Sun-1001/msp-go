@@ -4,12 +4,14 @@ import (
 	"log/slog"
 	"time"
 
+	notehttp "mathstudy/backend/internal/adapter/http/note"
 	uploadhttp "mathstudy/backend/internal/adapter/http/upload"
 	wechathttp "mathstudy/backend/internal/adapter/http/wechat"
 	xidianhttp "mathstudy/backend/internal/adapter/http/xidian"
 	adapterpostgres "mathstudy/backend/internal/adapter/postgres"
 	adapterredis "mathstudy/backend/internal/adapter/redis"
 	storageadapter "mathstudy/backend/internal/adapter/storage"
+	noteapp "mathstudy/backend/internal/application/note"
 	uploadapp "mathstudy/backend/internal/application/upload"
 	wechatapp "mathstudy/backend/internal/application/wechat"
 	wechatreminder "mathstudy/backend/internal/application/wechatreminder"
@@ -18,9 +20,11 @@ import (
 	xidianintegration "mathstudy/backend/internal/integration/xidian"
 	"mathstudy/backend/internal/platform/config"
 	"mathstudy/backend/internal/platform/outbound"
+	"mathstudy/backend/internal/platform/ratelimit"
 )
 
 type integrationsModule struct {
+	noteHandler          *notehttp.Handler
 	uploadHandler        *uploadhttp.Handler
 	xidianHandler        *xidianhttp.Handler
 	wechatHandler        *wechathttp.Handler
@@ -28,6 +32,22 @@ type integrationsModule struct {
 }
 
 func wireIntegrations(cfg config.Config, logger *slog.Logger, infra *infrastructure, auth *authModule, uploadStorage *storageadapter.RuntimeManager) (*integrationsModule, error) {
+	noteRepo, err := adapterpostgres.NewNoteRepository(infra.db)
+	if err != nil {
+		return nil, stepFailed("configure note repository", err)
+	}
+	noteService, err := noteapp.NewService(noteRepo, uploadStorage)
+	if err != nil {
+		return nil, stepFailed("configure note service", err)
+	}
+	noteLimiter, err := ratelimit.New(infra.redis, "msp:note_upload", 30, time.Minute, cfg.RedisFallbackCacheMaxSize, logger)
+	if err != nil {
+		return nil, stepFailed("configure note upload limit", err)
+	}
+	noteHandler, err := notehttp.NewHandler(logger, noteService, auth.service, noteLimiter)
+	if err != nil {
+		return nil, stepFailed("configure note handler", err)
+	}
 	uploadXidian, err := wireUploadXidian(cfg, logger, infra, auth, uploadStorage)
 	if err != nil {
 		return nil, err
@@ -37,6 +57,7 @@ func wireIntegrations(cfg config.Config, logger *slog.Logger, infra *infrastruct
 		return nil, err
 	}
 	return &integrationsModule{
+		noteHandler:          noteHandler,
 		uploadHandler:        uploadXidian.uploadHandler,
 		xidianHandler:        uploadXidian.xidianHandler,
 		wechatHandler:        wechat.wechatHandler,

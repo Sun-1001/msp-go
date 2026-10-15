@@ -70,8 +70,8 @@ interface RawPost {
   body?: string;
   attachments?: MessageAttachment[];
   tags?: string[];
-  knowledge_node_id?: string | null;
-  knowledge_node_name?: string | null;
+  concept_id?: string | null;
+  concept_name?: string | null;
   author?: RawAuthor;
   status?: ForumPostStatus;
   accepted_reply_id?: string | null;
@@ -196,8 +196,8 @@ function mapPost(raw: RawPost): ForumPost {
     content: raw.content ?? raw.body ?? '',
     attachments: Array.isArray(raw.attachments) ? raw.attachments : [],
     tags: Array.isArray(raw.tags) ? raw.tags : [],
-    knowledgeNodeId: raw.knowledge_node_id ?? '',
-    knowledgeNodeName: raw.knowledge_node_name ?? '',
+    conceptId: raw.concept_id ?? '',
+    conceptName: raw.concept_name ?? '',
     author: mapAuthor(raw.author),
     status: raw.status ?? 'open',
     acceptedReplyId: raw.accepted_reply_id ?? '',
@@ -239,7 +239,7 @@ function toPostPayload(payload: SaveForumPostPayload) {
     content: payload.content.trim(),
     attachments: payload.attachments,
     tags: payload.tags,
-    knowledge_node_id: payload.knowledgeNodeId || undefined,
+    concept_id: payload.conceptId || undefined,
   };
 }
 

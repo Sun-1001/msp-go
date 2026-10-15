@@ -16,7 +16,6 @@ import {
   Menu,
   X,
   ChevronRight,
-  Network,
   Inbox,
   ShieldAlert,
   Megaphone,
@@ -110,11 +109,6 @@ export const AdminLayout: React.FC<AdminLayoutProps> = ({ children, className = 
       icon: ShieldAlert,
       label: '风控中心',
       path: '/admin/risk-control',
-    },
-    {
-      icon: Network,
-      label: '知识点管理',
-      path: '/admin/knowledge',
     },
     {
       icon: Megaphone,

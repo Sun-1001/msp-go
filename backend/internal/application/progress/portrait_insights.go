@@ -157,7 +157,7 @@ func (s *Service) GetPortraitInsights(ctx context.Context, userID string, rangeT
 		seenConcepts[conceptID] = struct{}{}
 		conceptIDs = append(conceptIDs, conceptID)
 	}
-	nodeNames, err := s.repo.KnowledgeNodeNames(ctx, conceptIDs)
+	nodeNames, err := s.repo.CourseConceptNames(ctx, conceptIDs)
 	if err != nil {
 		return PortraitInsightsResponse{}, err
 	}

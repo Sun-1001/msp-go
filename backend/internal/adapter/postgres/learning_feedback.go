@@ -50,7 +50,7 @@ SELECT json_build_object(
 	'last_attempt_at', to_char(state.last_attempt_at, 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"'),
 	'attempts', coalesce(evidence.attempts, '[]'::json)
 )
-FROM public.knowledge_nodes kn
+FROM public.course_concepts kn
 LEFT JOIN public.student_concept_dkt_states state
 	ON state.student_id = $1 AND state.concept_id = kn.id
 	AND state.last_attempt_at <= $3::timestamp

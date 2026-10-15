@@ -105,7 +105,7 @@ func (r ForumRepository) ListPosts(ctx context.Context, viewerID string, role us
 		FROM public.forum_posts p
 		JOIN public.forum_boards b ON b.id = p.board_id
 		JOIN public.users author ON author.id = p.author_id
-		LEFT JOIN public.knowledge_nodes kn ON kn.id = p.knowledge_node_id`
+		LEFT JOIN public.course_concepts kn ON kn.id = p.concept_id`
 	var total int
 	if err := r.DB().QueryRow(ctx, `SELECT COUNT(*)`+from+where, args...).Scan(&total); err != nil {
 		return nil, 0, err
@@ -156,7 +156,7 @@ func (r ForumRepository) GetPost(ctx context.Context, postID, viewerID string, r
 		FROM public.forum_posts p
 		JOIN public.forum_boards b ON b.id = p.board_id
 		JOIN public.users author ON author.id = p.author_id
-		LEFT JOIN public.knowledge_nodes kn ON kn.id = p.knowledge_node_id
+		LEFT JOIN public.course_concepts kn ON kn.id = p.concept_id
 		WHERE p.id = $2 AND (p.status IN ('open', 'resolved') OR $3::boolean)`, viewerID, postID, isAdmin)
 	post, err := scanForumPost(row, viewerID, role)
 	if errors.Is(err, pgx.ErrNoRows) {
@@ -202,23 +202,23 @@ func (r ForumRepository) CreatePost(ctx context.Context, postID, authorID string
 	if err != nil {
 		return forumapp.PostDetail{}, err
 	}
-	var knowledgeNodeID any
-	if input.KnowledgeNodeID != "" {
-		exists, err := r.Exists(ctx, `SELECT EXISTS (SELECT 1 FROM public.knowledge_nodes WHERE id = $1)`, input.KnowledgeNodeID)
+	var courseConceptID any
+	if input.CourseConceptID != "" {
+		exists, err := r.Exists(ctx, `SELECT EXISTS (SELECT 1 FROM public.course_concepts WHERE id = $1)`, input.CourseConceptID)
 		if err != nil {
 			return forumapp.PostDetail{}, err
 		}
 		if !exists {
 			return forumapp.PostDetail{}, forumapp.ErrInvalidInput
 		}
-		knowledgeNodeID = input.KnowledgeNodeID
+		courseConceptID = input.CourseConceptID
 	}
 	_, err = r.DB().Exec(ctx, `
 		INSERT INTO public.forum_posts (
 			id, board_id, author_id, post_type, title, content, attachments, tags,
-			knowledge_node_id, status, created_at, updated_at
+			concept_id, status, created_at, updated_at
 		) VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb, $8::jsonb, $9, 'open', $10, $10)`,
-		postID, boardID, authorID, string(input.Type), input.Title, input.Content, attachments, tags, knowledgeNodeID, now)
+		postID, boardID, authorID, string(input.Type), input.Title, input.Content, attachments, tags, courseConceptID, now)
 	if err != nil {
 		return forumapp.PostDetail{}, err
 	}
@@ -276,17 +276,17 @@ func (r ForumRepository) UpdatePost(ctx context.Context, postID, actorID string,
 			}
 			tags = encoded
 		}
-		knowledgeSet := input.KnowledgeNodeID != nil
+		knowledgeSet := input.CourseConceptID != nil
 		var knowledgeID any
-		if knowledgeSet && *input.KnowledgeNodeID != "" {
-			exists, err := current.Exists(ctx, `SELECT EXISTS (SELECT 1 FROM public.knowledge_nodes WHERE id = $1)`, *input.KnowledgeNodeID)
+		if knowledgeSet && *input.CourseConceptID != "" {
+			exists, err := current.Exists(ctx, `SELECT EXISTS (SELECT 1 FROM public.course_concepts WHERE id = $1)`, *input.CourseConceptID)
 			if err != nil {
 				return err
 			}
 			if !exists {
 				return forumapp.ErrInvalidInput
 			}
-			knowledgeID = *input.KnowledgeNodeID
+			knowledgeID = *input.CourseConceptID
 		}
 		if _, err := current.DB().Exec(ctx, `
 			UPDATE public.forum_posts SET
@@ -296,7 +296,7 @@ func (r ForumRepository) UpdatePost(ctx context.Context, postID, actorID string,
 				content = COALESCE($5, content),
 				attachments = COALESCE($6::jsonb, attachments),
 				tags = COALESCE($7::jsonb, tags),
-				knowledge_node_id = CASE WHEN $8 THEN $9 ELSE knowledge_node_id END,
+				concept_id = CASE WHEN $8 THEN $9 ELSE concept_id END,
 				updated_at = $10
 			WHERE id = $1`, postID, boardID, postType, title, content, attachments, tags, knowledgeSet, knowledgeID, now); err != nil {
 			return err
@@ -1275,7 +1275,7 @@ const forumPostSelect = `
 	SELECT p.id,
 		b.id, b.slug, b.name, b.description, b.sort_order,
 		p.post_type, p.title, LEFT(p.content, 300), p.content, p.attachments, p.tags,
-		p.knowledge_node_id, kn.name,
+		p.concept_id, kn.name,
 		author.id, COALESCE(NULLIF(BTRIM(author.display_name), ''), author.username), author.role::text, author.avatar_url,
 		p.status, ` + forumFeaturedForViewerSQL + ` AS is_featured_for_viewer, p.accepted_reply_id,
 		(SELECT COUNT(*) FROM public.forum_replies fr WHERE fr.post_id = p.id AND fr.status = 'active'),
@@ -1314,10 +1314,10 @@ func scanForumPost(row interface{ Scan(...any) error }, viewerID string, viewerR
 		item.Author.AvatarURL = avatarURL.String
 	}
 	if knowledgeID.Valid {
-		item.KnowledgeNodeID = knowledgeID.String
+		item.CourseConceptID = knowledgeID.String
 	}
 	if knowledgeName.Valid {
-		item.KnowledgeNodeName = knowledgeName.String
+		item.CourseConceptName = knowledgeName.String
 	}
 	if acceptedReplyID.Valid {
 		item.AcceptedReplyID = acceptedReplyID.String

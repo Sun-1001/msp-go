@@ -31,7 +31,7 @@ export const studentNavItems: NavItem[] = [
   { label: '智能刷题', href: '/exercise', icon: GraduationCap },
   { label: 'AI 辅导', href: '/session/new', icon: MessageSquare },
   { label: '错题本', href: '/mistake-book', icon: FileText },
-  { label: '知识图谱', href: '/knowledge-graph', icon: GitBranch },
+  { label: '知识关联', href: '/notes', icon: GitBranch },
   { label: '学习统计', href: '/analytics', icon: BarChart3 },
   { label: '资源中心', href: '/resources', icon: FolderOpen },
 ];

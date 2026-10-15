@@ -150,7 +150,7 @@ export const AboutPage: React.FC = () => {
     {
       date: '2025 年 11 月',
       title: '核心功能开发',
-      description: '完成智能刷题、AI 学习助手、知识图谱等核心模块开发',
+      description: '完成智能刷题、AI 学习助手、知识关联等核心模块开发',
     },
     {
       date: '2026 年 1 月',
