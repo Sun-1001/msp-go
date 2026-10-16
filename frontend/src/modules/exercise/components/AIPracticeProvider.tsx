@@ -1,4 +1,5 @@
 import { useRef, useState, type ReactNode } from 'react';
+import { useLocation } from 'react-router-dom';
 import { useAppSelector } from '@/store';
 import { selectCurrentUser, selectIsAuthenticated } from '@/modules/auth/state';
 import { useExerciseViewModel } from '../hooks/exerciseViewModel';
@@ -14,8 +15,9 @@ const emptyAnswerDraft: ExerciseAnswerDraft = {
 };
 
 function AIPracticeSession({ children }: { children: ReactNode }) {
-  const exercise = useExerciseViewModel();
   const [mode, setMode] = useState<ExerciseMode>('class');
+  const { pathname } = useLocation();
+  const exercise = useExerciseViewModel({ active: pathname === '/exercise' && mode === 'ai' });
   const [selectedConceptId, setSelectedConceptId] = useState('');
   const [difficulty, setDifficulty] = useState(0.5);
   const [questionType, setQuestionType] = useState<GenerateQuestionType>('multiple_choice');

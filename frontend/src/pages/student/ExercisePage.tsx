@@ -89,7 +89,7 @@ export const ExercisePage: React.FC = () => {
     loadNextQuestion: loadNextClassQuestion,
     submitAnswer: submitClassAnswer,
     loadSolution: loadClassSolution,
-  } = useExerciseViewModel();
+  } = useExerciseViewModel({ active: mode === 'class' });
   const {
     currentQuestion: aiQuestion,
     isGenerating,

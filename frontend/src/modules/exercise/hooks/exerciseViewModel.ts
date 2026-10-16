@@ -1,4 +1,5 @@
 import { useState, useCallback, useEffect, useRef } from 'react';
+import { useExerciseStudyTime } from './useExerciseStudyTime';
 import {
   exerciseService,
   type ExerciseSolution,
@@ -47,6 +48,7 @@ export interface ExerciseAnswerSubmission {
 }
 
 export interface ExerciseViewModelOptions {
+  active?: boolean;
   dailyAssignmentId?: string;
   reviewTaskId?: string;
   reviewTaskRevision?: number;
@@ -285,7 +287,9 @@ export function useExerciseViewModel(options: ExerciseViewModelOptions = {}) {
   const [errorSource, setErrorSource] = useState<ExerciseErrorSource | null>(null);
 
   // 答题计时
-  const startTimeRef = useRef<number>(Date.now());
+  const getStudySeconds = useExerciseStudyTime({
+    exerciseId: currentQuestion?.id ?? '', dailyAssignmentId, reviewTaskId, reviewTaskRevision, originalAttemptId,
+  }, options.active !== false && submitResult === null && submitPhase === 'idle');
   const generationInFlightRef = useRef(false);
   const submissionInFlightRef = useRef(false);
   const solutionInFlightRef = useRef(false);
@@ -329,7 +333,6 @@ export function useExerciseViewModel(options: ExerciseViewModelOptions = {}) {
     setError(null);
     setErrorType(null);
     setErrorSource(null);
-    startTimeRef.current = Date.now();
   }, []);
 
   const clearQuestion = useCallback(() => {
@@ -383,7 +386,6 @@ export function useExerciseViewModel(options: ExerciseViewModelOptions = {}) {
       setSubmitResult(null);
       setSolution(null);
       setSolutionError(null);
-      startTimeRef.current = Date.now();
       exerciseLogger.debug('Question loaded', { questionId: question.id });
     } catch (err) {
       const requestError = toAppError(err, '加载题目失败，请稍后重试');
@@ -450,7 +452,6 @@ export function useExerciseViewModel(options: ExerciseViewModelOptions = {}) {
       setSubmitResult(null);
       setSolution(null);
       setSolutionError(null);
-      startTimeRef.current = Date.now();
       exerciseLogger.info('AI question generated', {
         questionId: question.id,
         conceptId: normalizedConceptId,
@@ -547,7 +548,7 @@ export function useExerciseViewModel(options: ExerciseViewModelOptions = {}) {
         submissionStage = 'grading';
         setSubmitPhase('recognizing');
         const timeSpentSeconds = pendingBoundSubmission.timeSpentSeconds
-          ?? Math.round((Date.now() - startTimeRef.current) / 1000);
+          ?? getStudySeconds();
         if (pendingBoundSubmission.timeSpentSeconds === undefined) {
           pendingBoundSubmission = { ...pendingBoundSubmission, timeSpentSeconds };
           pendingBoundSubmissionRef.current = pendingBoundSubmission;
@@ -613,7 +614,7 @@ export function useExerciseViewModel(options: ExerciseViewModelOptions = {}) {
         }
       }
     },
-    [currentQuestion, dailyAssignmentId, reviewTaskId, reviewTaskRevision, originalAttemptId]
+    [currentQuestion, dailyAssignmentId, reviewTaskId, reviewTaskRevision, originalAttemptId, getStudySeconds]
   );
 
   const loadSolution = useCallback(async () => {

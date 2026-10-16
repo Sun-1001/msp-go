@@ -435,6 +435,11 @@ const ExercisePanelContent: React.FC<ExercisePanelProps> = ({
             )}
 
             {/* 掌握度变化 */}
+            {!isIndeterminate && submitResult.evidenceKind === 'repeat_practice' && (
+              <p className="rounded-lg bg-surface-50 p-3 text-sm text-surface-600 dark:bg-surface-800 dark:text-surface-300">
+                本题属于重复练习，保留作答次数和得分，不增加掌握度或有效新题数。可换一道新题验证方法。
+              </p>
+            )}
             {!isIndeterminate && submitResult.assistanceStatus === 'hinted' && (
               <p className="rounded-lg bg-surface-50 p-3 text-sm text-surface-600 dark:bg-surface-800 dark:text-surface-300">
                 本题已提供过辅导提示，作答保留为辅助练习，并降低掌握度更新权重。接下来可换一道新题自行尝试，验证能否迁移方法。

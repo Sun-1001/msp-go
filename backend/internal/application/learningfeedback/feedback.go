@@ -34,6 +34,7 @@ type Attempt struct {
 	FirstAttempt     bool      `json:"first_attempt"`
 	MasteryWeight    float64   `json:"mastery_weight"`
 	AssistanceStatus string    `json:"assistance_status"`
+	ProcessStatus    string    `json:"process_status"`
 	ErrorType        string    `json:"error_type"`
 	ErrorSubtype     string    `json:"error_subtype"`
 	SubmittedAt      time.Time `json:"submitted_at"`
@@ -110,7 +111,7 @@ func Build(snapshot Snapshot, now time.Time) Feedback {
 	}
 	errors := map[string]int{}
 	for index, attempt := range attempts {
-		if index < 5 && !attempt.Correct {
+		if index < 5 && (!attempt.Correct || attempt.ProcessStatus == "incorrect") {
 			if kind := canonicalError(attempt.ErrorType); kind != "" {
 				errors[kind]++
 			}
@@ -147,7 +148,7 @@ func Build(snapshot Snapshot, now time.Time) Feedback {
 		}
 	}
 	for _, attempt := range attempts[:min(5, len(attempts))] {
-		if !attempt.Correct && f.DominantError != "" && canonicalError(attempt.ErrorType) == f.DominantError {
+		if (!attempt.Correct || attempt.ProcessStatus == "incorrect") && f.DominantError != "" && canonicalError(attempt.ErrorType) == f.DominantError {
 			value := []rune(strings.Join(strings.Fields(attempt.ErrorSubtype), " "))
 			f.FocusError = string(value[:min(len(value), 80)])
 			if f.FocusError != "" {
@@ -181,7 +182,7 @@ func Build(snapshot Snapshot, now time.Time) Feedback {
 		f.SuccessCriterion = "首次作答正确后再增加难度；答错则回到对应错因练习。"
 		return f
 	}
-	if len(attempts) > 0 && !attempts[0].Correct || (f.RecentAccuracy != nil && len(independent) >= 3 && *f.RecentAccuracy < 0.6) {
+	if (len(attempts) > 0 && (!attempts[0].Correct || attempts[0].ProcessStatus == "incorrect")) || (f.RecentAccuracy != nil && len(independent) >= 3 && *f.RecentAccuracy < 0.6) {
 		f.Stage, f.Label = "repair", "针对错因巩固"
 		f.Reason = "最近作答仍有错误，先修复关键步骤，再验证迁移。"
 		f.NextStep = repairInstruction(f.DominantError)

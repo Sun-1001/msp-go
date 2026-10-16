@@ -35,11 +35,16 @@ func buildDKTSequence(history []LearningInteraction, current LearningInteraction
 		item.ConceptIDs = trackedConceptIDs(item.ConceptIDs)
 		item.Difficulty = numutil.ClampFloat(item.Difficulty, 0, 1)
 		item.MasteryWeight = normalizeMasteryWeight(item.MasteryWeight)
+		if item.MasteryWeight == 0 {
+			continue
+		}
 		sequence = append(sequence, item)
 	}
 	current.ConceptIDs = trackedConceptIDs(current.ConceptIDs)
 	current.MasteryWeight = normalizeMasteryWeight(current.MasteryWeight)
-	sequence = append(sequence, current)
+	if current.MasteryWeight > 0 {
+		sequence = append(sequence, current)
+	}
 	sort.SliceStable(sequence, func(i, j int) bool {
 		if sequence[i].SubmittedAt.Equal(sequence[j].SubmittedAt) {
 			return sequence[i].AttemptID < sequence[j].AttemptID
@@ -161,9 +166,9 @@ func attentionSignal(targetConcept string, current LearningInteraction, sequence
 
 func normalizeMasteryWeight(weight float64) float64 {
 	if weight <= 0 || math.IsNaN(weight) || math.IsInf(weight, 0) {
-		return fullMasteryWeight
+		return 0
 	}
-	return numutil.ClampFloat(weight, 0.01, fullMasteryWeight)
+	return numutil.ClampFloat(weight, 0, fullMasteryWeight)
 }
 
 func conceptRelevance(targetConcept string, currentConcepts []string, itemConcepts []string) float64 {
