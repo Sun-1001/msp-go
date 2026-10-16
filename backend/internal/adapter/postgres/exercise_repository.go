@@ -532,7 +532,7 @@ func (r ExerciseRepository) GetKnowledgeConcept(ctx context.Context, conceptID s
 	var chapter pgtype.Text
 	err := r.DB().QueryRow(ctx, `
 		SELECT id, name, description, chapter
-		FROM public.knowledge_nodes
+		FROM public.course_concepts
 		WHERE id = $1`,
 		conceptID,
 	).Scan(&concept.ID, &concept.Name, &concept.Description, &chapter)
@@ -821,6 +821,7 @@ func (r ExerciseRepository) ListRecentInteractions(ctx context.Context, userID s
 		WHERE ca.student_id = $1
 		  AND ca.submitted_at IS NOT NULL
 		  AND ca.id <> $2
+		  AND ca.mastery_weight > 0
 		ORDER BY ca.submitted_at DESC, ca.id DESC
 		LIMIT $3`,
 		userID,
@@ -859,6 +860,10 @@ func (r ExerciseRepository) ListRecentInteractions(ctx context.Context, userID s
 
 // InsertAttempt inserts a submitted answer attempt.
 func (r ExerciseRepository) InsertAttempt(ctx context.Context, record exerciseapp.AttemptRecord) error {
+	processRaw, err := json.Marshal(record.ProcessEvaluation)
+	if err != nil {
+		return err
+	}
 	stepsRaw, err := json.Marshal(record.StudentSteps)
 	if err != nil {
 		return err
@@ -967,11 +972,14 @@ func (r ExerciseRepository) InsertAttempt(ctx context.Context, record exerciseap
 			started_at,
 			submitted_at,
 			time_spent_seconds,
-			assistance_status
+			assistance_status,
+			evidence_kind,
+			process_evaluation,
+			reported_time_spent_seconds
 		)
 			VALUES (
 				$1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16::json, $17,
-				$18::json, $19, $20, $21, $22::json, $23, $24, $25, $26, $27, $28
+				$18::json, $19, $20, $21, $22::json, $23, $24, $25, $26, $27, $28, $29, $30::jsonb, $31
 			)`,
 		record.ID,
 		record.ContentID,
@@ -1001,6 +1009,9 @@ func (r ExerciseRepository) InsertAttempt(ctx context.Context, record exerciseap
 		record.SubmittedAt,
 		record.TimeSpentSeconds,
 		record.AssistanceStatus,
+		record.EvidenceKind,
+		string(processRaw),
+		record.ReportedTimeSpentSeconds,
 	)
 	return err
 }

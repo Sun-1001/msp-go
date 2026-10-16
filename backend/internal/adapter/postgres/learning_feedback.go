@@ -50,7 +50,7 @@ SELECT json_build_object(
 	'last_attempt_at', to_char(state.last_attempt_at, 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"'),
 	'attempts', coalesce(evidence.attempts, '[]'::json)
 )
-FROM public.knowledge_nodes kn
+FROM public.course_concepts kn
 LEFT JOIN public.student_concept_dkt_states state
 	ON state.student_id = $1 AND state.concept_id = kn.id
 	AND state.last_attempt_at <= $3::timestamp
@@ -60,7 +60,8 @@ LEFT JOIN LATERAL (
 		'body', left(recent.review_question_body, 1200),
 		'correct', recent.is_correct, 'mastery_weight', recent.mastery_weight,
 		'assistance_status', recent.assistance_status,
-		'first_attempt', NOT EXISTS (
+		'process_status', coalesce(recent.process_evaluation->>'status', 'unknown'),
+		'first_attempt', recent.evidence_kind <> 'repeat_practice' AND NOT EXISTS (
 			SELECT 1 FROM public.content_attempts prior
 			WHERE prior.student_id = $1 AND prior.content_id = recent.content_id
 				AND prior.submitted_at IS NOT NULL
@@ -72,7 +73,7 @@ LEFT JOIN LATERAL (
 	) ORDER BY recent.submitted_at DESC, recent.id DESC) AS attempts
 	FROM (
 		SELECT ca.id, ca.content_id, ca.review_question_body, ca.is_correct,
-			ca.mastery_weight, ca.assistance_status, ca.submitted_at
+			ca.mastery_weight, ca.assistance_status, ca.submitted_at, ca.evidence_kind, ca.process_evaluation
 		FROM public.content_attempts ca
 		WHERE ca.student_id = $1
 			AND ca.submitted_at >= $3::timestamp - make_interval(days => $4)

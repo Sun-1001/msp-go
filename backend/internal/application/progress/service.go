@@ -42,9 +42,8 @@ type Repository interface {
 	LatestAttemptStartedAt(context.Context, string) (*time.Time, error)
 	ListSubmittedAttemptDays(context.Context, string, int) ([]time.Time, error)
 	ListMasteryStates(context.Context, string, []string) ([]MasteryState, error)
-	ListKnowledgeNodes(context.Context, KnowledgeNodeFilter) ([]KnowledgeNode, error)
-	ListKnowledgeRelations(context.Context) ([]KnowledgeRelation, error)
-	ListKnowledgeRelationsForNodes(context.Context, []string) ([]KnowledgeRelation, error)
+	ListCourseConcepts(context.Context) ([]CourseConcept, error)
+	ListPrerequisites(context.Context) ([]Prerequisite, error)
 	ListLearningStatsByDay(context.Context, string, time.Time, time.Time) ([]PeriodStat, error)
 	ListLearningStatsByWeek(context.Context, string, time.Time, time.Time) ([]PeriodStat, error)
 	CountErrorsByType(context.Context, string, time.Time, time.Time) (map[string]int, error)
@@ -52,7 +51,7 @@ type Repository interface {
 	AttemptStatsForStudents(context.Context, string, []string) (map[string]StudentAttemptStats, error)
 	AttemptInsightsForStudents(context.Context, string, []string, time.Time, time.Time) (map[string]StudentAttemptInsight, error)
 	MasteryStatesForStudents(context.Context, []string) ([]StudentMasteryInsight, error)
-	KnowledgeNodeNames(context.Context, []string) (map[string]string, error)
+	CourseConceptNames(context.Context, []string) (map[string]string, error)
 	ListPortraitActionProgresses(context.Context, string) (map[string]PortraitActionProgress, error)
 	StartPortraitAction(context.Context, string, string, time.Time) (bool, error)
 	DistinctChapters(context.Context) ([]string, error)
@@ -91,32 +90,25 @@ type MasteryState struct {
 	LastAttemptAt *time.Time
 }
 
-// KnowledgeNode is a read model for knowledge graph nodes.
-type KnowledgeNode struct {
-	ID           string
-	Name         string
-	NodeType     string
-	Description  string
-	Chapter      *string
-	Difficulty   float64
-	LatexFormula *string
-	CreatedAt    time.Time
+// CourseConcept is a read-only curriculum dimension used by learning evidence.
+type CourseConcept struct {
+	ID          string
+	Name        string
+	Description string
+	Chapter     *string
+	Difficulty  float64
 }
 
-// KnowledgeNodeFilter stores optional filters for graph queries.
-type KnowledgeNodeFilter struct {
-	Chapter  string
-	NodeType string
-	Search   string
+type ConceptOption struct {
+	ID      string  `json:"id"`
+	Label   string  `json:"label"`
+	Chapter *string `json:"chapter"`
 }
 
-// KnowledgeRelation is a read model for knowledge graph relations.
-type KnowledgeRelation struct {
-	ID           string
-	SourceID     string
-	TargetID     string
-	RelationType string
-	CreatedAt    time.Time
+// Prerequisite stores a curriculum requirement, not a personal note link.
+type Prerequisite struct {
+	SourceID string
+	TargetID string
 }
 
 // PeriodStat stores one daily or weekly aggregate.
@@ -204,38 +196,6 @@ type PathStatistics struct {
 type LearningGoalResponse struct {
 	TargetID  *string `json:"target_id"`
 	UpdatedAt *string `json:"updated_at"`
-}
-
-// GraphResponse is the /progress/knowledge-graph response.
-type GraphResponse struct {
-	Nodes      []GraphNode     `json:"nodes"`
-	Edges      []GraphEdge     `json:"edges"`
-	Statistics GraphStatistics `json:"statistics"`
-}
-
-// GraphNode stores one frontend graph node.
-type GraphNode struct {
-	ID          string  `json:"id"`
-	Label       string  `json:"label"`
-	Type        string  `json:"type"`
-	Mastery     float64 `json:"mastery"`
-	Chapter     *string `json:"chapter"`
-	Description string  `json:"description"`
-	Formula     *string `json:"formula,omitempty"`
-}
-
-// GraphEdge stores one frontend graph edge.
-type GraphEdge struct {
-	Source   string `json:"source"`
-	Target   string `json:"target"`
-	Relation string `json:"relation"`
-}
-
-// GraphStatistics stores graph summary counters.
-type GraphStatistics struct {
-	TotalNodes     int     `json:"total_nodes"`
-	MasteredNodes  int     `json:"mastered_nodes"`
-	OverallMastery float64 `json:"overall_mastery"`
 }
 
 // StatisticsResponse is the /progress/statistics response.
@@ -379,7 +339,7 @@ func (s *Service) GetMasteryVector(ctx context.Context, userID string) (MasteryR
 	}
 
 	keys := maputil.SortedFloatKeys(mastery)
-	names, err := s.repo.KnowledgeNodeNames(ctx, keys)
+	names, err := s.repo.CourseConceptNames(ctx, keys)
 	if err != nil {
 		return MasteryResponse{}, err
 	}
@@ -411,20 +371,17 @@ func (s *Service) GetLearningPath(ctx context.Context, userID string, target str
 		return PathResponse{}, err
 	}
 
-	nodes, err := s.repo.ListKnowledgeNodes(ctx, KnowledgeNodeFilter{})
+	nodes, err := s.repo.ListCourseConcepts(ctx)
 	if err != nil {
 		return PathResponse{}, err
 	}
-	relations, err := s.repo.ListKnowledgeRelations(ctx)
+	relations, err := s.repo.ListPrerequisites(ctx)
 	if err != nil {
 		return PathResponse{}, err
 	}
 
-	nodeMap := make(map[string]KnowledgeNode)
+	nodeMap := make(map[string]CourseConcept)
 	for _, node := range nodes {
-		if graphNodeType(node.NodeType) == "" {
-			continue
-		}
 		nodeMap[node.ID] = node
 	}
 	if len(nodeMap) == 0 {
@@ -438,9 +395,6 @@ func (s *Service) GetLearningPath(ctx context.Context, userID string, target str
 		dependents[id] = map[string]struct{}{}
 	}
 	for _, rel := range relations {
-		if rel.RelationType != "HAS_PREREQUISITE" {
-			continue
-		}
 		if _, ok := nodeMap[rel.SourceID]; !ok {
 			continue
 		}
@@ -503,88 +457,6 @@ func (s *Service) GetLearningPath(ctx context.Context, userID string, target str
 			Total:     len(path),
 			Completed: completed,
 			Progress:  numutil.RoundPlaces(float64(completed)/float64(max(len(path), 1)), 2),
-		},
-	}, nil
-}
-
-// GetKnowledgeGraphView returns frontend graph data.
-func (s *Service) GetKnowledgeGraphView(ctx context.Context, userID string, filter KnowledgeNodeFilter) (GraphResponse, error) {
-	profile, _, err := s.repo.GetProfile(ctx, userID)
-	if err != nil {
-		return GraphResponse{}, err
-	}
-	mastery, _, _, err := s.masteryDetails(ctx, userID, profile.MasteryVector, nil)
-	if err != nil {
-		return GraphResponse{}, err
-	}
-
-	nodes, err := s.repo.ListKnowledgeNodes(ctx, filter)
-	if err != nil {
-		return GraphResponse{}, err
-	}
-	nodeIDs := make(map[string]struct{}, len(nodes))
-	relationNodeIDs := make([]string, 0, len(nodes))
-	graphNodes := make([]GraphNode, 0, len(nodes))
-	for _, node := range nodes {
-		nodeType := graphNodeType(node.NodeType)
-		if nodeType == "" {
-			continue
-		}
-		nodeIDs[node.ID] = struct{}{}
-		relationNodeIDs = append(relationNodeIDs, node.ID)
-		graphNodes = append(graphNodes, GraphNode{
-			ID:          node.ID,
-			Label:       node.Name,
-			Type:        nodeType,
-			Mastery:     mastery[node.ID],
-			Chapter:     node.Chapter,
-			Description: node.Description,
-			Formula:     node.LatexFormula,
-		})
-	}
-	relations, err := s.repo.ListKnowledgeRelationsForNodes(ctx, relationNodeIDs)
-	if err != nil {
-		return GraphResponse{}, err
-	}
-
-	graphEdges := make([]GraphEdge, 0, len(relations))
-	for _, rel := range relations {
-		if _, ok := nodeIDs[rel.SourceID]; !ok {
-			continue
-		}
-		if _, ok := nodeIDs[rel.TargetID]; !ok {
-			continue
-		}
-		relation := graphRelationType(rel.RelationType)
-		if relation == "" {
-			continue
-		}
-		graphEdges = append(graphEdges, GraphEdge{
-			Source:   rel.SourceID,
-			Target:   rel.TargetID,
-			Relation: relation,
-		})
-	}
-
-	mastered := 0
-	sum := 0.0
-	for _, node := range graphNodes {
-		sum += node.Mastery
-		if node.Mastery >= masteryThreshold {
-			mastered++
-		}
-	}
-	overall := 0.0
-	if len(graphNodes) > 0 {
-		overall = numutil.RoundPlaces(sum/float64(len(graphNodes)), 2)
-	}
-	return GraphResponse{
-		Nodes: graphNodes,
-		Edges: graphEdges,
-		Statistics: GraphStatistics{
-			TotalNodes:     len(graphNodes),
-			MasteredNodes:  mastered,
-			OverallMastery: overall,
 		},
 	}, nil
 }
@@ -700,7 +572,19 @@ func (s *Service) GetClassRanking(ctx context.Context, userID string) (ClassRank
 	}, nil
 }
 
-// GetChapters returns distinct knowledge graph chapters.
+func (s *Service) GetCourseConcepts(ctx context.Context) ([]ConceptOption, error) {
+	concepts, err := s.repo.ListCourseConcepts(ctx)
+	if err != nil {
+		return nil, err
+	}
+	options := make([]ConceptOption, 0, len(concepts))
+	for _, concept := range concepts {
+		options = append(options, ConceptOption{ID: concept.ID, Label: concept.Name, Chapter: concept.Chapter})
+	}
+	return options, nil
+}
+
+// GetChapters returns distinct curriculum chapters.
 func (s *Service) GetChapters(ctx context.Context) ([]string, error) {
 	return s.repo.DistinctChapters(ctx)
 }
@@ -753,7 +637,7 @@ func (s *Service) calculateStreakDays(ctx context.Context, userID string) (int, 
 	}
 }
 
-func topologicalLearningOrder(nodes map[string]KnowledgeNode, prereqEdges, dependents map[string]map[string]struct{}, mastery map[string]float64) []string {
+func topologicalLearningOrder(nodes map[string]CourseConcept, prereqEdges, dependents map[string]map[string]struct{}, mastery map[string]float64) []string {
 	inDegree := make(map[string]int, len(nodes))
 	pq := &learningHeap{}
 	for id := range nodes {
@@ -812,7 +696,7 @@ func collectPrerequisites(target string, prereqEdges map[string]map[string]struc
 	return needed
 }
 
-func selectTargetNodes(target string, nodes map[string]KnowledgeNode) []string {
+func selectTargetNodes(target string, nodes map[string]CourseConcept) []string {
 	normalized := normalizeTarget(target)
 	if normalized == "" {
 		return nil
@@ -954,32 +838,6 @@ func buildErrorDistribution(errorCounts map[string]int) map[string]ErrorTypeDist
 		distribution[key] = ErrorTypeDistribution{Count: count, Percentage: percentage}
 	}
 	return distribution
-}
-
-func graphNodeType(value string) string {
-	switch value {
-	case "CONCEPT":
-		return "concept"
-	case "THEOREM":
-		return "theorem"
-	case "METHOD":
-		return "method"
-	default:
-		return ""
-	}
-}
-
-func graphRelationType(value string) string {
-	switch value {
-	case "HAS_PREREQUISITE":
-		return "prerequisite"
-	case "USED_IN":
-		return "used_in"
-	case "RELATED_TO":
-		return "related"
-	default:
-		return ""
-	}
 }
 
 func weekdayMondayIndex(value time.Time) int {

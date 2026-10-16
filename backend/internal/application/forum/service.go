@@ -82,8 +82,8 @@ type Post struct {
 	Content           string                         `json:"content,omitempty"`
 	Attachments       []messageattachment.Attachment `json:"attachments"`
 	Tags              []string                       `json:"tags"`
-	KnowledgeNodeID   string                         `json:"knowledge_node_id,omitempty"`
-	KnowledgeNodeName string                         `json:"knowledge_node_name,omitempty"`
+	CourseConceptID   string                         `json:"concept_id,omitempty"`
+	CourseConceptName string                         `json:"concept_name,omitempty"`
 	Author            Author                         `json:"author"`
 	Status            string                         `json:"status"`
 	IsFeatured        bool                           `json:"is_featured"`
@@ -149,7 +149,7 @@ type CreatePostInput struct {
 	Content         string
 	Attachments     []messageattachment.Attachment
 	Tags            []string
-	KnowledgeNodeID string
+	CourseConceptID string
 }
 
 type UpdatePostInput struct {
@@ -160,7 +160,7 @@ type UpdatePostInput struct {
 	Content         *string
 	Attachments     *[]messageattachment.Attachment
 	Tags            *[]string
-	KnowledgeNodeID *string
+	CourseConceptID *string
 }
 
 type CreateReplyInput struct {
@@ -658,7 +658,7 @@ func normalizeCreatePost(input CreatePostInput) (CreatePostInput, error) {
 	}
 	input.Title = strings.TrimSpace(input.Title)
 	input.Content = strings.TrimSpace(input.Content)
-	input.KnowledgeNodeID = strings.TrimSpace(input.KnowledgeNodeID)
+	input.CourseConceptID = strings.TrimSpace(input.CourseConceptID)
 	attachments, err := messageattachment.Normalize(input.Attachments)
 	if err != nil {
 		return CreatePostInput{}, ErrInvalidInput
@@ -668,7 +668,7 @@ func normalizeCreatePost(input CreatePostInput) (CreatePostInput, error) {
 		(input.BoardID != "" && !validIdentifier(input.BoardID)) || !validPostType(input.Type) ||
 		input.Title == "" || utf8.RuneCountInString(input.Title) > maxTitleRunes ||
 		input.Content == "" || utf8.RuneCountInString(input.Content) > maxContentRunes ||
-		(input.KnowledgeNodeID != "" && !validIdentifier(input.KnowledgeNodeID)) ||
+		(input.CourseConceptID != "" && !validIdentifier(input.CourseConceptID)) ||
 		!validText(input.BoardSlug, input.Title, input.Content) {
 		return CreatePostInput{}, ErrInvalidInput
 	}
@@ -679,7 +679,7 @@ func normalizeCreatePost(input CreatePostInput) (CreatePostInput, error) {
 
 func normalizeUpdatePost(input UpdatePostInput) (UpdatePostInput, error) {
 	if input.BoardID == nil && input.BoardSlug == nil && input.Type == nil && input.Title == nil && input.Content == nil &&
-		input.Attachments == nil && input.Tags == nil && input.KnowledgeNodeID == nil {
+		input.Attachments == nil && input.Tags == nil && input.CourseConceptID == nil {
 		return UpdatePostInput{}, ErrInvalidInput
 	}
 	if input.BoardID != nil {
@@ -727,12 +727,12 @@ func normalizeUpdatePost(input UpdatePostInput) (UpdatePostInput, error) {
 		}
 		input.Tags = &value
 	}
-	if input.KnowledgeNodeID != nil {
-		value := strings.TrimSpace(*input.KnowledgeNodeID)
+	if input.CourseConceptID != nil {
+		value := strings.TrimSpace(*input.CourseConceptID)
 		if value != "" && !validIdentifier(value) {
 			return UpdatePostInput{}, ErrInvalidInput
 		}
-		input.KnowledgeNodeID = &value
+		input.CourseConceptID = &value
 	}
 	return input, nil
 }

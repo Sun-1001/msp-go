@@ -28,6 +28,7 @@ type Service interface {
 	GenerateExercise(context.Context, string, exerciseapp.GenerateExerciseRequest) (*exerciseapp.ExerciseResponse, error)
 	PreflightSubmit(context.Context, string, exerciseapp.SubmitRequest) (exerciseapp.SubmitResponse, bool, error)
 	SubmitAnswer(context.Context, string, exerciseapp.SubmitRequest) (exerciseapp.SubmitResponse, error)
+	StartExercise(context.Context, string, exerciseapp.SubmitRequest) error
 	GetExercise(context.Context, string, string) (exerciseapp.ExerciseDetailResponse, error)
 	GetSolution(context.Context, string, string, string, string, *int64, string, string) (exerciseapp.SolutionResponse, error)
 }
@@ -136,6 +137,7 @@ func (h *Handler) Register(mux *http.ServeMux, prefix string) {
 	mux.HandleFunc("GET "+prefix+"/next", h.next)
 	mux.HandleFunc("POST "+prefix+"/generate", h.generate)
 	mux.HandleFunc("POST "+prefix+"/submit", h.submit)
+	mux.HandleFunc("POST "+prefix+"/start", h.start)
 	mux.HandleFunc("GET "+prefix+"/{exercise_id}/solution", h.solution)
 	mux.HandleFunc("GET "+prefix+"/{exercise_id}", h.detail)
 }
@@ -231,6 +233,27 @@ func (h *Handler) generate(w http.ResponseWriter, r *http.Request) {
 	httpjson.Write(w, http.StatusCreated, response)
 }
 
+func (h *Handler) start(w http.ResponseWriter, r *http.Request) {
+	principal, ok := h.requirePrincipal(w, r)
+	if !ok {
+		return
+	}
+	var request submitRequest
+	if !decodeRequest(w, r, &request) {
+		return
+	}
+	err := h.service.StartExercise(r.Context(), principal.UserID, exerciseapp.SubmitRequest{
+		ExerciseID: request.ExerciseID, DailyAssignmentID: request.DailyAssignmentID,
+		ReviewTaskID: request.ReviewTaskID, ReviewTaskRevision: request.ReviewTaskRevision,
+		OriginalAttemptID: request.OriginalAttemptID,
+	})
+	if err != nil {
+		h.writeSubmitError(w, err)
+		return
+	}
+	httpjson.Write(w, http.StatusOK, map[string]bool{"started": true})
+}
+
 func (h *Handler) submit(w http.ResponseWriter, r *http.Request) {
 	principal, ok := h.requirePrincipal(w, r)
 	if !ok {
@@ -287,6 +310,10 @@ func (h *Handler) submit(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) writeSubmitError(w http.ResponseWriter, err error) {
+	if errors.Is(err, exerciseapp.ErrInvalidStudyTime) {
+		writeExerciseError(w, http.StatusBadRequest, "INVALID_STUDY_TIME", "单题学习时长须为 0 至 7200 秒")
+		return
+	}
 	if errors.Is(err, exerciseapp.ErrBadRequest) {
 		writeExerciseError(w, http.StatusBadRequest, "BAD_REQUEST", "提交失败，请检查输入后重试")
 		return

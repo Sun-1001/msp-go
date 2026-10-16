@@ -8,10 +8,10 @@ import { Badge } from '../../components/ui/Badge';
 import { Progress } from '../../components/ui/Progress';
 import { toAppError, type AppError } from '@/libs/http/apiClient';
 import {
-  knowledgeService,
+  curriculumService,
   type LearningPathItem,
   type LearningPathResponse,
-} from '@/modules/knowledge/api';
+} from '@/modules/curriculum/api';
 import {
   Target,
   CheckCircle2,
@@ -77,7 +77,7 @@ export const LearningPathPage: React.FC = () => {
         let resolvedTargetId = requestedTargetId;
         if (!resolvedTargetId) {
           try {
-            const goal = await knowledgeService.getLearningGoal(controller.signal);
+            const goal = await curriculumService.getLearningGoal(controller.signal);
             resolvedTargetId = goal.target_id;
           } catch (goalError) {
             if (controller.signal.aborted) return;
@@ -85,7 +85,7 @@ export const LearningPathPage: React.FC = () => {
           }
         }
 
-        const response = await knowledgeService.getLearningPath(
+        const response = await curriculumService.getLearningPath(
           resolvedTargetId ?? undefined,
           controller.signal,
         );
@@ -120,7 +120,7 @@ export const LearningPathPage: React.FC = () => {
         <div className="mb-8">
           <h1 className="text-3xl font-bold text-surface-900 dark:text-surface-100 mb-2">学习路径</h1>
           <p className="text-surface-500 dark:text-surface-400">
-            {targetNode ? `当前目标：${targetNode.title}` : '基于知识图谱和掌握度为你规划的个性化学习路径'}
+            {targetNode ? `当前目标：${targetNode.title}` : '基于课程先修要求和掌握度为你规划的个性化学习路径'}
           </p>
         </div>
 
@@ -228,7 +228,7 @@ export const LearningPathPage: React.FC = () => {
                                       <button
                                         key={blockerId}
                                         type="button"
-                                        onClick={() => navigate(`/knowledge-graph?focus=${encodeURIComponent(blockerId)}`)}
+                                        onClick={() => navigate(`/learning-path?target=${encodeURIComponent(blockerId)}`)}
                                         className="inline-flex min-h-8 items-center gap-1 rounded-md border border-[#f97360]/40 bg-[#f97360]/10 px-2.5 py-1 text-xs font-medium text-[#c24132] hover:bg-[#f97360]/15 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary-500 dark:text-[#ff9b8d]"
                                       >
                                         <Lock className="h-3.5 w-3.5" />

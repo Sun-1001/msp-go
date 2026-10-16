@@ -315,7 +315,7 @@ func (r TeacherRepository) KnowledgeNames(ctx context.Context, conceptIDs []stri
 	}
 	rows, err := r.DB().Query(ctx, `
 		SELECT id, name
-		FROM public.knowledge_nodes
+		FROM public.course_concepts
 		WHERE id = ANY($1::varchar[])`,
 		conceptIDs,
 	)

@@ -7,7 +7,6 @@ const AdminDashboardPage = lazy(() => import('@/pages/admin/AdminDashboardPage')
 const AccountManagementPage = lazy(() => import('@/pages/admin/AccountManagementPage').then(m => ({ default: m.AccountManagementPage })));
 const AIModelSettingsPage = lazy(() => import('@/pages/admin/AIModelSettingsPage').then(m => ({ default: m.AIModelSettingsPage })));
 const SystemSettingsPage = lazy(() => import('@/pages/admin/SystemSettingsPage').then(m => ({ default: m.SystemSettingsPage })));
-const KnowledgeManagementPage = lazy(() => import('@/pages/admin/KnowledgeManagementPage').then(m => ({ default: m.KnowledgeManagementPage })));
 const InboxPage = lazy(() => import('@/pages/admin/InboxPage').then(m => ({ default: m.InboxPage })));
 const AIRiskControlPage = lazy(() => import('@/pages/admin/AIRiskControlPage').then(m => ({ default: m.AIRiskControlPage })));
 const AnnouncementManagementPage = lazy(() => import('@/pages/admin/AnnouncementManagementPage').then(m => ({ default: m.AnnouncementManagementPage })));
@@ -26,5 +25,4 @@ export const adminRoutes: RouteConfig[] = [
   { path: '/admin/risk-control', component: AIRiskControlPage, protected: true, requiredRole: 'admin' },
   { path: '/admin/announcements', component: AnnouncementManagementPage, protected: true, requiredRole: 'admin' },
   { path: '/admin/settings', component: SystemSettingsPage, protected: true, requiredRole: 'admin' },
-  { path: '/admin/knowledge', component: KnowledgeManagementPage, protected: true, requiredRole: 'admin' },
 ];

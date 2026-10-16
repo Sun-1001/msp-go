@@ -42,16 +42,4 @@ export type {
   ForumModerationReport,
   ForumReportStatus,
 } from './types/forumAdmin';
-export { NODE_TYPE_LABELS, RELATION_TYPE_LABELS } from './types/knowledgeAdmin';
-export type {
-  AdminRelationType,
-  KnowledgeNodeAdmin,
-  KnowledgeNodeCreateData,
-  KnowledgeNodeUpdateData,
-  KnowledgeRelationAdmin,
-  KnowledgeRelationCreateData,
-  KnowledgeRelationUpdateData,
-  KnowledgeStats,
-  SimpleNode,
-} from './types/knowledgeAdmin';
 export { getAdminErrorToast, isAdminRequestCancelled, toAdminAppError } from './utils/errorFeedback';

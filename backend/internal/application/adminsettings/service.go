@@ -45,8 +45,6 @@ var (
 
 var exportableTables = []ExportableTableItem{
 	{Name: "student_profiles", DisplayName: "学生画像"},
-	{Name: "knowledge_nodes", DisplayName: "知识节点"},
-	{Name: "knowledge_relations", DisplayName: "知识关系"},
 	{Name: "learning_sessions", DisplayName: "学习会话"},
 	{Name: "session_messages", DisplayName: "会话消息"},
 	{Name: "contents", DisplayName: "内容"},
@@ -62,8 +60,6 @@ var exportableTables = []ExportableTableItem{
 
 var importOrder = []string{
 	"student_profiles",
-	"knowledge_nodes",
-	"knowledge_relations",
 	"system_settings",
 	"email_templates",
 	"system_announcements",

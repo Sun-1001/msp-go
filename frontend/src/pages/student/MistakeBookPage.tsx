@@ -28,7 +28,7 @@ import { Select, type SelectOption } from '../../components/ui/Select';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '../../components/ui/Tabs';
 import { ExerciseMathContent } from '@/modules/exercise/math';
 import { toAppError, type AppError } from '@/libs/http/apiClient';
-import { knowledgeService } from '@/modules/knowledge/api';
+import { curriculumService } from '@/modules/curriculum/api';
 import {
   buildMistakeBookRequestKey,
   getDifficultyBadge,
@@ -1040,10 +1040,10 @@ export const MistakeBookPage: React.FC = () => {
 
   useEffect(() => {
     const controller = new AbortController();
-    void knowledgeService.getKnowledgeGraph()
-      .then((graph) => {
+    void curriculumService.getConcepts(controller.signal)
+      .then((concepts) => {
         if (controller.signal.aborted) return;
-        setKnowledgeLabels(new Map(graph.nodes.map((node) => [node.id, node.label])));
+        setKnowledgeLabels(new Map(concepts.map((node) => [node.id, node.label])));
         setKnowledgeLabelsError(null);
       })
       .catch((error: unknown) => {
@@ -1395,7 +1395,7 @@ export const MistakeBookPage: React.FC = () => {
               {activeView === view ? <>
                 {isLibrary && conceptId ? (
                   <div className="mb-4 flex flex-wrap items-center justify-between gap-3 rounded-md border border-primary-200 bg-primary-50 px-4 py-3 text-sm text-primary-800 dark:border-primary-800 dark:bg-primary-950/30 dark:text-primary-200">
-                    <span>当前仅显示从知识图谱选中的知识点</span>
+                    <span>当前仅显示选中的课程知识点</span>
                     <Button variant="ghost" size="sm" onClick={clearConceptFilter}>查看全部</Button>
                   </div>
                 ) : null}

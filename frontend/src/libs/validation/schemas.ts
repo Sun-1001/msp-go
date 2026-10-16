@@ -169,7 +169,7 @@ export const questionSchema = z.object({
   type: z.enum(['choice', 'fill', 'short_answer', 'proof'], {
     message: '请选择题目类型',
   }),
-  knowledgeNodeIds: z.array(z.string()).min(1, '请至少选择一个知识点'),
+  conceptIds: z.array(z.string()).min(1, '请至少选择一个知识点'),
   solution: z.string().optional(),
   hints: z.array(z.string()).optional(),
 });

@@ -32,7 +32,7 @@ export interface ExerciseState extends WithLoadingState {
   history: ExerciseAttempt[];
   filters: {
     difficulty?: DifficultyLevel;
-    knowledgeNodeId?: string;
+    conceptId?: string;
   };
   submitState: LoadingState;
 }

@@ -9,7 +9,6 @@ import type {
   SessionMessage,
   MistakeRecord,
   DiagnosisReport,
-  LearningPath,
   Course,
   Class,
 } from './models';
@@ -45,7 +44,7 @@ export interface RegisterResponse {
 
 export interface ExerciseListRequest extends PaginationParams {
   difficulty?: string;
-  knowledgeNodeId?: string;
+  conceptId?: string;
   search?: string;
 }
 
@@ -85,7 +84,7 @@ export type SessionListResponse = PaginationResponse<LearningSession>;
 
 export interface MistakeBookListRequest extends PaginationParams {
   masteredOnly?: boolean;
-  knowledgeNodeId?: string;
+  conceptId?: string;
 }
 
 export type MistakeBookListResponse = PaginationResponse<MistakeRecord>;
@@ -93,10 +92,6 @@ export type MistakeBookListResponse = PaginationResponse<MistakeRecord>;
 // ==================== 诊断报告相关 ====================
 
 export type DiagnosisReportResponse = DiagnosisReport;
-
-// ==================== 学习路径相关 ====================
-
-export type LearningPathResponse = LearningPath;
 
 // ==================== 课程相关 ====================
 

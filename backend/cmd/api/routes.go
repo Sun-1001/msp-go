@@ -9,6 +9,7 @@ func registerRoutes(mux *http.ServeMux, apiPrefix string, ai *aiModule, auth *au
 	integrations.wechatHandler.RegisterUser(mux, apiPrefix+"/integrations/wechat")
 	admin.announcementHandler.RegisterUser(mux, apiPrefix+"/announcements")
 	progress.handler.Register(mux, apiPrefix+"/progress")
+	integrations.noteHandler.Register(mux, apiPrefix+"/notes")
 	portrait.handler.Register(mux, apiPrefix+"/portrait")
 	exercise.mistakeHandler.Register(mux, apiPrefix+"/mistakes")
 	exercise.handler.Register(mux, apiPrefix+"/exercise")
@@ -35,6 +36,5 @@ func registerRoutes(mux *http.ServeMux, apiPrefix string, ai *aiModule, auth *au
 	admin.adminStorageHandler.Register(mux, apiPrefix+"/admin/settings")
 	admin.adminEmailHandler.Register(mux, apiPrefix+"/admin/settings")
 	admin.securityLogHandler.Register(mux, apiPrefix+"/admin/security-logs")
-	admin.knowledgeHandler.Register(mux, apiPrefix+"/admin/knowledge")
 	integrations.wechatHandler.RegisterAdmin(mux, apiPrefix+"/admin/wechat")
 }

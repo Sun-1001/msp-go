@@ -61,7 +61,7 @@ const PreviewShell = ({
 const ChapterNavigation = ({ active }: { active: 'tutor' | 'graph' | 'path' }) => {
   const items = [
     { id: 'tutor', label: 'AI 学习会话', icon: BrainCircuit },
-    { id: 'graph', label: '知识图谱', icon: Network },
+    { id: 'graph', label: '知识关联', icon: Network },
     { id: 'path', label: '学习路径', icon: Route },
   ] as const;
 
@@ -162,18 +162,18 @@ export const TutorWorkspacePreview = () => (
 );
 
 const knowledgeRelations = [
-  { title: '函数与映射', meta: '已掌握', tone: 'text-emerald-600 dark:text-emerald-400' },
-  { title: '导数的定义', meta: '掌握度 86%', tone: 'text-primary-600 dark:text-primary-400' },
-  { title: '函数单调性', meta: '正在学习', tone: 'text-secondary-600 dark:text-secondary-400' },
-  { title: '极值与最值', meta: '下一目标', tone: 'text-amber-600 dark:text-amber-400' },
+  { title: '函数与映射', meta: '课堂笔记', tone: 'text-emerald-600 dark:text-emerald-400' },
+  { title: '导数的定义', meta: '链接到 2 篇笔记', tone: 'text-primary-600 dark:text-primary-400' },
+  { title: '函数单调性', meta: '来自学习材料', tone: 'text-secondary-600 dark:text-secondary-400' },
+  { title: '极值与最值', meta: '被 1 篇笔记引用', tone: 'text-amber-600 dark:text-amber-400' },
 ];
 
 export const KnowledgeWorkspacePreview = () => (
   <PreviewShell
     icon={Network}
-    title="知识图谱"
+    title="知识关联"
     status="关系已更新"
-    ariaLabel="展示函数极值相关知识关系和掌握度的产品界面预览"
+    ariaLabel="个人学习笔记与内部链接的产品界面预览"
   >
     <div className="grid min-h-[390px] md:grid-cols-[12.5rem_1fr] lg:min-h-[455px]">
       <ChapterNavigation active="graph" />
@@ -181,8 +181,8 @@ export const KnowledgeWorkspacePreview = () => (
         <div className="p-4 sm:p-6">
           <div className="mb-5 flex items-start justify-between gap-4">
             <div>
-              <p className="text-xs font-semibold text-surface-900 dark:text-surface-100">当前知识链</p>
-              <p className="mt-1 text-[11px] text-surface-500 dark:text-surface-400">从前置概念到下一学习目标</p>
+              <p className="text-xs font-semibold text-surface-900 dark:text-surface-100">我的关联笔记</p>
+              <p className="mt-1 text-[11px] text-surface-500 dark:text-surface-400">通过内部链接连接每一次思考</p>
             </div>
             <Network className="h-5 w-5 text-secondary-500" aria-hidden="true" />
           </div>
@@ -209,29 +209,17 @@ export const KnowledgeWorkspacePreview = () => (
           <div className="mt-5 flex items-start gap-3 border-l-2 border-secondary-500 pl-4">
             <BrainCircuit className="mt-0.5 h-4 w-4 shrink-0 text-secondary-600 dark:text-secondary-400" aria-hidden="true" />
             <p className="text-xs leading-5 text-surface-600 dark:text-surface-300">
-              你已具备学习“极值与最值”的前置基础，建议先完成 2 道导数符号变式题。
+              在“导数的定义”中插入“函数单调性”的笔记链接，保存后即可在个人网络中看到它们的联系。
             </p>
           </div>
         </div>
 
         <aside className="hidden border-t border-surface-200 bg-surface-50/80 p-4 dark:border-surface-700 dark:bg-surface-950/70 lg:block lg:border-l lg:border-t-0 sm:p-5">
-          <p className="text-xs font-semibold text-surface-900 dark:text-surface-100">章节掌握度</p>
-          <div className="mt-5 flex items-end gap-2" aria-label="章节掌握度柱状图">
-            {[42, 68, 86, 58, 34].map((value, index) => (
-              <div key={value} className="flex flex-1 flex-col items-center gap-2">
-                <div className="flex h-28 w-full items-end overflow-hidden rounded-sm bg-surface-200 dark:bg-surface-800">
-                  <div
-                    className={index === 2 ? 'w-full bg-primary-500' : 'w-full bg-surface-400 dark:bg-surface-600'}
-                    style={{ height: `${value}%` }}
-                  />
-                </div>
-                <span className="text-[10px] text-surface-400">{index + 1}</span>
-              </div>
-            ))}
-          </div>
+          <p className="text-xs font-semibold text-surface-900 dark:text-surface-100">来源材料</p>
+          <div className="mt-5 space-y-3 text-xs text-surface-600 dark:text-surface-300"><p>微积分课堂讲义.pdf</p><p>第二章 · 导数与微分</p><p>保留原文，在笔记中写下自己的理解。</p></div>
           <div className="mt-5 border-t border-surface-200 pt-4 dark:border-surface-700">
-            <p className="text-2xl font-bold tracking-normal text-surface-900 dark:text-white">68%</p>
-            <p className="mt-1 text-[11px] text-surface-500 dark:text-surface-400">本章综合掌握度</p>
+            <p className="text-2xl font-bold tracking-normal text-surface-900 dark:text-white">双向链接</p>
+            <p className="mt-1 text-[11px] text-surface-500 dark:text-surface-400">查看引用与被引用的笔记</p>
           </div>
         </aside>
       </div>

@@ -9,9 +9,8 @@ import { exerciseReducer } from '@/modules/exercise/state';
 import { sessionReducer } from '@/modules/session/state';
 import { mistakeReducer } from '@/modules/mistake/state';
 import { aiConfigReducer } from '@/modules/ai-config/state';
-import { adminStatsReducer, securityLogReducer, knowledgeAdminReducer } from '@/modules/admin/state';
+import { adminStatsReducer, securityLogReducer } from '@/modules/admin/state';
 import { studentPortraitReducer } from '@/modules/student/state';
-import { knowledgeReducer } from '@/modules/knowledge/state';
 
 const listenerMiddleware = createListenerMiddleware();
 
@@ -29,8 +28,6 @@ const listenerMiddleware = createListenerMiddleware();
  * - securityLog: 安全日志状态（日志列表、统计、筛选）
  * - api: 服务端查询缓存（资源、AI 配置）
  * - studentPortrait: 学生画像状态（画像内容、生成状态）
- * - knowledge: 知识图谱状态（节点、边、统计、筛选）
- * - knowledgeAdmin: 知识点管理状态（节点、关系 CRUD、筛选、分页）
  */
 export const store = configureStore({
   reducer: {
@@ -44,8 +41,6 @@ export const store = configureStore({
     securityLog: securityLogReducer,
     [api.reducerPath]: api.reducer,
     studentPortrait: studentPortraitReducer,
-    knowledge: knowledgeReducer,
-    knowledgeAdmin: knowledgeAdminReducer,
   },
   middleware: (getDefaultMiddleware) => getDefaultMiddleware()
     .prepend(listenerMiddleware.middleware)

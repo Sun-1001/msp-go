@@ -127,11 +127,11 @@ FROM public.go_schema_migrations
 ORDER BY version;
 ```
 
-当前迁移链由 `0001` 至 `0030` 三十个迁移组成。`0017` 至 `0021` 建立资源版本、模型、入库任务、检索和保留清理基础；`0022` 至 `0024` 增加发布运维审计及中文/通用词法索引；`0025` 增加小范围租户资源隔离，`0026`、`0027` 增加知识学习流程结构，`0028` 增加可解释资源授权和租户配置审计，`0029` 增加题目辅导关联，`0030` 增加提示证据及提交状态快照。部署前确认迁移账号可以在 `public` 安装 `pg_trgm`，并为索引创建及 `0024` 表重写预留维护窗口、磁盘和锁等待时间。
+当前迁移链由 `0001` 至 `0032` 三十二个迁移组成。`0017` 至 `0021` 建立资源版本、模型、入库任务、检索和保留清理基础；`0022` 至 `0024` 增加发布运维审计及中文/通用词法索引；`0025` 增加小范围租户资源隔离，`0026`、`0027` 增加知识学习流程结构，`0028` 增加可解释资源授权和租户配置审计，`0029` 增加题目辅导关联，`0030` 增加提示证据及提交状态快照，`0031`、`0032` 建立私人笔记并拆除旧图谱。部署前确认迁移账号可以在 `public` 安装 `pg_trgm`，并为索引创建及表重写预留维护窗口、磁盘和锁等待时间。
 
-空库首次记录版本 `1` 至 `30`，version 29 库只应用 `0030`，更早版本顺序补齐，重复执行为 `applied_count=0`。执行前停止 API 和 worker 写入、完成可恢复备份；先迁移再启动新版本。`0022` 增加发布审批和审计，`0025` 起新增租户约束，`0028` 增加授权诊断函数和六类租户配置变更审计；这些迁移不失效登录会话。旧 worker 不理解审批门，存在待发布代时禁止回退到旧二进制。只有从 `0015` 之前升级时，旧的无 `auth_version` 令牌才需要统一重新登录。
+空库首次记录版本 `1` 至 `32`，version 30 库只应用 `0031`、`0032`，更早版本顺序补齐，重复执行为 `applied_count=0`。执行前停止 API 和 worker 写入、完成可恢复备份；先迁移再启动新版本。`0032` 删除旧表，回退必须恢复匹配备份，禁止只回滚应用或混跑新旧 API；详细数据保留边界见[知识关联](note-network.md)。只有从 `0015` 之前升级时，旧的无 `auth_version` 令牌才需要统一重新登录。
 
-迁移后确认版本 30、`public.pg_trgm`、词法检索索引、`session_messages.knowledge`、任务关联、`resource_ingestion_uploads`、`release_approved`、`resource_operations_audit`、租户复合约束、`resource_tenancy_audit`、`exercise_hint_evidence` 和 `content_attempts.assistance_status` 均生效。知识列只存引用与降级元数据，不存来源正文。检索仅消费当前已发布且有 indexed manifest 的版本；迁移不会回填旧资源 chunk，也不会启动 worker。历史本地对象仍必须具备可信所有权，引用打开统一走当前授权接口，不得绕过 Go API。旧草稿迁移账本仍按 [迁移策略](../../backend/migrations/README.md) 单独校准。
+迁移后确认版本 32、个人笔记与材料表、只读课程分类、`public.pg_trgm`、词法检索索引、`session_messages.knowledge`、任务关联、`resource_ingestion_uploads`、`release_approved`、`resource_operations_audit`、租户复合约束、`resource_tenancy_audit`、`exercise_hint_evidence` 和 `content_attempts.assistance_status` 均生效。知识列只存引用与降级元数据，不存来源正文。检索仅消费当前已发布且有 indexed manifest 的版本；迁移不会回填旧资源 chunk，也不会启动 worker。历史本地对象仍必须具备可信所有权，引用打开统一走当前授权接口，不得绕过 Go API。旧草稿迁移账本仍按 [迁移策略](../../backend/migrations/README.md) 单独校准。
 
 `0030` 后禁止混跑新旧 API。抽查历史作答提示状态为 `unknown`，新题未请求提示时提交为 `no_recorded_hint`，收到部分或完整辅导回复后为 `hinted`，删除辅导会话后仍保留辅助状态。升级不重算历史 DKT。旧应用回滚不再采集提示证据，恢复策略与证据连续性边界见[迁移策略](../../backend/migrations/README.md)。
 

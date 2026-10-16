@@ -214,7 +214,7 @@ func (r DailyQuestionRepository) SelectTargetConcept(ctx context.Context, studen
 					CROSS JOIN LATERAL json_array_elements_text(
 					    coalesce(daily_assignment.question_concept_ids, content.concept_ids)
 					) concept(value)
-				JOIN public.knowledge_nodes node ON node.id = concept.value
+				JOIN public.course_concepts node ON node.id = concept.value
 				WHERE attempt.student_id = $1
 				  AND attempt.submitted_at IS NOT NULL
 				  AND attempt.is_correct = false
@@ -232,9 +232,9 @@ func (r DailyQuestionRepository) SelectTargetConcept(ctx context.Context, studen
 		{
 			reason: dailyquestionapp.ReasonLearningGoal,
 			sql: `
-				SELECT goal.target_node_id
+				SELECT goal.target_concept_id
 				FROM public.student_learning_goals goal
-				JOIN public.knowledge_nodes node ON node.id = goal.target_node_id
+				JOIN public.course_concepts node ON node.id = goal.target_concept_id
 				WHERE goal.student_id = $1`,
 		},
 		{
@@ -242,7 +242,7 @@ func (r DailyQuestionRepository) SelectTargetConcept(ctx context.Context, studen
 			sql: `
 				SELECT state.concept_id
 				FROM public.student_concept_dkt_states state
-				JOIN public.knowledge_nodes node ON node.id = state.concept_id
+				JOIN public.course_concepts node ON node.id = state.concept_id
 				WHERE state.student_id = $1
 				ORDER BY state.mastery_prob ASC, state.confidence DESC,
 				         state.last_attempt_at DESC NULLS LAST, state.concept_id
@@ -252,7 +252,7 @@ func (r DailyQuestionRepository) SelectTargetConcept(ctx context.Context, studen
 			reason: dailyquestionapp.ReasonDefault,
 			sql: `
 				SELECT node.id
-				FROM public.knowledge_nodes node
+				FROM public.course_concepts node
 				WHERE $1::varchar IS NOT NULL
 				ORDER BY node.difficulty ASC, node.id
 				LIMIT 1`,
@@ -958,7 +958,7 @@ func (r DailyQuestionRepository) loadUniformScheduleContents(
 		       (
 		           SELECT node.id
 		           FROM json_array_elements_text(content.concept_ids) WITH ORDINALITY concept(value, position)
-		           JOIN public.knowledge_nodes node ON node.id = concept.value
+		           JOIN public.course_concepts node ON node.id = concept.value
 		           ORDER BY concept.position
 		           LIMIT 1
 		       ) AS target_concept_id
@@ -1780,7 +1780,7 @@ func (r DailyQuestionRepository) GetClassStatistics(ctx context.Context, teacher
 		JOIN public.classes class
 		  ON class.id = assignment.class_id
 		 AND class.teacher_id = $2
-		LEFT JOIN public.knowledge_nodes node ON node.id = assignment.target_concept_id
+		LEFT JOIN public.course_concepts node ON node.id = assignment.target_concept_id
 		WHERE assignment.class_id = $1
 		  AND assignment.assignment_date = $3::date
 		  AND assignment.first_result = 'incorrect'
@@ -2220,7 +2220,7 @@ const assignmentSelectSQL = `
 	LEFT JOIN public.contents content
 	  ON content.id = a.content_id
 	 AND content.type = 'PROBLEM'::public.contenttype
-	LEFT JOIN public.knowledge_nodes target_node ON target_node.id = a.target_concept_id`
+	LEFT JOIN public.course_concepts target_node ON target_node.id = a.target_concept_id`
 
 func scanOptionalDailyAssignment(row pgx.Row) (dailyquestionapp.Assignment, bool, error) {
 	assignment, err := scanDailyAssignment(row)

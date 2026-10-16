@@ -147,6 +147,15 @@ func applyMistakeReviewOutcome(
 	if countAsReview {
 		task.ReviewCount++
 	}
+	// Keep the submitted review accessible without treating an unverified
+	// process as success. A fresh exposure must wait before another due review.
+	if attempt.IsCorrect && !attempt.ProcessEvaluation.permitsMastery() {
+		task.LastOutcome = nil
+		if countAsReview {
+			task.DueAt = timePointer(now.Add(24 * time.Hour))
+		}
+		return task
+	}
 
 	if !attempt.IsCorrect {
 		if !boundTask && !countAsReview {

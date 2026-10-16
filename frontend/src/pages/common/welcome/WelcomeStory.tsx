@@ -37,7 +37,7 @@ const storySteps = [
   },
   {
     label: '知识关系可视化',
-    shortLabel: '知识图谱',
+    shortLabel: '知识关联',
     description: '把前置概念、当前薄弱点和下一目标连起来。',
     icon: Network,
     progress: 0.6,
@@ -118,7 +118,7 @@ const HeroCopy = ({ onStart, onExplore, reduceMotion }: HeroCopyProps) => (
       真正理解一道题，然后走向下一步。
     </p>
     <p className="mx-auto mt-5 max-w-2xl text-sm leading-7 text-surface-600 dark:text-surface-300 sm:text-base">
-      把 AI 分步引导、知识图谱与学习反馈连成一条清晰路径，让抽象的高等数学变得可观察、可练习、可掌握。
+      把 AI 分步引导、知识关联与学习反馈连成一条清晰路径，让抽象的高等数学变得可观察、可练习、可掌握。
     </p>
     <div className="mt-7 flex flex-col items-center justify-center gap-3 sm:flex-row">
       <Button

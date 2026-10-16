@@ -96,6 +96,9 @@ export interface SubmitResult {
   reviewTaskRevision?: number;
   masteryWeight?: number;
   assistanceStatus?: 'hinted' | 'no_recorded_hint' | 'unknown';
+  evidenceKind?: 'first_attempt' | 'repeat_practice' | 'scheduled_review' | 'unknown';
+  processEvaluation?: { status: 'not_provided' | 'correct' | 'incorrect' | 'indeterminate'; evaluation: EvaluationDetail | null };
+  timeSpentSeconds?: number;
   isCorrect: boolean;
   recorded?: boolean;
   gradingStatus?: 'correct' | 'incorrect' | 'indeterminate';
@@ -175,6 +178,15 @@ export const mapExerciseQuestion = (
 // ========== API 调用 ==========
 
 export const exerciseService = {
+  async startExercise(payload: Pick<SubmitPayload, 'exerciseId' | 'dailyAssignmentId' | 'reviewTaskId' | 'reviewTaskRevision' | 'originalAttemptId'>, signal?: AbortSignal): Promise<void> {
+    await apiClient.post('/exercise/start', {
+      exercise_id: payload.exerciseId,
+      daily_assignment_id: payload.dailyAssignmentId,
+      review_task_id: payload.reviewTaskId,
+      review_task_revision: payload.reviewTaskRevision,
+      original_attempt_id: payload.originalAttemptId,
+    }, { signal });
+  },
   async getQuestion(exerciseId: string, signal?: AbortSignal): Promise<Question> {
     const response = await apiClient.get<ExerciseQuestionResponse>(`/exercise/${encodeURIComponent(exerciseId)}`, { signal });
     return mapExerciseQuestion(response.data);
@@ -263,6 +275,9 @@ export const exerciseService = {
       next_recommendation: string;
       mastery_weight?: number;
       assistance_status?: SubmitResult['assistanceStatus'];
+      evidence_kind?: SubmitResult['evidenceKind'];
+      process_evaluation?: EvaluationResponse & { status: NonNullable<SubmitResult['processEvaluation']>['status'] };
+      time_spent_seconds?: number;
       review_task_revision?: number;
     }>('/exercise/submit', {
       exercise_id: payload.exerciseId,
@@ -295,6 +310,12 @@ export const exerciseService = {
         ? { masteryWeight: data.mastery_weight }
         : {}),
       ...(data.assistance_status ? { assistanceStatus: data.assistance_status } : {}),
+      evidenceKind: data.evidence_kind,
+      processEvaluation: data.process_evaluation ? {
+        status: data.process_evaluation.status,
+        evaluation: mapEvaluation(data.process_evaluation),
+      } : undefined,
+      timeSpentSeconds: data.time_spent_seconds,
       isCorrect: data.is_correct,
       recorded,
       gradingStatus:
